@@ -4,42 +4,18 @@ use bytemuck::{Pod, Zeroable};
 use lsystem_core::Geometry;
 use wgpu::util::DeviceExt;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
+use winit::keyboard::Key;
 use winit::window::{Window, WindowId};
+
+use crate::camera::{Camera, Transform};
+use crate::input::InputState;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct Vertex {
     position: [f32; 2],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-struct Transform {
-    scale: [f32; 2],
-    offset: [f32; 2],
-}
-
-fn compute_transform(
-    bounds_min: [f32; 2],
-    bounds_max: [f32; 2],
-    width: u32,
-    height: u32,
-) -> Transform {
-    let geom_w = (bounds_max[0] - bounds_min[0]).max(1.0);
-    let geom_h = (bounds_max[1] - bounds_min[1]).max(1.0);
-    let cx = (bounds_min[0] + bounds_max[0]) * 0.5;
-    let cy = (bounds_min[1] + bounds_max[1]) * 0.5;
-
-    let px_per_unit = (width as f32 / geom_w).min(height as f32 / geom_h) * 0.9;
-    let sx = px_per_unit * 2.0 / width as f32;
-    let sy = px_per_unit * 2.0 / height as f32;
-
-    Transform {
-        scale: [sx, sy],
-        offset: [-cx * sx, -cy * sy],
-    }
 }
 
 struct GpuState {
@@ -52,17 +28,10 @@ struct GpuState {
     vertex_count: u32,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    bounds_min: [f32; 2],
-    bounds_max: [f32; 2],
 }
 
 impl GpuState {
-    async fn new(
-        window: Arc<Window>,
-        vertices: &[Vertex],
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
-    ) -> Self {
+    async fn new(window: Arc<Window>, vertices: &[Vertex], initial_transform: &Transform) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::default();
@@ -105,15 +74,9 @@ impl GpuState {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let transform = compute_transform(
-            bounds_min,
-            bounds_max,
-            size.width.max(1),
-            size.height.max(1),
-        );
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::bytes_of(&transform),
+            contents: bytemuck::bytes_of(initial_transform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -193,9 +156,16 @@ impl GpuState {
             vertex_count: vertices.len() as u32,
             uniform_buffer,
             bind_group,
-            bounds_min,
-            bounds_max,
         }
+    }
+
+    fn size(&self) -> (u32, u32) {
+        (self.surface_config.width, self.surface_config.height)
+    }
+
+    fn upload_transform(&self, transform: &Transform) {
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(transform));
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -205,23 +175,12 @@ impl GpuState {
         self.surface_config.width = new_size.width;
         self.surface_config.height = new_size.height;
         self.surface.configure(&self.device, &self.surface_config);
-        let transform = compute_transform(
-            self.bounds_min,
-            self.bounds_max,
-            new_size.width,
-            new_size.height,
-        );
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
     }
 
     fn render(&mut self) -> bool {
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) => t,
-            wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
-                self.surface.configure(&self.device, &self.surface_config);
-                t
-            }
+        let (frame, reconfigure) = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t) => (t, false),
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.surface_config);
                 return true;
@@ -261,7 +220,10 @@ impl GpuState {
         }
         self.queue.submit([encoder.finish()]);
         frame.present();
-        false
+        if reconfigure {
+            self.surface.configure(&self.device, &self.surface_config);
+        }
+        reconfigure
     }
 }
 
@@ -271,6 +233,8 @@ pub struct App {
     vertices: Vec<Vertex>,
     bounds_min: [f32; 2],
     bounds_max: [f32; 2],
+    camera: Camera,
+    input: InputState,
 }
 
 impl App {
@@ -309,6 +273,18 @@ impl App {
             vertices,
             bounds_min: [min_x, min_y],
             bounds_max: [max_x, max_y],
+            camera: Camera::new(),
+            input: InputState::new(),
+        }
+    }
+
+    fn upload_camera_transform(&self) {
+        if let Some(state) = &self.state {
+            let (w, h) = state.size();
+            let transform = self
+                .camera
+                .compute_transform(self.bounds_min, self.bounds_max, w, h);
+            state.upload_transform(&transform);
         }
     }
 }
@@ -320,11 +296,17 @@ impl ApplicationHandler for App {
                 .create_window(Window::default_attributes().with_title("Grow Your Own Fractal"))
                 .unwrap(),
         );
+        let size = window.inner_size();
+        let initial_transform = self.camera.compute_transform(
+            self.bounds_min,
+            self.bounds_max,
+            size.width.max(1),
+            size.height.max(1),
+        );
         let state = pollster::block_on(GpuState::new(
             window.clone(),
             &self.vertices,
-            self.bounds_min,
-            self.bounds_max,
+            &initial_transform,
         ));
         window.request_redraw();
         self.window = Some(window);
@@ -334,14 +316,79 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+
             WindowEvent::Resized(size) => {
                 if let Some(state) = &mut self.state {
                     state.resize(size);
                 }
+                self.upload_camera_transform();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
+
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.input.on_left_button(state == ElementState::Pressed);
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                let x = position.x as f32;
+                let y = position.y as f32;
+                if let Some([dx, dy]) = self.input.on_cursor_moved(x, y) {
+                    if let Some(state) = &self.state {
+                        let (w, h) = state.size();
+                        self.camera
+                            .pan_by_pixels(dx, dy, self.bounds_min, self.bounds_max, w, h);
+                    }
+                    self.upload_camera_transform();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
+                };
+                let factor = 1.1_f32.powf(lines);
+                if let Some(state) = &self.state {
+                    let (w, h) = state.size();
+                    let cursor = self.input.cursor_pos;
+                    self.camera.zoom_toward_cursor(
+                        factor,
+                        cursor,
+                        self.bounds_min,
+                        self.bounds_max,
+                        w,
+                        h,
+                    );
+                }
+                self.upload_camera_transform();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed && !event.repeat =>
+            {
+                if let Key::Character(ch) = &event.logical_key
+                    && ch.eq_ignore_ascii_case("f")
+                {
+                    self.camera.reset();
+                    self.upload_camera_transform();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+
             WindowEvent::RedrawRequested => {
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window)
                     && state.render()
@@ -349,6 +396,7 @@ impl ApplicationHandler for App {
                     window.request_redraw();
                 }
             }
+
             _ => {}
         }
     }
@@ -369,67 +417,8 @@ mod tests {
         Config::parse(toml).unwrap()
     }
 
-    // --- compute_transform ---
-
-    #[test]
-    fn transform_square_geo_square_viewport() {
-        let t = compute_transform([-1.0, -1.0], [1.0, 1.0], 100, 100);
-        assert!(close(t.scale[0], 0.9), "scale x = {}", t.scale[0]);
-        assert!(close(t.scale[1], 0.9), "scale y = {}", t.scale[1]);
-        assert!(close(t.offset[0], 0.0));
-        assert!(close(t.offset[1], 0.0));
-    }
-
-    #[test]
-    fn transform_center_maps_to_ndc_origin() {
-        // Geometry centered at (3, 2).
-        let t = compute_transform([1.0, 0.0], [5.0, 4.0], 200, 200);
-        assert!(close(3.0 * t.scale[0] + t.offset[0], 0.0));
-        assert!(close(2.0 * t.scale[1] + t.offset[1], 0.0));
-    }
-
-    #[test]
-    fn transform_width_constrained_fills_horizontal() {
-        // 4-wide × 1-tall geometry is width-constrained: horizontal NDC extent = 0.9 × 2.
-        let t = compute_transform([0.0, 0.0], [4.0, 1.0], 100, 100);
-        assert!(close(4.0 * t.scale[0], 1.8));
-        assert!(1.0 * t.scale[1] < 0.9);
-    }
-
-    #[test]
-    fn transform_height_constrained_fills_vertical() {
-        // 1-wide × 4-tall geometry is height-constrained: vertical NDC extent = 0.9 × 2.
-        let t = compute_transform([0.0, 0.0], [1.0, 4.0], 100, 100);
-        assert!(close(4.0 * t.scale[1], 1.8));
-        assert!(1.0 * t.scale[0] < 0.9);
-    }
-
-    #[test]
-    fn transform_preserves_aspect_ratio_in_landscape_viewport() {
-        // 200×100 window, square geometry: scale_x ≠ scale_y, but pixel density per
-        // world unit must be equal in both axes so the fractal isn't stretched.
-        let t = compute_transform([-1.0, -1.0], [1.0, 1.0], 200, 100);
-        let px_per_unit_x = t.scale[0] * 100.0; // (width / 2) NDC-to-pixel factor
-        let px_per_unit_y = t.scale[1] * 50.0; //  (height / 2)
-        assert!(close(px_per_unit_x, px_per_unit_y));
-    }
-
-    #[test]
-    fn transform_degenerate_point_geometry_stays_finite() {
-        // Zero-size geometry hits the max(1.0) floor; scale must stay finite and positive.
-        let t = compute_transform([5.0, 3.0], [5.0, 3.0], 100, 100);
-        assert!(t.scale[0].is_finite() && t.scale[0] > 0.0);
-        assert!(t.scale[1].is_finite() && t.scale[1] > 0.0);
-        // The point itself should map to NDC origin.
-        assert!(close(5.0 * t.scale[0] + t.offset[0], 0.0));
-        assert!(close(3.0 * t.scale[1] + t.offset[1], 0.0));
-    }
-
-    // --- App::new ---
-
     #[test]
     fn app_empty_geometry_uses_fallback_bounds() {
-        // "A" has no rule and draws nothing — zero segments produced.
         let geom = generate(&cfg(
             "name=\"t\"\naxiom=\"A\"\niterations=0\nangle=90.0\nstep=1.0",
         ));
@@ -443,7 +432,6 @@ mod tests {
 
     #[test]
     fn app_vertices_match_segment_endpoints() {
-        // F+F with 90° angle: (0,0)→(1,0) then (1,0)→(1,1).
         let geom = generate(&cfg(
             "name=\"t\"\naxiom=\"F+F\"\niterations=0\nangle=90.0\nstep=1.0",
         ));
@@ -461,7 +449,6 @@ mod tests {
 
     #[test]
     fn app_bounds_are_tight_over_all_segments() {
-        // F+F-F with 90° angle: east → north → east, spanning x ∈ [0,2], y ∈ [0,1].
         let geom = generate(&cfg(
             "name=\"t\"\naxiom=\"F+F-F\"\niterations=0\nangle=90.0\nstep=1.0",
         ));

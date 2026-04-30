@@ -1,3 +1,5 @@
+mod camera;
+mod input;
 mod renderer;
 
 use lsystem_core::Config;
