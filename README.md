@@ -136,10 +136,12 @@ crates/
       geometry.rs           Geometry type: line segments as Vec<[Vec2; 2]>
       turtle/
         turtle2d.rs         2D turtle interpreter
-  lsystem-app/              native + web entry points (rendering not yet implemented)
+  lsystem-app/              native + web entry points
     src/
-      main.rs               native entry point
-      lib.rs                wasm-bindgen entry point (web)
+      main.rs               native entry point — loads a preset, runs the event loop
+      renderer.rs           wgpu render state, pipeline, and winit ApplicationHandler
+      shader.wgsl           WGSL vertex + fragment shaders (LineList topology)
+      lib.rs                wasm-bindgen entry point (web, rendering TBD)
 
 presets/                    bundled TOML L-System definitions
 ```
