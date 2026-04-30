@@ -1,0 +1,10 @@
+name = "Sierpinski Triangle"
+dimensions = 2
+axiom = "F-F-F"
+iterations = 6
+angle = 120.0
+step = 1.0
+initial_heading = 0.0
+
+[rules]
+F = "F-F+F+F-F"

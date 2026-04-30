@@ -1,0 +1,11 @@
+name = "Dragon Curve"
+dimensions = 2
+axiom = "FX"
+iterations = 12
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[rules]
+X = "X+YF+"
+Y = "-FX-Y"

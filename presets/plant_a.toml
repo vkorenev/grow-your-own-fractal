@@ -1,0 +1,11 @@
+name = "Plant A"
+dimensions = 2
+axiom = "X"
+iterations = 6
+angle = 25.0
+step = 1.0
+initial_heading = 90.0
+
+[rules]
+X = "F+[[X]-X]-F[-FX]+X"
+F = "FF"
