@@ -1,0 +1,13 @@
+/target
+dist/
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+.zed/
+
+# AI editors
+.cursor/
+.claude/settings.local.json
