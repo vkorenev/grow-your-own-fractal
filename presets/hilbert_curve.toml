@@ -1,0 +1,11 @@
+name = "Hilbert Curve"
+dimensions = 2
+axiom = "A"
+iterations = 5
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[rules]
+A = "-BF+AFA+FB-"
+B = "+AF-BFB-FA+"

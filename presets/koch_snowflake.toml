@@ -1,0 +1,10 @@
+name = "Koch Snowflake"
+dimensions = 2
+axiom = "F++F++F"
+iterations = 4
+angle = 60.0
+step = 1.0
+initial_heading = 0.0
+
+[rules]
+F = "F-F++F-F"
