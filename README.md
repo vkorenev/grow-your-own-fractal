@@ -68,6 +68,14 @@ F = "F-F++F-F"          # each F is replaced by this string each iteration
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.
 
+### Controls
+
+| Input | Action |
+|-------|--------|
+| Drag (left button) | Pan |
+| Scroll wheel | Zoom in / out toward the cursor |
+| `F` | Reset view to fit the fractal |
+
 ### Bundled presets
 
 | File | Name | Description |
@@ -140,6 +148,8 @@ crates/
     src/
       main.rs               native entry point — loads a preset, runs the event loop
       renderer.rs           wgpu render state, pipeline, and winit ApplicationHandler
+      camera.rs             Camera (pan/zoom state) and Transform uniform
+      input.rs              mouse drag and cursor tracking
       shader.wgsl           WGSL vertex + fragment shaders (LineList topology)
       lib.rs                wasm-bindgen entry point (web, rendering TBD)
 
