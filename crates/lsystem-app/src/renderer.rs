@@ -6,13 +6,22 @@ use lsystem_core::Geometry;
 use wgpu::util::DeviceExt;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::Key;
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::{Camera, Transform};
 use crate::input::InputState;
 use crate::ui::UiState;
+
+/// Events raised outside the winit event loop and routed back through
+/// `ApplicationHandler::user_event`. On wasm the GPU device is acquired
+/// asynchronously and delivered this way; on native the device is built
+/// synchronously and this variant is unused.
+pub enum UserEvent {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    GpuReady(Box<GpuState>),
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -52,7 +61,7 @@ fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2], [f32; 2]
     (vertices, [min_x, min_y], [max_x, max_y])
 }
 
-struct GpuState {
+pub struct GpuState {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -66,19 +75,25 @@ struct GpuState {
 }
 
 impl GpuState {
-    async fn new(window: Arc<Window>, vertices: &[Vertex], initial_transform: &Transform) -> Self {
+    async fn new(
+        window: Arc<Window>,
+        vertices: &[Vertex],
+        initial_transform: &Transform,
+    ) -> Result<Self, ()> {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window).unwrap();
-        let adapter = instance
+        let Ok(adapter) = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
             })
             .await
-            .expect("no GPU adapter found");
+        else {
+            return Err(());
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
@@ -184,7 +199,7 @@ impl GpuState {
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
 
-        Self {
+        Ok(Self {
             surface,
             device,
             queue,
@@ -195,7 +210,7 @@ impl GpuState {
             uniform_buffer,
             bind_group,
             egui_renderer,
-        }
+        })
     }
 
     fn size(&self) -> (u32, u32) {
@@ -234,12 +249,18 @@ impl GpuState {
         window: &Window,
         ui: &mut UiState,
         panel_px: u32,
-    ) -> bool {
+    ) -> (bool, std::time::Duration) {
         let raw_input = egui_winit.take_egui_input(window);
         egui_ctx.begin_pass(raw_input);
         ui.draw(egui_ctx);
         let full_output = egui_ctx.end_pass();
         egui_winit.handle_platform_output(window, full_output.platform_output);
+
+        let repaint_delay = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|vo| vo.repaint_delay)
+            .unwrap_or(std::time::Duration::MAX);
 
         let (w, h) = self.size();
         let effective_w = w.saturating_sub(panel_px).max(1);
@@ -258,11 +279,11 @@ impl GpuState {
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.surface_config);
-                return true;
+                return (true, repaint_delay);
             }
             wgpu::CurrentSurfaceTexture::Timeout
             | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Validation => return false,
+            | wgpu::CurrentSurfaceTexture::Validation => return (false, repaint_delay),
         };
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -338,7 +359,7 @@ impl GpuState {
         if reconfigure {
             self.surface.configure(&self.device, &self.surface_config);
         }
-        reconfigure
+        (reconfigure, repaint_delay)
     }
 }
 
@@ -352,10 +373,12 @@ pub struct App {
     egui_ctx: egui::Context,
     egui_winit: Option<egui_winit::State>,
     ui: UiState,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    proxy: EventLoopProxy<UserEvent>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let ui = UiState::new();
         Self {
             window: None,
@@ -367,7 +390,14 @@ impl App {
             egui_ctx: egui::Context::default(),
             egui_winit: None,
             ui,
+            proxy,
         }
+    }
+
+    /// Run after `state` is populated to upload the initial geometry.
+    fn finish_init(&mut self) {
+        self.ui.dirty = true;
+        self.regenerate_if_dirty();
     }
 
     /// Physical pixel width of the egui side panel, used to restrict the camera viewport.
@@ -414,19 +444,32 @@ impl App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
+fn window_attributes() -> WindowAttributes {
+    let attrs = Window::default_attributes().with_title("Grow Your Own Fractal");
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        use winit::platform::web::WindowAttributesExtWebSys;
+        let canvas = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("lsystem-canvas"))
+            .and_then(|el| el.dyn_into::<web_sys::HtmlCanvasElement>().ok());
+        attrs.with_canvas(canvas)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        attrs
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(
-            event_loop
-                .create_window(Window::default_attributes().with_title("Grow Your Own Fractal"))
-                .unwrap(),
-        );
+        if self.window.is_some() {
+            // Reentrant resume (e.g. mobile app foreground): keep existing state.
+            return;
+        }
+
+        let window = Arc::new(event_loop.create_window(window_attributes()).unwrap());
 
         let egui_winit = egui_winit::State::new(
             self.egui_ctx.clone(),
@@ -447,17 +490,55 @@ impl ApplicationHandler for App {
             size.width.max(1),
             size.height.max(1),
         );
-        let state = pollster::block_on(GpuState::new(
-            window.clone(),
-            &initial_vertices,
-            &initial_transform,
-        ));
-        self.window = Some(window);
-        self.state = Some(state);
 
-        // Trigger initial geometry generation.
-        self.ui.dirty = true;
-        self.regenerate_if_dirty();
+        self.window = Some(window.clone());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let state =
+                pollster::block_on(GpuState::new(window, &initial_vertices, &initial_transform))
+                    .expect("no GPU adapter found");
+            self.state = Some(state);
+            self.finish_init();
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // wgpu's adapter/device requests are JS Promises and must be awaited
+            // on the JS event loop. Hand the result back via a UserEvent so the
+            // App regains exclusive ownership before installing the GpuState.
+            let proxy = self.proxy.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match GpuState::new(window, &initial_vertices, &initial_transform).await {
+                    Ok(state) => {
+                        let _ = proxy.send_event(UserEvent::GpuReady(Box::new(state)));
+                    }
+                    Err(()) => {
+                        crate::web::show_unsupported_overlay();
+                    }
+                }
+            });
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::GpuReady(state) => {
+                self.state = Some(*state);
+                // A Resized event may have arrived between resumed() and now
+                // (the canvas's CSS layout typically completes during async
+                // device init) and been dropped because `state` was None.
+                // Re-sync the surface to the window's current size before
+                // rendering so the first frame isn't stuck at the stale init
+                // size.
+                if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
+                    state.resize(window.inner_size());
+                }
+                self.finish_init();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+        }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -586,11 +667,13 @@ impl ApplicationHandler for App {
                 if let (Some(state), Some(egui_winit), Some(window)) =
                     (&mut self.state, &mut self.egui_winit, &self.window)
                 {
-                    if state.render(&self.egui_ctx, egui_winit, window, &mut self.ui, panel_px) {
-                        window.request_redraw();
-                    }
-                    // Request another frame if egui wants to animate.
-                    if self.egui_ctx.has_requested_repaint() {
+                    let (reconfigure, repaint_delay) =
+                        state.render(&self.egui_ctx, egui_winit, window, &mut self.ui, panel_px);
+                    // Redraw immediately on surface reconfiguration or when egui
+                    // needs the very next frame (repaint_delay == ZERO). Deferred
+                    // egui animations (repaint_delay > ZERO) are fine to skip —
+                    // they will resume on the next user-input event.
+                    if reconfigure || repaint_delay.is_zero() {
                         window.request_redraw();
                     }
                 }

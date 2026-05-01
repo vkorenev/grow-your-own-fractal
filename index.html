@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Grow Your Own Fractal</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0d0d1a;
+        color: #ddd;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      #lsystem-canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        outline: none;
+        touch-action: none;
+      }
+      #unsupported {
+        display: none;
+        position: absolute;
+        inset: 0;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 2rem;
+      }
+      #unsupported a {
+        color: #6cf;
+      }
+    </style>
+    <link data-trunk rel="rust" href="crates/lsystem-app/Cargo.toml" data-target-name="lsystem_app" data-wasm-opt="z" />
+  </head>
+  <body>
+    <canvas id="lsystem-canvas" tabindex="0"></canvas>
+    <div id="unsupported">
+      <div>
+        <h1>WebGPU is not available in this browser.</h1>
+        <p>
+          Try the latest <a href="https://www.google.com/chrome/">Chrome</a>,
+          Edge, or Firefox Nightly with WebGPU enabled.
+        </p>
+        <p>
+          On Linux you may also need to enable
+          <code>chrome://flags/#enable-unsafe-webgpu</code> and confirm
+          <code>chrome://gpu</code> reports WebGPU as hardware-accelerated.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>
