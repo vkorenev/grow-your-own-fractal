@@ -1,26 +1,36 @@
+use include_dir::{Dir, include_dir};
 use lsystem_core::Config;
 
-pub const PRESETS: &[(&str, &str)] = &[
-    (
-        "Koch Snowflake",
-        include_str!("../../../presets/koch_snowflake.toml"),
-    ),
-    (
-        "Dragon Curve",
-        include_str!("../../../presets/dragon_curve.toml"),
-    ),
-    (
-        "Sierpinski Triangle",
-        include_str!("../../../presets/sierpinski_triangle.toml"),
-    ),
-    ("Plant A", include_str!("../../../presets/plant_a.toml")),
-    (
-        "Hilbert Curve",
-        include_str!("../../../presets/hilbert_curve.toml"),
-    ),
-];
+static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
+
+fn load_presets() -> Vec<(String, &'static str)> {
+    let mut files: Vec<_> = PRESETS_DIR
+        .files()
+        .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("toml"))
+        .collect();
+    files.sort_by_key(|f| f.path());
+    files
+        .into_iter()
+        .filter_map(|f| {
+            let stem = f.path().file_stem()?.to_str()?;
+            let name = stem
+                .split('_')
+                .map(|w| {
+                    let mut chars = w.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some((name, f.contents_utf8()?))
+        })
+        .collect()
+}
 
 pub struct UiState {
+    presets: Vec<(String, &'static str)>,
     pub preset_idx: usize,
     pub toml_text: String,
     pub base_config: Option<Config>,
@@ -36,10 +46,16 @@ pub struct UiState {
 
 impl UiState {
     pub fn new() -> Self {
-        let toml_text = PRESETS[0].1.to_string();
+        let presets = load_presets();
+        let toml_text = presets
+            .first()
+            .expect("no preset TOML files found")
+            .1
+            .to_string();
         let mut s = Self {
+            presets,
             preset_idx: 0,
-            toml_text: toml_text.clone(),
+            toml_text,
             base_config: None,
             iterations: 4,
             angle: 60.0,
@@ -89,14 +105,14 @@ impl UiState {
                 ui.label("Preset");
                 let prev = self.preset_idx;
                 egui::ComboBox::from_id_salt("preset_combo")
-                    .selected_text(PRESETS[self.preset_idx].0)
+                    .selected_text(self.presets[self.preset_idx].0.as_str())
                     .show_ui(ui, |ui| {
-                        for (i, (name, _)) in PRESETS.iter().enumerate() {
-                            ui.selectable_value(&mut self.preset_idx, i, *name);
+                        for (i, (name, _)) in self.presets.iter().enumerate() {
+                            ui.selectable_value(&mut self.preset_idx, i, name.as_str());
                         }
                     });
                 if self.preset_idx != prev {
-                    self.toml_text = PRESETS[self.preset_idx].1.to_string();
+                    self.toml_text = self.presets[self.preset_idx].1.to_string();
                     self.apply();
                 }
 
