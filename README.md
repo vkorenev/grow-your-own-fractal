@@ -95,11 +95,11 @@ you can break long rules across lines for readability.
 | Tool | Purpose |
 |------|---------|
 | [Rust](https://rustup.rs/) stable | compiler (version pinned in `rust-toolchain.toml`) |
-| [trunk](https://trunkrs.dev/) | web build + dev server |
+| [mise](https://mise.jdx.dev/) | installs pinned tools — trunk (version pinned in `mise.toml`) |
 | Chrome ≥ 113 / Edge | WebGPU support in the browser |
 
 ```sh
-cargo install trunk
+mise install   # installs trunk at the version pinned in mise.toml
 ```
 
 ### Building
@@ -133,7 +133,8 @@ cargo test --workspace
 ```
 Cargo.toml                  workspace manifest
 rust-toolchain.toml         pins stable Rust + wasm32 target + components
-.github/workflows/ci.yml    fmt · clippy · test · wasm-check
+mise.toml                   pins trunk version (read by CI and local dev)
+.github/workflows/ci.yml    fmt · clippy · test · wasm-check · trunk-build
 
 crates/
   lsystem-core/             pure Rust, no rendering deps
@@ -151,14 +152,19 @@ crates/
       camera.rs             Camera (pan/zoom state) and Transform uniform
       input.rs              mouse drag and cursor tracking
       shader.wgsl           WGSL vertex + fragment shaders (LineList topology)
-      lib.rs                wasm-bindgen entry point (web, rendering TBD)
+      lib.rs                shared module declarations + native run_native()
+                            and #[wasm_bindgen(start)] entry point for web
+      ui.rs                 egui side panel (preset picker, TOML edit, sliders)
+
+index.html                  trunk entry: canvas + WebGPU detection
+Trunk.toml                  trunk build config
 
 presets/                    bundled TOML L-System definitions
 ```
 
 ### CI
 
-Every push and pull request to `main` runs four jobs:
+Every push and pull request to `main` runs five jobs:
 
 | Job | Command |
 |-----|---------|
@@ -166,6 +172,7 @@ Every push and pull request to `main` runs four jobs:
 | clippy | `cargo clippy --workspace -- -D warnings` |
 | test | `cargo test --workspace` |
 | wasm-check | `cargo check --target wasm32-unknown-unknown -p lsystem-app` |
+| trunk-build | `trunk build --release` |
 
 ### License
 
