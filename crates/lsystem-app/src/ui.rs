@@ -1,5 +1,11 @@
+use std::sync::Arc;
+
+use egui_wgpu::ScreenDescriptor;
 use include_dir::{Dir, include_dir};
 use lsystem_core::Config;
+use wgpu::TextureFormat;
+use winit::event::WindowEvent;
+use winit::window::Window;
 
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
@@ -174,5 +180,134 @@ impl UiState {
                 ui.small("Drag to pan · Scroll to zoom · F to fit");
             });
         self.panel_width = panel_response.response.rect.width();
+    }
+}
+
+pub struct EguiRenderer {
+    pub ctx: egui::Context,
+    winit_state: egui_winit::State,
+    renderer: Option<egui_wgpu::Renderer>,
+    device: Option<Arc<wgpu::Device>>,
+    queue: Option<Arc<wgpu::Queue>>,
+}
+
+impl EguiRenderer {
+    pub fn new(window: &Window) -> Self {
+        let ctx = egui::Context::default();
+        let winit_state = egui_winit::State::new(
+            ctx.clone(),
+            egui::ViewportId::ROOT,
+            window,
+            Some(window.scale_factor() as f32),
+            None,
+            None,
+        );
+        Self {
+            ctx,
+            winit_state,
+            renderer: None,
+            device: None,
+            queue: None,
+        }
+    }
+
+    pub fn attach_gpu(
+        &mut self,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        format: TextureFormat,
+    ) {
+        self.renderer = Some(egui_wgpu::Renderer::new(
+            &device,
+            format,
+            egui_wgpu::RendererOptions::default(),
+        ));
+        self.device = Some(device);
+        self.queue = Some(queue);
+    }
+
+    pub fn on_window_event(
+        &mut self,
+        window: &Window,
+        event: &WindowEvent,
+    ) -> egui_winit::EventResponse {
+        self.winit_state.on_window_event(window, event)
+    }
+
+    pub fn is_pointer_over_egui(&self) -> bool {
+        self.ctx.is_pointer_over_egui()
+    }
+
+    pub fn render(
+        &mut self,
+        window: &Window,
+        ui: &mut UiState,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_size: (u32, u32),
+    ) -> (bool, std::time::Duration) {
+        let (renderer, device, queue) = match (
+            self.renderer.as_mut(),
+            self.device.as_ref(),
+            self.queue.as_ref(),
+        ) {
+            (Some(r), Some(d), Some(q)) => (r, d, q),
+            _ => return (false, std::time::Duration::MAX),
+        };
+
+        let raw_input = self.winit_state.take_egui_input(window);
+        self.ctx.begin_pass(raw_input);
+        ui.draw(&self.ctx);
+        let full_output = self.ctx.end_pass();
+        self.winit_state
+            .handle_platform_output(window, full_output.platform_output);
+
+        let repaint_delay = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|vo| vo.repaint_delay)
+            .unwrap_or(std::time::Duration::MAX);
+
+        let screen_desc = ScreenDescriptor {
+            size_in_pixels: [surface_size.0, surface_size.1],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+        let tris = self
+            .ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+        for (id, delta) in &full_output.textures_delta.set {
+            renderer.update_texture(device, queue, *id, delta);
+        }
+
+        renderer.update_buffers(device, queue, encoder, &tris, &screen_desc);
+        {
+            let mut egui_pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                    multiview_mask: None,
+                })
+                // forget_lifetime is safe here: egui_pass is dropped before
+                // encoder.finish(), which is the invariant wgpu requires.
+                .forget_lifetime();
+            renderer.render(&mut egui_pass, &tris, &screen_desc);
+        }
+
+        for id in &full_output.textures_delta.free {
+            renderer.free_texture(id);
+        }
+
+        (false, repaint_delay)
     }
 }

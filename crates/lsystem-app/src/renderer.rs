@@ -1,18 +1,15 @@
 use std::sync::Arc;
 
-use bytemuck::{Pod, Zeroable};
-use egui_wgpu::ScreenDescriptor;
-use lsystem_core::Geometry;
-use wgpu::util::DeviceExt;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::Key;
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::camera::{Camera, Transform};
+use crate::camera::Camera;
+use crate::fractal_renderer::{FractalRenderer, FrameOutcome, geometry_to_vertices};
 use crate::input::InputState;
-use crate::ui::UiState;
+use crate::ui::{EguiRenderer, UiState};
 
 /// Events raised outside the winit event loop and routed back through
 /// `ApplicationHandler::user_event`. On wasm the GPU device is acquired
@@ -20,358 +17,17 @@ use crate::ui::UiState;
 /// synchronously and this variant is unused.
 pub enum UserEvent {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    GpuReady(Box<GpuState>),
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-struct Vertex {
-    position: [f32; 2],
-}
-
-fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2], [f32; 2]) {
-    let Geometry::D2 { segments } = geometry;
-
-    let mut min_x = f32::INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-    let mut vertices = Vec::with_capacity(segments.len() * 2);
-
-    for [a, b] in segments {
-        min_x = min_x.min(a.x).min(b.x);
-        min_y = min_y.min(a.y).min(b.y);
-        max_x = max_x.max(a.x).max(b.x);
-        max_y = max_y.max(a.y).max(b.y);
-        vertices.push(Vertex {
-            position: [a.x, a.y],
-        });
-        vertices.push(Vertex {
-            position: [b.x, b.y],
-        });
-    }
-
-    if min_x.is_infinite() {
-        min_x = -1.0;
-        max_x = 1.0;
-        min_y = -1.0;
-        max_y = 1.0;
-    }
-
-    (vertices, [min_x, min_y], [max_x, max_y])
-}
-
-pub struct GpuState {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    surface_config: wgpu::SurfaceConfiguration,
-    pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    vertex_count: u32,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    egui_renderer: egui_wgpu::Renderer,
-}
-
-impl GpuState {
-    async fn new(
-        window: Arc<Window>,
-        vertices: &[Vertex],
-        initial_transform: &Transform,
-    ) -> Result<Self, ()> {
-        let size = window.inner_size();
-
-        let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window).unwrap();
-        let Ok(adapter) = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-        else {
-            return Err(());
-        };
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
-
-        let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(caps.formats[0]);
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: caps.present_modes[0],
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &surface_config);
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::bytes_of(initial_transform),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[Some(&bgl)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                }],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let egui_renderer =
-            egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
-
-        Ok(Self {
-            surface,
-            device,
-            queue,
-            surface_config,
-            pipeline,
-            vertex_buffer,
-            vertex_count: vertices.len() as u32,
-            uniform_buffer,
-            bind_group,
-            egui_renderer,
-        })
-    }
-
-    fn size(&self) -> (u32, u32) {
-        (self.surface_config.width, self.surface_config.height)
-    }
-
-    fn upload_transform(&self, transform: &Transform) {
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(transform));
-    }
-
-    fn upload_vertices(&mut self, vertices: &[Vertex]) {
-        self.vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        self.vertex_count = vertices.len() as u32;
-    }
-
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 {
-            return;
-        }
-        self.surface_config.width = new_size.width;
-        self.surface_config.height = new_size.height;
-        self.surface.configure(&self.device, &self.surface_config);
-    }
-
-    fn render(
-        &mut self,
-        egui_ctx: &egui::Context,
-        egui_winit: &mut egui_winit::State,
-        window: &Window,
-        ui: &mut UiState,
-        panel_px: u32,
-    ) -> (bool, std::time::Duration) {
-        let raw_input = egui_winit.take_egui_input(window);
-        egui_ctx.begin_pass(raw_input);
-        ui.draw(egui_ctx);
-        let full_output = egui_ctx.end_pass();
-        egui_winit.handle_platform_output(window, full_output.platform_output);
-
-        let repaint_delay = full_output
-            .viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map(|vo| vo.repaint_delay)
-            .unwrap_or(std::time::Duration::MAX);
-
-        let (w, h) = self.size();
-        let effective_w = w.saturating_sub(panel_px).max(1);
-        let screen_desc = ScreenDescriptor {
-            size_in_pixels: [w, h],
-            pixels_per_point: full_output.pixels_per_point,
-        };
-        let tris = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
-        for (id, delta) in &full_output.textures_delta.set {
-            self.egui_renderer
-                .update_texture(&self.device, &self.queue, *id, delta);
-        }
-
-        let (frame, reconfigure) = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) => (t, false),
-            wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.surface_config);
-                return (true, repaint_delay);
-            }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Validation => return (false, repaint_delay),
-        };
-        let view = frame.texture.create_view(&Default::default());
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            pass.set_viewport(panel_px as f32, 0.0, effective_w as f32, h as f32, 0.0, 1.0);
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..self.vertex_count, 0..1);
-        }
-
-        self.egui_renderer.update_buffers(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            &tris,
-            &screen_desc,
-        );
-        {
-            let mut egui_pass = encoder
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: None,
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    occlusion_query_set: None,
-                    timestamp_writes: None,
-                    multiview_mask: None,
-                })
-                // forget_lifetime is safe here: egui_pass is dropped before
-                // encoder.finish(), which is the invariant wgpu requires.
-                .forget_lifetime();
-            self.egui_renderer
-                .render(&mut egui_pass, &tris, &screen_desc);
-        }
-
-        for id in &full_output.textures_delta.free {
-            self.egui_renderer.free_texture(id);
-        }
-
-        self.queue.submit([encoder.finish()]);
-        frame.present();
-
-        if reconfigure {
-            self.surface.configure(&self.device, &self.surface_config);
-        }
-        (reconfigure, repaint_delay)
-    }
+    GpuReady(Box<FractalRenderer>),
 }
 
 pub struct App {
     window: Option<Arc<Window>>,
-    state: Option<GpuState>,
+    state: Option<FractalRenderer>,
     bounds_min: [f32; 2],
     bounds_max: [f32; 2],
     camera: Camera,
     input: InputState,
-    egui_ctx: egui::Context,
-    egui_winit: Option<egui_winit::State>,
+    egui: Option<EguiRenderer>,
     ui: UiState,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     proxy: EventLoopProxy<UserEvent>,
@@ -387,8 +43,7 @@ impl App {
             bounds_max: [1.0, 1.0],
             camera: Camera::new(),
             input: InputState::new(),
-            egui_ctx: egui::Context::default(),
-            egui_winit: None,
+            egui: None,
             ui,
             proxy,
         }
@@ -471,19 +126,10 @@ impl ApplicationHandler<UserEvent> for App {
 
         let window = Arc::new(event_loop.create_window(window_attributes()).unwrap());
 
-        let egui_winit = egui_winit::State::new(
-            self.egui_ctx.clone(),
-            egui::ViewportId::ROOT,
-            &window,
-            Some(window.scale_factor() as f32),
-            None,
-            None,
-        );
-        self.egui_winit = Some(egui_winit);
+        self.egui = Some(EguiRenderer::new(&window));
 
         let size = window.inner_size();
-
-        let initial_vertices: Vec<Vertex> = Vec::new();
+        let initial_vertices = vec![];
         let initial_transform = self.camera.compute_transform(
             self.bounds_min,
             self.bounds_max,
@@ -495,20 +141,30 @@ impl ApplicationHandler<UserEvent> for App {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let state =
-                pollster::block_on(GpuState::new(window, &initial_vertices, &initial_transform))
-                    .expect("no GPU adapter found");
-            self.state = Some(state);
+            let fractal = pollster::block_on(FractalRenderer::new(
+                window,
+                &initial_vertices,
+                &initial_transform,
+            ))
+            .expect("no GPU adapter found");
+            if let Some(egui) = &mut self.egui {
+                egui.attach_gpu(
+                    fractal.device.clone(),
+                    fractal.queue.clone(),
+                    fractal.surface_format(),
+                );
+            }
+            self.state = Some(fractal);
             self.finish_init();
         }
         #[cfg(target_arch = "wasm32")]
         {
             // wgpu's adapter/device requests are JS Promises and must be awaited
             // on the JS event loop. Hand the result back via a UserEvent so the
-            // App regains exclusive ownership before installing the GpuState.
+            // App regains exclusive ownership before installing the FractalRenderer.
             let proxy = self.proxy.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match GpuState::new(window, &initial_vertices, &initial_transform).await {
+                match FractalRenderer::new(window, &initial_vertices, &initial_transform).await {
                     Ok(state) => {
                         let _ = proxy.send_event(UserEvent::GpuReady(Box::new(state)));
                     }
@@ -522,8 +178,15 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::GpuReady(state) => {
-                self.state = Some(*state);
+            UserEvent::GpuReady(fractal) => {
+                if let Some(egui) = &mut self.egui {
+                    egui.attach_gpu(
+                        fractal.device.clone(),
+                        fractal.queue.clone(),
+                        fractal.surface_format(),
+                    );
+                }
+                self.state = Some(*fractal);
                 // A Resized event may have arrived between resumed() and now
                 // (the canvas's CSS layout typically completes during async
                 // device init) and been dropped because `state` was None.
@@ -556,17 +219,16 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         // Feed event to egui first.
-        let egui_consumed =
-            if let (Some(egui_winit), Some(window)) = (&mut self.egui_winit, &self.window) {
-                let response = egui_winit.on_window_event(window, &event);
-                // response.repaint keeps is_pointer_over_egui() fresh between clicks.
-                if response.repaint || response.consumed {
-                    window.request_redraw();
-                }
-                response.consumed
-            } else {
-                false
-            };
+        let egui_consumed = if let (Some(egui), Some(window)) = (&mut self.egui, &self.window) {
+            let response = egui.on_window_event(window, &event);
+            // response.repaint keeps is_pointer_over_egui() fresh between clicks.
+            if response.repaint || response.consumed {
+                window.request_redraw();
+            }
+            response.consumed
+        } else {
+            false
+        };
         if egui_consumed {
             return;
         }
@@ -590,7 +252,7 @@ impl ApplicationHandler<UserEvent> for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } if !self.egui_ctx.is_pointer_over_egui() => {
+            } if !self.egui.as_ref().is_some_and(|e| e.is_pointer_over_egui()) => {
                 self.input.on_left_button(true);
             }
 
@@ -617,7 +279,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
 
-            WindowEvent::MouseWheel { delta, .. } if !self.egui_ctx.is_pointer_over_egui() => {
+            WindowEvent::MouseWheel { delta, .. }
+                if !self.egui.as_ref().is_some_and(|e| e.is_pointer_over_egui()) =>
+            {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
@@ -664,17 +328,32 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 self.regenerate_if_dirty();
                 let panel_px = self.panel_px();
-                if let (Some(state), Some(egui_winit), Some(window)) =
-                    (&mut self.state, &mut self.egui_winit, &self.window)
+                if let (Some(fractal), Some(egui), Some(window)) =
+                    (&mut self.state, &mut self.egui, &self.window)
                 {
-                    let (reconfigure, repaint_delay) =
-                        state.render(&self.egui_ctx, egui_winit, window, &mut self.ui, panel_px);
-                    // Redraw immediately on surface reconfiguration or when egui
-                    // needs the very next frame (repaint_delay == ZERO). Deferred
-                    // egui animations (repaint_delay > ZERO) are fine to skip —
-                    // they will resume on the next user-input event.
-                    if reconfigure || repaint_delay.is_zero() {
-                        window.request_redraw();
+                    match fractal.begin_frame(panel_px) {
+                        FrameOutcome::Skip => {}
+                        FrameOutcome::Reconfigured => {
+                            window.request_redraw();
+                        }
+                        FrameOutcome::Ready(frame, view, mut encoder, reconfigure_after) => {
+                            let surface_size = fractal.size();
+                            let (_, repaint_delay) = egui.render(
+                                window,
+                                &mut self.ui,
+                                &view,
+                                &mut encoder,
+                                surface_size,
+                            );
+                            fractal.end_frame(*frame, encoder, reconfigure_after);
+                            // Redraw immediately on surface reconfiguration or when egui
+                            // needs the very next frame (repaint_delay == ZERO). Deferred
+                            // egui animations (repaint_delay > ZERO) are fine to skip —
+                            // they will resume on the next user-input event.
+                            if reconfigure_after || repaint_delay.is_zero() {
+                                window.request_redraw();
+                            }
+                        }
                     }
                 }
                 // Dirty flag may have been set by slider interaction during draw.
@@ -687,59 +366,5 @@ impl ApplicationHandler<UserEvent> for App {
 
             _ => {}
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use lsystem_core::{Config, generate};
-
-    const EPS: f32 = 1e-5;
-
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() < EPS
-    }
-
-    fn cfg(toml: &str) -> Config {
-        Config::parse(toml).unwrap()
-    }
-
-    #[test]
-    fn empty_geometry_uses_fallback_bounds() {
-        // axiom has no F, so no segments are drawn
-        let geom = generate(&cfg(
-            "name=\"t\"\naxiom=\"A\"\niterations=0\nangle=90.0\nstep=1.0",
-        ));
-        let (verts, min, max) = geometry_to_vertices(&geom);
-        assert!(verts.is_empty());
-        assert!(close(min[0], -1.0) && close(min[1], -1.0));
-        assert!(close(max[0], 1.0) && close(max[1], 1.0));
-    }
-
-    #[test]
-    fn single_segment_produces_two_vertices_and_tight_bounds() {
-        // "F" at 0 iterations: one segment from (0,0) to (1,0)
-        let geom = generate(&cfg(
-            "name=\"t\"\naxiom=\"F\"\niterations=0\nangle=90.0\nstep=1.0",
-        ));
-        let (verts, min, max) = geometry_to_vertices(&geom);
-        assert_eq!(verts.len(), 2);
-        assert!(close(verts[0].position[0], 0.0) && close(verts[0].position[1], 0.0));
-        assert!(close(verts[1].position[0], 1.0) && close(verts[1].position[1], 0.0));
-        assert!(close(min[0], 0.0) && close(min[1], 0.0));
-        assert!(close(max[0], 1.0) && close(max[1], 0.0));
-    }
-
-    #[test]
-    fn bounds_are_tight_over_all_segments() {
-        // "F+F-F": three segments covering x=[0,2], y=[0,1]
-        let geom = generate(&cfg(
-            "name=\"t\"\naxiom=\"F+F-F\"\niterations=0\nangle=90.0\nstep=1.0",
-        ));
-        let (verts, min, max) = geometry_to_vertices(&geom);
-        assert_eq!(verts.len(), 6);
-        assert!(close(min[0], 0.0) && close(min[1], 0.0));
-        assert!(close(max[0], 2.0) && close(max[1], 1.0));
     }
 }
