@@ -147,14 +147,14 @@ crates/
         turtle2d.rs         2D turtle interpreter
   lsystem-app/              native + web entry points
     src/
-      main.rs               native entry point — loads a preset, runs the event loop
-      renderer.rs           wgpu render state, pipeline, and winit ApplicationHandler
-      camera.rs             Camera (pan/zoom state) and Transform uniform
+      main.rs               native entry point
+      fractal_renderer.rs   GPU rendering pipeline, independent of GUI framework
+      renderer.rs           winit event loop and rendering orchestration
+      camera.rs             pan/zoom state and view transform
       input.rs              mouse drag and cursor tracking
-      shader.wgsl           WGSL vertex + fragment shaders (LineList topology)
-      lib.rs                shared module declarations + native run_native()
-                            and #[wasm_bindgen(start)] entry point for web
-      ui.rs                 egui side panel (preset picker, TOML edit, sliders)
+      shader.wgsl           vertex + fragment shaders
+      lib.rs                crate entry points for native and web
+      ui.rs                 egui side panel — preset picker, config editor, sliders
 
 index.html                  trunk entry: canvas + WebGPU detection
 Trunk.toml                  trunk build config

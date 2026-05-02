@@ -1,4 +1,5 @@
 mod camera;
+mod fractal_renderer;
 mod input;
 mod renderer;
 mod ui;
