@@ -65,4 +65,6 @@ Five bundled TOML L-System definitions (`koch_snowflake.toml`, `dragon_curve.tom
 
 - **Lazy expansion**: `ExpandIter` avoids materializing the full string at each iteration, keeping memory bounded for high-iteration fractals.
 - **Dual target from day one**: `lsystem-core` has no platform-specific deps so it compiles for both native and `wasm32-unknown-unknown` without feature flags.
+- **3D forward-compat seams**: `Geometry::D3`, the `dimensions` TOML field (currently validated to `2` only), and the `Turtle` trait dispatch in `build()` are all present so that adding 3D is a purely additive extension — do not remove them as dead code.
+- **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
 - **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass; the `wasm-check` job catches WASM regressions early.
