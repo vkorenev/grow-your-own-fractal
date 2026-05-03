@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use egui::PaintCallbackInfo;
+use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lsystem_core::Geometry;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -45,77 +47,19 @@ pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2
     (vertices, [min_x, min_y], [max_x, max_y])
 }
 
-pub(crate) enum FrameOutcome {
-    Ready(
-        Box<wgpu::SurfaceTexture>,
-        wgpu::TextureView,
-        wgpu::CommandEncoder,
-        bool,
-    ),
-    Reconfigured,
-    Skip,
-}
-
-pub struct FractalRenderer {
-    surface: wgpu::Surface<'static>,
-    pub device: Arc<wgpu::Device>,
-    pub queue: Arc<wgpu::Queue>,
-    surface_config: wgpu::SurfaceConfiguration,
+/// GPU resources for fractal rendering, stored in egui's `CallbackResources` TypeMap.
+pub(crate) struct FractalPipelineResources {
     pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    vertex_count: u32,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
+    /// Matches `App::geometry_version`; when they differ, the vertex buffer is re-uploaded.
+    geometry_version: u64,
 }
 
-impl FractalRenderer {
-    pub(crate) async fn new(
-        window: Arc<Window>,
-        vertices: &[Vertex],
-        initial_transform: &Transform,
-    ) -> Result<Self, ()> {
-        let size = window.inner_size();
-
-        let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window).unwrap();
-        let Ok(adapter) = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-        else {
-            return Err(());
-        };
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .unwrap();
-
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
-
-        let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(caps.formats[0]);
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: caps.present_modes[0],
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &surface_config);
-
+impl FractalPipelineResources {
+    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -123,7 +67,10 @@ impl FractalRenderer {
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::bytes_of(initial_transform),
+            contents: bytemuck::bytes_of(&Transform {
+                scale: [1.0, 1.0],
+                offset: [0.0, 0.0],
+            }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -140,6 +87,7 @@ impl FractalRenderer {
                 count: None,
             }],
         });
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &bgl,
@@ -154,6 +102,7 @@ impl FractalRenderer {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(&pipeline_layout),
@@ -187,22 +136,149 @@ impl FractalRenderer {
             cache: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        // Placeholder; never bound for drawing (vertex_count stays 0 until the first
+        // FractalCallback::prepare swaps in a real buffer).
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(vertices),
+            size: std::mem::size_of::<Vertex>() as u64,
             usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
         });
+
+        Self {
+            pipeline,
+            uniform_buffer,
+            bind_group,
+            vertex_buffer,
+            vertex_count: 0,
+            // u64::MAX never matches a real `App::geometry_version`, so the first
+            // FractalCallback::prepare call always uploads.
+            geometry_version: u64::MAX,
+        }
+    }
+}
+
+/// Per-frame data passed into egui's paint callback system.
+pub(crate) struct FractalCallback {
+    pub vertices: Arc<Vec<Vertex>>,
+    pub transform: Transform,
+    pub geometry_version: u64,
+}
+
+impl CallbackTrait for FractalCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen_descriptor: &ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let res = callback_resources
+            .get_mut::<FractalPipelineResources>()
+            .unwrap();
+
+        if self.geometry_version != res.geometry_version {
+            if !self.vertices.is_empty() {
+                res.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(&self.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            }
+            res.vertex_count = self.vertices.len() as u32;
+            res.geometry_version = self.geometry_version;
+        }
+
+        queue.write_buffer(&res.uniform_buffer, 0, bytemuck::bytes_of(&self.transform));
+        vec![]
+    }
+
+    fn paint(
+        &self,
+        _info: PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        callback_resources: &CallbackResources,
+    ) {
+        let res = callback_resources
+            .get::<FractalPipelineResources>()
+            .unwrap();
+
+        // egui_wgpu sets the viewport to our allocated rect before calling paint().
+        render_pass.set_pipeline(&res.pipeline);
+        render_pass.set_bind_group(0, &res.bind_group, &[]);
+        if res.vertex_count > 0 {
+            render_pass.set_vertex_buffer(0, res.vertex_buffer.slice(..));
+            render_pass.draw(0..res.vertex_count, 0..1);
+        }
+    }
+}
+
+pub(crate) enum FrameOutcome {
+    Ready(
+        Box<wgpu::SurfaceTexture>,
+        wgpu::TextureView,
+        wgpu::CommandEncoder,
+        bool,
+    ),
+    Reconfigured,
+    Skip,
+}
+
+pub struct FractalRenderer {
+    surface: wgpu::Surface<'static>,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
+    surface_config: wgpu::SurfaceConfiguration,
+}
+
+impl FractalRenderer {
+    pub(crate) async fn new(window: Arc<Window>) -> Result<Self, ()> {
+        let size = window.inner_size();
+
+        let instance = wgpu::Instance::default();
+        let surface = instance.create_surface(window).map_err(|_| ())?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .map_err(|_| ())?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .map_err(|_| ())?;
+
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps
+            .formats
+            .iter()
+            .find(|f| f.is_srgb())
+            .copied()
+            .unwrap_or(caps.formats[0]);
+
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: caps.present_modes[0],
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &surface_config);
 
         Ok(Self {
             surface,
             device,
             queue,
             surface_config,
-            pipeline,
-            vertex_buffer,
-            vertex_count: vertices.len() as u32,
-            uniform_buffer,
-            bind_group,
         })
     }
 
@@ -214,22 +290,6 @@ impl FractalRenderer {
         (self.surface_config.width, self.surface_config.height)
     }
 
-    pub(crate) fn upload_transform(&self, transform: &Transform) {
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(transform));
-    }
-
-    pub(crate) fn upload_vertices(&mut self, vertices: &[Vertex]) {
-        self.vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        self.vertex_count = vertices.len() as u32;
-    }
-
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width == 0 || new_size.height == 0 {
             return;
@@ -239,7 +299,7 @@ impl FractalRenderer {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    pub(crate) fn begin_frame(&mut self, panel_px: u32) -> FrameOutcome {
+    pub(crate) fn begin_frame(&mut self) -> FrameOutcome {
         let (frame, reconfigure_after) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => (t, false),
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
@@ -253,39 +313,8 @@ impl FractalRenderer {
         };
 
         let view = frame.texture.create_view(&Default::default());
-        let mut encoder = self.device.create_command_encoder(&Default::default());
-
-        let (w, h) = self.size();
-        let effective_w = w.saturating_sub(panel_px).max(1);
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.05,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            pass.set_viewport(panel_px as f32, 0.0, effective_w as f32, h as f32, 0.0, 1.0);
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.draw(0..self.vertex_count, 0..1);
-        }
-
+        let encoder = self.device.create_command_encoder(&Default::default());
+        // The surface is cleared by the egui render pass (LoadOp::Clear).
         FrameOutcome::Ready(Box::new(frame), view, encoder, reconfigure_after)
     }
 

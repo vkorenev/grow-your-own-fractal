@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. Supports both native desktop and browser (WebAssembly/WebGPU) from a shared codebase. The fractal wgpu pipeline (`fractal_renderer.rs`) is fully decoupled from the egui GUI (`ui.rs`); `renderer.rs` is a thin winit orchestration layer that wires them together.
+**Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. Supports both native desktop and browser (WebAssembly/WebGPU) from a shared codebase. The fractal is rendered via an `egui_wgpu::CallbackTrait` embedded in an `egui::CentralPanel`, so layout, hit-testing, and z-order all flow through egui; `renderer.rs` is a thin winit orchestration layer that owns the surface and dispatches frames.
 
 ## Common Commands
 
@@ -50,11 +50,10 @@ Data flow: `Config` → `ExpandIter` (lazy string rewriting) → `Turtle2D` → 
 |------|------|
 | `main.rs` | Thin native entry that calls `lib.rs::run_native()` |
 | `lib.rs` | Module declarations; `run_native()` builds an `EventLoop<UserEvent>` and calls `run_app`; `#[wasm_bindgen(start)] start()` does the same on web via `EventLoopExtWebSys::spawn_app` |
-| `fractal_renderer.rs` | `FractalRenderer` — wgpu surface/pipeline/buffers, `begin_frame`/`end_frame`; no egui dependency. On wasm `FractalRenderer` is built asynchronously and delivered via `UserEvent::GpuReady` |
-| `renderer.rs` | `App` (`ApplicationHandler<UserEvent>`) — winit event handling, coordinates `FractalRenderer` and `EguiRenderer` each frame |
-| `ui.rs` | `UiState` (preset/config state, egui draw logic) + `EguiRenderer` (egui context, winit integration, wgpu render pass) |
+| `fractal_renderer.rs` | `FractalRenderer` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `FractalPipelineResources` (pipeline, bind group, vertex/uniform buffers) lives in egui-wgpu's `CallbackResources`. `FractalCallback` implements `egui_wgpu::CallbackTrait`: `prepare()` re-uploads vertices when `geometry_version` changes and writes the camera transform; `paint()` issues the line-list draw inside egui's render pass. On wasm `FractalRenderer` is built asynchronously and delivered via `UserEvent::GpuReady` |
+| `renderer.rs` | `App` (`ApplicationHandler<UserEvent>`) — owns `Camera`, geometry buffer, side-panel state. Routes `WindowEvent::RedrawRequested` straight to its own renderer; routes everything else through `egui-winit` |
+| `ui.rs` | `UiState` (preset/config state, egui layout including the central fractal canvas via `ui.allocate_painter()`, pan/zoom from the painter `Response`) + `EguiRenderer` (egui context, egui-wgpu integration, single render pass that does both the surface clear and the fractal+egui draw) |
 | `camera.rs` | `Camera` (pan/zoom state), `Transform` uniform, `compute_transform` |
-| `input.rs` | `InputState` — mouse drag and cursor tracking |
 | `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset); fragment shader outputs a fixed colour; topology is `LineList` |
 
 ### `presets/`
@@ -67,4 +66,8 @@ Five bundled TOML L-System definitions (`koch_snowflake.toml`, `dragon_curve.tom
 - **Dual target from day one**: `lsystem-core` has no platform-specific deps so it compiles for both native and `wasm32-unknown-unknown` without feature flags.
 - **3D forward-compat seams**: `Geometry::D3`, the `dimensions` TOML field (currently validated to `2` only), and the `Turtle` trait dispatch in `build()` are all present so that adding 3D is a purely additive extension — do not remove them as dead code.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
+- **Fractal lives in egui's layout**: the fractal canvas is allocated via `ui.allocate_painter()` inside an `egui::CentralPanel { frame: Frame::NONE }`, and drawn through an `egui_wgpu::CallbackTrait`. Pan/zoom come from the painter `Response` (no raw winit mouse handling); egui automatically sets the wgpu viewport to the allocated rect before invoking `paint()`, so the callback only sets pipeline/bind group/vertex buffer.
+- **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear(BLACK)` and contains every draw — both egui shapes and the fractal callback. `FractalRenderer::begin_frame` only acquires the surface texture; there is no separate clear pass.
+- **`RedrawRequested` is handled directly, never fed to `egui-winit`**: `egui-winit::on_window_event` returns `repaint = true` for *every* `WindowEvent` variant, including `RedrawRequested` itself — feeding it back would queue another `RedrawRequested` every frame and burn CPU. `App::window_event` short-circuits on `RedrawRequested`. This mirrors eframe's pattern.
+- **Geometry uploads are versioned**: `App` increments `geometry_version: u64` whenever it regenerates vertices; `FractalCallback::prepare` compares against the version stored in `FractalPipelineResources` and re-creates the vertex buffer only when they differ. The transform uniform is rewritten every frame.
 - **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass; the `wasm-check` job catches WASM regressions early.

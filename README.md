@@ -148,13 +148,12 @@ crates/
   lsystem-app/              native + web entry points
     src/
       main.rs               native entry point
-      fractal_renderer.rs   GPU rendering pipeline, independent of GUI framework
-      renderer.rs           winit event loop and rendering orchestration
+      fractal_renderer.rs   wgpu surface + the egui paint callback that draws the fractal
+      renderer.rs           winit ApplicationHandler that orchestrates each frame
       camera.rs             pan/zoom state and view transform
-      input.rs              mouse drag and cursor tracking
       shader.wgsl           vertex + fragment shaders
       lib.rs                crate entry points for native and web
-      ui.rs                 egui side panel — preset picker, config editor, sliders
+      ui.rs                 egui layout (side panel + central fractal canvas) and egui-wgpu wiring
 
 index.html                  trunk entry: canvas + WebGPU detection
 Trunk.toml                  trunk build config
