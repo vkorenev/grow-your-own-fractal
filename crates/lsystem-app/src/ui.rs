@@ -7,6 +7,9 @@ use wgpu::TextureFormat;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::camera::Camera;
+use crate::fractal_renderer::{FractalCallback, FractalPipelineResources, Vertex};
+
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
 fn load_presets() -> Vec<(String, &'static str)> {
@@ -46,8 +49,6 @@ pub struct UiState {
     pub error: Option<String>,
     /// Set to true when geometry needs regenerating.
     pub dirty: bool,
-    /// Width of the side panel in egui logical pixels, updated each frame.
-    pub panel_width: f32,
 }
 
 impl UiState {
@@ -68,7 +69,6 @@ impl UiState {
             step: 1.0,
             error: None,
             dirty: true,
-            panel_width: 280.0,
         };
         s.apply();
         s
@@ -99,9 +99,19 @@ impl UiState {
         })
     }
 
+    /// Draw the egui UI. Mutates `camera` based on pan/zoom interactions inside the
+    /// central panel.
     #[allow(deprecated)]
-    pub fn draw(&mut self, ctx: &egui::Context) {
-        let panel_response = egui::Panel::left("controls")
+    pub fn draw(
+        &mut self,
+        ctx: &egui::Context,
+        vertices: Arc<Vec<Vertex>>,
+        geometry_version: u64,
+        camera: &mut Camera,
+        bounds_min: [f32; 2],
+        bounds_max: [f32; 2],
+    ) {
+        egui::Panel::left("controls")
             .resizable(false)
             .default_size(280.0)
             .show(ctx, |ui| {
@@ -179,7 +189,57 @@ impl UiState {
                 ui.separator();
                 ui.small("Drag to pan · Scroll to zoom · F to fit");
             });
-        self.panel_width = panel_response.response.rect.width();
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ctx, |ui| {
+                let (response, painter) =
+                    ui.allocate_painter(ui.available_size(), egui::Sense::drag());
+
+                let ppp = ui.ctx().pixels_per_point();
+                let rect = response.rect;
+                let physical_w = (rect.width() * ppp) as u32;
+                let physical_h = (rect.height() * ppp) as u32;
+
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    let delta = response.drag_delta();
+                    camera.pan_by_pixels(
+                        delta.x * ppp,
+                        delta.y * ppp,
+                        bounds_min,
+                        bounds_max,
+                        physical_w,
+                        physical_h,
+                    );
+                }
+
+                let scroll = ui.input(|i| i.smooth_scroll_delta);
+                if scroll.y.abs() > 0.0 && response.hovered() {
+                    let factor = 1.1_f32.powf(scroll.y / 20.0);
+                    let hover_pos = response.hover_pos().unwrap_or(rect.center());
+                    let local = hover_pos - rect.min;
+                    let cursor_px = [local.x * ppp, local.y * ppp];
+                    camera.zoom_toward_cursor(
+                        factor, cursor_px, bounds_min, bounds_max, physical_w, physical_h,
+                    );
+                }
+
+                let transform = camera.compute_transform(
+                    bounds_min,
+                    bounds_max,
+                    physical_w.max(1),
+                    physical_h.max(1),
+                );
+
+                painter.add(egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    FractalCallback {
+                        vertices,
+                        transform,
+                        geometry_version,
+                    },
+                ));
+            });
     }
 }
 
@@ -217,11 +277,12 @@ impl EguiRenderer {
         queue: Arc<wgpu::Queue>,
         format: TextureFormat,
     ) {
-        self.renderer = Some(egui_wgpu::Renderer::new(
-            &device,
-            format,
-            egui_wgpu::RendererOptions::default(),
-        ));
+        let mut renderer =
+            egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
+        renderer
+            .callback_resources
+            .insert(FractalPipelineResources::new(&device, format));
+        self.renderer = Some(renderer);
         self.device = Some(device);
         self.queue = Some(queue);
     }
@@ -234,30 +295,39 @@ impl EguiRenderer {
         self.winit_state.on_window_event(window, event)
     }
 
-    pub fn is_pointer_over_egui(&self) -> bool {
-        self.ctx.is_pointer_over_egui()
-    }
-
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         window: &Window,
         ui: &mut UiState,
+        vertices: Arc<Vec<Vertex>>,
+        geometry_version: u64,
+        camera: &mut Camera,
+        bounds_min: [f32; 2],
+        bounds_max: [f32; 2],
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         surface_size: (u32, u32),
-    ) -> (bool, std::time::Duration) {
+    ) -> std::time::Duration {
         let (renderer, device, queue) = match (
             self.renderer.as_mut(),
             self.device.as_ref(),
             self.queue.as_ref(),
         ) {
             (Some(r), Some(d), Some(q)) => (r, d, q),
-            _ => return (false, std::time::Duration::MAX),
+            _ => return std::time::Duration::MAX,
         };
 
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx.begin_pass(raw_input);
-        ui.draw(&self.ctx);
+        ui.draw(
+            &self.ctx,
+            vertices,
+            geometry_version,
+            camera,
+            bounds_min,
+            bounds_max,
+        );
         let full_output = self.ctx.end_pass();
         self.winit_state
             .handle_platform_output(window, full_output.platform_output);
@@ -283,13 +353,15 @@ impl EguiRenderer {
         {
             let mut egui_pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: None,
+                    label: Some("egui pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view,
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
+                            // Clearing here also serves as the fractal viewport background,
+                            // which is why CentralPanel uses Frame::NONE (no own fill).
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
@@ -308,6 +380,6 @@ impl EguiRenderer {
             renderer.free_texture(id);
         }
 
-        (false, repaint_delay)
+        repaint_delay
     }
 }
