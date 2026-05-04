@@ -44,6 +44,7 @@ pub struct UiState {
     pub toml_text: String,
     pub base_config: Option<Config>,
     pub iterations: u32,
+    pub max_iterations: u32,
     pub angle: f32,
     pub step: f32,
     pub error: Option<String>,
@@ -65,6 +66,7 @@ impl UiState {
             toml_text,
             base_config: None,
             iterations: 4,
+            max_iterations: 10,
             angle: 60.0,
             step: 1.0,
             error: None,
@@ -77,7 +79,13 @@ impl UiState {
     pub fn apply(&mut self) {
         match Config::parse(&self.toml_text) {
             Ok(cfg) => {
-                self.iterations = cfg.iterations;
+                self.max_iterations = lsystem_core::max_safe_iterations(
+                    &cfg.axiom,
+                    &cfg.rules,
+                    crate::fractal_renderer::MAX_SEGMENTS,
+                )
+                .max(1);
+                self.iterations = cfg.iterations.min(self.max_iterations);
                 self.angle = cfg.angle;
                 self.step = cfg.step;
                 self.base_config = Some(cfg);
@@ -160,7 +168,10 @@ impl UiState {
                     ui.label("Overrides");
 
                     let prev_iter = self.iterations;
-                    ui.add(egui::Slider::new(&mut self.iterations, 1..=10).text("Iterations"));
+                    ui.add(
+                        egui::Slider::new(&mut self.iterations, 1..=self.max_iterations)
+                            .text("Iterations"),
+                    );
                     if self.iterations != prev_iter {
                         self.dirty = true;
                     }

@@ -6,6 +6,7 @@ pub mod turtle;
 
 pub use config::{Config, ConfigError};
 pub use geometry::Geometry;
+pub use grammar::max_safe_iterations;
 pub use turtle::Turtle;
 
 /// Convenience function: expand the grammar and run the turtle in one call.
