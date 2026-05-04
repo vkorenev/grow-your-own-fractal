@@ -41,6 +41,46 @@ pub fn expand<'a>(
     }
 }
 
+/// Returns the maximum iteration count for which the total number of drawn segments
+/// (produced by `F` symbols) does not exceed `max_segments`.
+///
+/// Uses symbolic growth tracking: iterates the per-character segment yield one step at
+/// a time without materialising any strings. Saturating arithmetic prevents overflow for
+/// fast-growing systems. Hard-capped at 30 so the loop always terminates.
+pub fn max_safe_iterations(axiom: &str, rules: &HashMap<char, String>, max_segments: u64) -> u32 {
+    const HARD_MAX: u32 = 30;
+
+    let axiom_counts: HashMap<char, u64> = axiom.chars().fold(HashMap::new(), |mut m, c| {
+        *m.entry(c).or_insert(0) += 1;
+        m
+    });
+
+    let total = |yields: &HashMap<char, u64>| -> u64 {
+        axiom_counts
+            .iter()
+            .map(|(c, n)| n.saturating_mul(*yields.get(c).unwrap_or(&0)))
+            .fold(0u64, |a, x| a.saturating_add(x))
+    };
+
+    let mut yields: HashMap<char, u64> = [('F', 1u64)].into();
+
+    for n in 0..=HARD_MAX {
+        if total(&yields) > max_segments {
+            return n.saturating_sub(1);
+        }
+        let mut next = yields.clone();
+        for (c, rhs) in rules {
+            let v = rhs
+                .chars()
+                .map(|ch| *yields.get(&ch).unwrap_or(&0))
+                .fold(0u64, |a, x| a.saturating_add(x));
+            next.insert(*c, v);
+        }
+        yields = next;
+    }
+    HARD_MAX
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +112,33 @@ mod tests {
                 .count();
             assert_eq!(f_count, 3 * 4usize.pow(iter), "iter {iter}");
         }
+    }
+
+    fn sierpinski_rules() -> HashMap<char, String> {
+        [('F', "F-F+F+F-F".to_string())].into()
+    }
+
+    #[test]
+    fn max_safe_koch_exact_boundary() {
+        // Koch: 3 × 4^n segments. At n=4 → 768; at n=5 → 3072.
+        let rules = koch_rules();
+        assert_eq!(max_safe_iterations("F++F++F", &rules, 768), 4);
+        assert_eq!(max_safe_iterations("F++F++F", &rules, 767), 3);
+    }
+
+    #[test]
+    fn max_safe_sierpinski_gpu_limit() {
+        // Sierpinski: 3 × 5^n segments.
+        // n=9 → 5_859_375, n=10 → 29_296_875. Limit = 16_777_216.
+        let rules = sierpinski_rules();
+        assert_eq!(max_safe_iterations("F-F-F", &rules, 16_777_216), 9);
+    }
+
+    #[test]
+    fn max_safe_no_drawing_symbols_returns_hard_max() {
+        // Axiom "A" with no F → always 0 segments, should return HARD_MAX (30).
+        let rules: HashMap<char, String> = [('A', "AA".to_string())].into();
+        assert_eq!(max_safe_iterations("A", &rules, 16_777_216), 30);
     }
 
     #[test]

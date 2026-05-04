@@ -47,6 +47,10 @@ pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2
     (vertices, [min_x, min_y], [max_x, max_y])
 }
 
+/// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
+/// Each segment occupies 2 vertices × `size_of::<Vertex>()` bytes.
+pub(crate) const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex>() as u64);
+
 /// GPU resources for fractal rendering, stored in egui's `CallbackResources` TypeMap.
 pub(crate) struct FractalPipelineResources {
     pipeline: wgpu::RenderPipeline,
