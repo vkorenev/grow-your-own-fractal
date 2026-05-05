@@ -1,4 +1,4 @@
-use crate::fractal_renderer::Transform;
+use crate::line_renderer::Transform;
 
 pub struct Camera {
     pan: [f32; 2],

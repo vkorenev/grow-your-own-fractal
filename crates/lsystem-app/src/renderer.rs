@@ -7,24 +7,22 @@ use winit::keyboard::Key;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::Camera;
-use crate::fractal_renderer::{
-    ColorParams, FractalRenderer, FrameOutcome, Vertex, VertexData, color_params_from_config,
-    geometry_to_vertices,
-};
+use crate::line_renderer::{ColorParams, FrameOutcome, GpuContext, Vertex};
+use crate::lsystem_bridge::{VertexData, color_params_from_config, geometry_to_vertices};
 use crate::ui::{EguiRenderer, UiState};
 
 /// Events raised outside the winit event loop and routed back through
 /// `ApplicationHandler::user_event`. On wasm the GPU device is acquired
 /// asynchronously and delivered this way; on native the device is built
 /// synchronously and this variant is unused.
-pub enum UserEvent {
+pub(crate) enum UserEvent {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    GpuReady(Box<FractalRenderer>),
+    GpuReady(Box<GpuContext>),
 }
 
-pub struct App {
+pub(crate) struct App {
     window: Option<Arc<Window>>,
-    state: Option<FractalRenderer>,
+    gpu: Option<GpuContext>,
     bounds_min: [f32; 2],
     bounds_max: [f32; 2],
     camera: Camera,
@@ -42,7 +40,7 @@ impl App {
         let ui = UiState::new();
         Self {
             window: None,
-            state: None,
+            gpu: None,
             bounds_min: [-1.0, -1.0],
             bounds_max: [1.0, 1.0],
             camera: Camera::new(),
@@ -112,16 +110,11 @@ impl ApplicationHandler<UserEvent> for App {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let fractal =
-                pollster::block_on(FractalRenderer::new(window)).expect("no GPU adapter found");
+            let gpu = pollster::block_on(GpuContext::new(window)).expect("no GPU adapter found");
             if let Some(egui) = &mut self.egui {
-                egui.attach_gpu(
-                    fractal.device.clone(),
-                    fractal.queue.clone(),
-                    fractal.surface_format(),
-                );
+                egui.attach_gpu(gpu.device.clone(), gpu.queue.clone(), gpu.surface_format());
             }
-            self.state = Some(fractal);
+            self.gpu = Some(gpu);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -130,12 +123,12 @@ impl ApplicationHandler<UserEvent> for App {
         {
             // wgpu's adapter/device requests are JS Promises and must be awaited
             // on the JS event loop. Hand the result back via a UserEvent so the
-            // App regains exclusive ownership before installing the FractalRenderer.
+            // App regains exclusive ownership before installing the GpuContext.
             let proxy = self.proxy.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match FractalRenderer::new(window).await {
-                    Ok(state) => {
-                        let _ = proxy.send_event(UserEvent::GpuReady(Box::new(state)));
+                match GpuContext::new(window).await {
+                    Ok(gpu) => {
+                        let _ = proxy.send_event(UserEvent::GpuReady(Box::new(gpu)));
                     }
                     Err(()) => {
                         crate::web::show_unsupported_overlay();
@@ -147,21 +140,17 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::GpuReady(fractal) => {
+            UserEvent::GpuReady(gpu) => {
                 if let Some(egui) = &mut self.egui {
-                    egui.attach_gpu(
-                        fractal.device.clone(),
-                        fractal.queue.clone(),
-                        fractal.surface_format(),
-                    );
+                    egui.attach_gpu(gpu.device.clone(), gpu.queue.clone(), gpu.surface_format());
                 }
-                self.state = Some(*fractal);
+                self.gpu = Some(*gpu);
                 // The canvas's CSS layout typically settles during async device init,
-                // so a Resized event may have fired while `state` was still None and
+                // so a Resized event may have fired while `gpu` was still None and
                 // been dropped. Re-sync the surface to the window's current size so the
                 // first frame isn't stuck at the stale init size.
-                if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
-                    state.resize(window.inner_size());
+                if let (Some(gpu), Some(window)) = (&mut self.gpu, &self.window) {
+                    gpu.resize(window.inner_size());
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -200,8 +189,8 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(size) => {
-                if let Some(state) = &mut self.state {
-                    state.resize(size);
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.resize(size);
                 }
             }
 
@@ -223,16 +212,15 @@ impl ApplicationHandler<UserEvent> for App {
 impl App {
     fn handle_redraw(&mut self) {
         self.regenerate_if_dirty();
-        if let (Some(fractal), Some(egui), Some(window)) =
-            (&mut self.state, &mut self.egui, &self.window)
+        if let (Some(gpu), Some(egui), Some(window)) = (&mut self.gpu, &mut self.egui, &self.window)
         {
-            match fractal.begin_frame() {
+            match gpu.begin_frame() {
                 FrameOutcome::Skip => {}
                 FrameOutcome::Reconfigured => {
                     window.request_redraw();
                 }
                 FrameOutcome::Ready(frame, view, mut encoder, reconfigure_after) => {
-                    let surface_size = fractal.size();
+                    let surface_size = gpu.size();
                     let repaint_delay = egui.render(
                         window,
                         &mut self.ui,
@@ -247,7 +235,7 @@ impl App {
                         surface_size,
                     );
                     self.needs_upload = false;
-                    fractal.end_frame(*frame, encoder, reconfigure_after);
+                    gpu.end_frame(*frame, encoder, reconfigure_after);
                     // `repaint_delay == 0` covers active drags, scrolls, and
                     // animations; egui itself drives them.
                     if reconfigure_after || repaint_delay.is_zero() {

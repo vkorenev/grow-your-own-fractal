@@ -8,7 +8,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::camera::Camera;
-use crate::fractal_renderer::{ColorParams, FractalPipelineResources, Transform, Vertex};
+use crate::line_renderer::{ColorParams, LinePipeline, Transform, Vertex};
 
 struct FractalCallback {
     vertices: Arc<Vec<Vertex>>,
@@ -26,9 +26,7 @@ impl egui_wgpu::CallbackTrait for FractalCallback {
         _egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        let res = callback_resources
-            .get_mut::<FractalPipelineResources>()
-            .unwrap();
+        let res = callback_resources.get_mut::<LinePipeline>().unwrap();
         if self.needs_upload {
             res.upload(device, queue, &self.vertices, self.color_params);
         }
@@ -44,7 +42,7 @@ impl egui_wgpu::CallbackTrait for FractalCallback {
     ) {
         // egui_wgpu sets the viewport to our allocated rect before calling paint().
         callback_resources
-            .get::<FractalPipelineResources>()
+            .get::<LinePipeline>()
             .unwrap()
             .draw(render_pass);
     }
@@ -122,7 +120,7 @@ impl UiState {
                 self.max_iterations = lsystem_core::max_safe_iterations(
                     &cfg.axiom,
                     &cfg.rules,
-                    crate::fractal_renderer::MAX_SEGMENTS,
+                    crate::line_renderer::MAX_SEGMENTS,
                 )
                 .max(1);
                 self.iterations = cfg.iterations.min(self.max_iterations);
@@ -349,7 +347,7 @@ impl EguiRenderer {
             egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
         renderer
             .callback_resources
-            .insert(FractalPipelineResources::new(&device, format));
+            .insert(LinePipeline::new(&device, format));
         self.renderer = Some(renderer);
         self.device = Some(device);
         self.queue = Some(queue);
