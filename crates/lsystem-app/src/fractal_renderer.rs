@@ -5,7 +5,12 @@ use lsystem_core::{Geometry, LineColorConfig};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use crate::camera::Transform;
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub(crate) struct Transform {
+    pub(crate) scale: [f32; 2],
+    pub(crate) offset: [f32; 2],
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
