@@ -8,7 +8,14 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::camera::Camera;
-use crate::fractal_renderer::{ColorParams, FractalCallback, FractalPipelineResources, Vertex};
+use crate::fractal_renderer::{ColorParams, FractalPipelineResources, Transform, Vertex};
+
+struct FractalCallback {
+    vertices: Arc<Vec<Vertex>>,
+    transform: Transform,
+    needs_upload: bool,
+    color_params: ColorParams,
+}
 
 impl egui_wgpu::CallbackTrait for FractalCallback {
     fn prepare(

@@ -288,14 +288,6 @@ impl FractalPipelineResources {
     }
 }
 
-/// Per-frame data for the fractal paint callback.
-pub(crate) struct FractalCallback {
-    pub vertices: Arc<Vec<Vertex>>,
-    pub transform: Transform,
-    pub needs_upload: bool,
-    pub color_params: ColorParams,
-}
-
 pub(crate) enum FrameOutcome {
     Ready(
         Box<wgpu::SurfaceTexture>,

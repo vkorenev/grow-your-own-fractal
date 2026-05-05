@@ -170,12 +170,12 @@ crates/
   lsystem-app/              native + web entry points
     src/
       main.rs               native entry point
-      fractal_renderer.rs   toolkit-independent wgpu pipeline: surface, GPU resources, per-frame callback data
+      fractal_renderer.rs   toolkit-independent wgpu pipeline: Transform uniform type, surface, GPU resources
       renderer.rs           winit ApplicationHandler that orchestrates each frame
       camera.rs             pan/zoom state and view transform
       shader.wgsl           vertex + fragment shaders
       lib.rs                crate entry points for native and web
-      ui.rs                 egui layout (side panel + central fractal canvas), egui-wgpu wiring, CallbackTrait adapter
+      ui.rs                 egui layout (side panel + central fractal canvas), FractalCallback struct, egui-wgpu wiring, CallbackTrait adapter
 
 index.html                  trunk entry: canvas + WebGPU detection
 Trunk.toml                  trunk build config
