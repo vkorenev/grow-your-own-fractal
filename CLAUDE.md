@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Build & run
 cargo run -p lsystem-app          # native desktop
-trunk serve                        # web dev server at localhost:8080
-trunk build --release              # web release build → dist/
+trunk serve --config crates/lsystem-app/Trunk.toml    # web dev server at localhost:8080
+trunk build --release --config crates/lsystem-app/Trunk.toml  # web release build → crates/lsystem-app/dist/
 
 # Verification (all run in CI)
 cargo test --workspace
