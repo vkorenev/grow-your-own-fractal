@@ -10,6 +10,42 @@ use winit::window::Window;
 use crate::camera::Camera;
 use crate::fractal_renderer::{FractalCallback, FractalPipelineResources, Vertex};
 
+impl egui_wgpu::CallbackTrait for FractalCallback {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen_descriptor: &egui_wgpu::ScreenDescriptor,
+        _egui_encoder: &mut wgpu::CommandEncoder,
+        callback_resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        callback_resources
+            .get_mut::<FractalPipelineResources>()
+            .unwrap()
+            .update(
+                device,
+                queue,
+                &self.vertices,
+                self.transform,
+                self.geometry_version,
+            );
+        vec![]
+    }
+
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        render_pass: &mut wgpu::RenderPass<'static>,
+        callback_resources: &egui_wgpu::CallbackResources,
+    ) {
+        // egui_wgpu sets the viewport to our allocated rect before calling paint().
+        callback_resources
+            .get::<FractalPipelineResources>()
+            .unwrap()
+            .draw(render_pass);
+    }
+}
+
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
 fn load_presets() -> Vec<(String, &'static str)> {

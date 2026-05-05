@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use egui::PaintCallbackInfo;
-use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use lsystem_core::Geometry;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -51,7 +49,7 @@ pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2
 /// Each segment occupies 2 vertices × `size_of::<Vertex>()` bytes.
 pub(crate) const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex>() as u64);
 
-/// GPU resources for fractal rendering, stored in egui's `CallbackResources` TypeMap.
+/// GPU resources for fractal rendering.
 pub(crate) struct FractalPipelineResources {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
@@ -156,66 +154,48 @@ impl FractalPipelineResources {
             vertex_buffer,
             vertex_count: 0,
             // u64::MAX never matches a real `App::geometry_version`, so the first
-            // FractalCallback::prepare call always uploads.
+            // update call always uploads.
             geometry_version: u64::MAX,
+        }
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[Vertex],
+        transform: Transform,
+        geometry_version: u64,
+    ) {
+        if geometry_version != self.geometry_version {
+            if !vertices.is_empty() {
+                self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            }
+            self.vertex_count = vertices.len() as u32;
+            self.geometry_version = geometry_version;
+        }
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
+    }
+
+    pub(crate) fn draw(&self, render_pass: &mut wgpu::RenderPass<'static>) {
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        if self.vertex_count > 0 {
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..self.vertex_count, 0..1);
         }
     }
 }
 
-/// Per-frame data passed into egui's paint callback system.
+/// Per-frame data for the fractal paint callback.
 pub(crate) struct FractalCallback {
     pub vertices: Arc<Vec<Vertex>>,
     pub transform: Transform,
     pub geometry_version: u64,
-}
-
-impl CallbackTrait for FractalCallback {
-    fn prepare(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        _screen_descriptor: &ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
-        callback_resources: &mut CallbackResources,
-    ) -> Vec<wgpu::CommandBuffer> {
-        let res = callback_resources
-            .get_mut::<FractalPipelineResources>()
-            .unwrap();
-
-        if self.geometry_version != res.geometry_version {
-            if !self.vertices.is_empty() {
-                res.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(&self.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-            }
-            res.vertex_count = self.vertices.len() as u32;
-            res.geometry_version = self.geometry_version;
-        }
-
-        queue.write_buffer(&res.uniform_buffer, 0, bytemuck::bytes_of(&self.transform));
-        vec![]
-    }
-
-    fn paint(
-        &self,
-        _info: PaintCallbackInfo,
-        render_pass: &mut wgpu::RenderPass<'static>,
-        callback_resources: &CallbackResources,
-    ) {
-        let res = callback_resources
-            .get::<FractalPipelineResources>()
-            .unwrap();
-
-        // egui_wgpu sets the viewport to our allocated rect before calling paint().
-        render_pass.set_pipeline(&res.pipeline);
-        render_pass.set_bind_group(0, &res.bind_group, &[]);
-        if res.vertex_count > 0 {
-            render_pass.set_vertex_buffer(0, res.vertex_buffer.slice(..));
-            render_pass.draw(0..res.vertex_count, 0..1);
-        }
-    }
 }
 
 pub(crate) enum FrameOutcome {
