@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use lsystem_core::Geometry;
+use lsystem_core::{Geometry, LineColorConfig};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -49,10 +49,76 @@ pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2
 /// Each segment occupies 2 vertices × `size_of::<Vertex>()` bytes.
 pub(crate) const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex>() as u64);
 
+/// Per-frame color parameters written to the GPU as a uniform.
+/// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub(crate) struct ColorParams {
+    /// 0 = solid, 1 = gradient, 2 = hue_cycle
+    mode: u32,
+    total_segments: u32,
+    _pad: [u32; 2],
+    color_start: [f32; 4],
+    color_end: [f32; 4],
+    hue_start: f32,
+    saturation: f32,
+    value: f32,
+    _pad2: f32,
+}
+
+impl Default for ColorParams {
+    fn default() -> Self {
+        color_params_from_config(&LineColorConfig::default(), 0)
+    }
+}
+
+pub(crate) fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
+    match *line {
+        LineColorConfig::Solid(c) => ColorParams {
+            mode: 0,
+            total_segments,
+            _pad: [0; 2],
+            color_start: [c[0], c[1], c[2], 1.0],
+            color_end: [0.0; 4],
+            hue_start: 0.0,
+            saturation: 0.0,
+            value: 0.0,
+            _pad2: 0.0,
+        },
+        LineColorConfig::Gradient { start, end } => ColorParams {
+            mode: 1,
+            total_segments,
+            _pad: [0; 2],
+            color_start: [start[0], start[1], start[2], 1.0],
+            color_end: [end[0], end[1], end[2], 1.0],
+            hue_start: 0.0,
+            saturation: 0.0,
+            value: 0.0,
+            _pad2: 0.0,
+        },
+        LineColorConfig::HueCycle {
+            start_hue,
+            saturation,
+            value,
+        } => ColorParams {
+            mode: 2,
+            total_segments,
+            _pad: [0; 2],
+            color_start: [0.0; 4],
+            color_end: [0.0; 4],
+            hue_start: start_hue,
+            saturation,
+            value,
+            _pad2: 0.0,
+        },
+    }
+}
+
 /// GPU resources for fractal rendering.
 pub(crate) struct FractalPipelineResources {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
+    color_params_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
@@ -76,27 +142,44 @@ impl FractalPipelineResources {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let color_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::bytes_of(&ColorParams::default()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let uniform_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let color_entry = wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            ..uniform_entry
+        };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+            entries: &[uniform_entry, color_entry],
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: color_params_buffer.as_entire_binding(),
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -150,6 +233,7 @@ impl FractalPipelineResources {
         Self {
             pipeline,
             uniform_buffer,
+            color_params_buffer,
             bind_group,
             vertex_buffer,
             vertex_count: 0,
@@ -166,6 +250,7 @@ impl FractalPipelineResources {
         vertices: &[Vertex],
         transform: Transform,
         geometry_version: u64,
+        color_params: ColorParams,
     ) {
         if geometry_version != self.geometry_version {
             if !vertices.is_empty() {
@@ -177,6 +262,12 @@ impl FractalPipelineResources {
             }
             self.vertex_count = vertices.len() as u32;
             self.geometry_version = geometry_version;
+            // color_params changes exactly when geometry does (both updated in regenerate_if_dirty)
+            queue.write_buffer(
+                &self.color_params_buffer,
+                0,
+                bytemuck::bytes_of(&color_params),
+            );
         }
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
     }
@@ -196,6 +287,7 @@ pub(crate) struct FractalCallback {
     pub vertices: Arc<Vec<Vertex>>,
     pub transform: Transform,
     pub geometry_version: u64,
+    pub color_params: ColorParams,
 }
 
 pub(crate) enum FrameOutcome {

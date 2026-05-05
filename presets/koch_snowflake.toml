@@ -6,5 +6,11 @@ angle = 60.0
 step = 1.0
 initial_heading = 0.0
 
+[line_color]
+mode = "hue_cycle"
+start_hue = 180.0
+saturation = 1.0
+value = 0.9
+
 [rules]
 F = "F-F++F-F"

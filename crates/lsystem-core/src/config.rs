@@ -39,6 +39,43 @@ pub enum ConfigError {
     InvalidInitialHeading(f32),
 }
 
+/// Color mode for the fractal lines.
+#[derive(Debug, Clone)]
+pub enum LineColorConfig {
+    Solid([f32; 3]),
+    Gradient {
+        start: [f32; 3],
+        end: [f32; 3],
+    },
+    HueCycle {
+        start_hue: f32,
+        saturation: f32,
+        value: f32,
+    },
+}
+
+impl Default for LineColorConfig {
+    fn default() -> Self {
+        Self::Solid([0.0, 0.9, 0.5])
+    }
+}
+
+/// Visual color settings for background and fractal lines.
+#[derive(Debug, Clone)]
+pub struct ColorConfig {
+    pub background: [f32; 3],
+    pub line: LineColorConfig,
+}
+
+impl Default for ColorConfig {
+    fn default() -> Self {
+        Self {
+            background: [0.0, 0.0, 0.0],
+            line: LineColorConfig::default(),
+        }
+    }
+}
+
 /// Parsed and validated L-System configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -53,6 +90,7 @@ pub struct Config {
     pub initial_heading: f32,
     /// Production rules: single ASCII letter → replacement string.
     pub rules: HashMap<char, String>,
+    pub colors: ColorConfig,
 }
 
 impl Config {
@@ -96,6 +134,26 @@ impl Config {
             rules.insert(key, rhs);
         }
 
+        let colors = ColorConfig {
+            background: raw.background_color.unwrap_or_default(),
+            line: match raw.line_color {
+                None => LineColorConfig::default(),
+                Some(RawLineColor::Solid { color }) => LineColorConfig::Solid(color),
+                Some(RawLineColor::Gradient { start, end }) => {
+                    LineColorConfig::Gradient { start, end }
+                }
+                Some(RawLineColor::HueCycle {
+                    start_hue,
+                    saturation,
+                    value,
+                }) => LineColorConfig::HueCycle {
+                    start_hue,
+                    saturation,
+                    value,
+                },
+            },
+        };
+
         Ok(Config {
             name: raw.name,
             axiom,
@@ -104,6 +162,7 @@ impl Config {
             step: raw.step,
             initial_heading: raw.initial_heading,
             rules,
+            colors,
         })
     }
 }
@@ -121,10 +180,47 @@ struct RawConfig {
     initial_heading: f32,
     #[serde(default)]
     rules: HashMap<String, String>,
+    #[serde(default)]
+    background_color: Option<[f32; 3]>,
+    #[serde(default)]
+    line_color: Option<RawLineColor>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum RawLineColor {
+    Solid {
+        #[serde(default = "default_line_color")]
+        color: [f32; 3],
+    },
+    Gradient {
+        start: [f32; 3],
+        end: [f32; 3],
+    },
+    HueCycle {
+        #[serde(default)]
+        start_hue: f32,
+        #[serde(default = "default_saturation")]
+        saturation: f32,
+        #[serde(default = "default_value")]
+        value: f32,
+    },
 }
 
 fn default_dimensions() -> u8 {
     2
+}
+
+fn default_line_color() -> [f32; 3] {
+    [0.0, 0.9, 0.5]
+}
+
+fn default_saturation() -> f32 {
+    1.0
+}
+
+fn default_value() -> f32 {
+    0.9
 }
 
 #[cfg(test)]

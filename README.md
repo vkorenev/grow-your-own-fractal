@@ -61,9 +61,31 @@ step = 1.0              # length of each F / f move
 initial_heading = 0.0   # starting direction in degrees (0 = east,
                         # counter-clockwise positive)
 
+background_color = [0.0, 0.0, 0.0]   # RGB 0–1; optional, default black
+
+[line_color]
+# mode = "solid"          # (default) single color; set with `color`
+# mode = "gradient"       # linear RGB from `start` to `end` across all segments
+# mode = "hue_cycle"      # full HSV hue rotation across all segments
+mode = "solid"
+color = [0.0, 0.9, 0.5]  # used by solid mode
+
+# gradient example:
+# mode  = "gradient"
+# start = [1.0, 0.4, 0.0]
+# end   = [0.6, 0.0, 1.0]
+
+# hue_cycle example:
+# mode       = "hue_cycle"
+# start_hue  = 0.0    # degrees, default 0
+# saturation = 1.0    # default 1.0
+# value      = 0.9    # default 0.9
+
 [rules]
 F = "F-F++F-F"          # each F is replaced by this string each iteration
 ```
+
+Color fields are optional — omitting `background_color` or `[line_color]` keeps the defaults (black background, solid teal lines).
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.
