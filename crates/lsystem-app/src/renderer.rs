@@ -8,7 +8,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::Camera;
 use crate::fractal_renderer::{
-    ColorParams, FractalRenderer, FrameOutcome, Vertex, color_params_from_config,
+    ColorParams, FractalRenderer, FrameOutcome, Vertex, VertexData, color_params_from_config,
     geometry_to_vertices,
 };
 use crate::ui::{EguiRenderer, UiState};
@@ -64,7 +64,11 @@ impl App {
             return;
         };
         let geometry = lsystem_core::generate(&cfg);
-        let (vertices, bounds_min, bounds_max) = geometry_to_vertices(&geometry);
+        let VertexData {
+            vertices,
+            bounds_min,
+            bounds_max,
+        } = geometry_to_vertices(&geometry);
         self.bounds_min = bounds_min;
         self.bounds_max = bounds_max;
         self.camera.reset();
