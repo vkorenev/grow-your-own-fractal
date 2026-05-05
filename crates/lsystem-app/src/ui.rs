@@ -8,7 +8,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::camera::Camera;
-use crate::line_renderer::{ColorParams, LinePipeline, Transform, Vertex};
+use lsystem_renderer::line_renderer::{ColorParams, LinePipeline, Transform, Vertex};
 
 struct FractalCallback {
     vertices: Arc<Vec<Vertex>>,
@@ -120,7 +120,7 @@ impl UiState {
                 self.max_iterations = lsystem_core::max_safe_iterations(
                     &cfg.axiom,
                     &cfg.rules,
-                    crate::line_renderer::MAX_SEGMENTS,
+                    lsystem_renderer::line_renderer::MAX_SEGMENTS,
                 )
                 .max(1);
                 self.iterations = cfg.iterations.min(self.max_iterations);

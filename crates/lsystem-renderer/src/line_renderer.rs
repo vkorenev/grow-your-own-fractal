@@ -6,40 +6,40 @@ use winit::window::Window;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-pub(crate) struct Transform {
-    pub(crate) scale: [f32; 2],
-    pub(crate) offset: [f32; 2],
+pub struct Transform {
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-pub(crate) struct Vertex {
-    pub(crate) position: [f32; 2],
+pub struct Vertex {
+    pub position: [f32; 2],
 }
 
 /// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
 /// Each segment occupies 2 vertices × `size_of::<Vertex>()` bytes.
-pub(crate) const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex>() as u64);
+pub const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex>() as u64);
 
 /// Per-frame color parameters written to the GPU as a uniform.
 /// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
 #[repr(C)]
 #[derive(Copy, Clone, Default, Pod, Zeroable)]
-pub(crate) struct ColorParams {
+pub struct ColorParams {
     /// 0 = solid, 1 = gradient, 2 = hue_cycle
-    pub(crate) mode: u32,
-    pub(crate) total_segments: u32,
-    pub(crate) _pad: [u32; 2],
-    pub(crate) color_start: [f32; 4],
-    pub(crate) color_end: [f32; 4],
-    pub(crate) hue_start: f32,
-    pub(crate) saturation: f32,
-    pub(crate) value: f32,
-    pub(crate) _pad2: f32,
+    pub mode: u32,
+    pub total_segments: u32,
+    pub _pad: [u32; 2],
+    pub color_start: [f32; 4],
+    pub color_end: [f32; 4],
+    pub hue_start: f32,
+    pub saturation: f32,
+    pub value: f32,
+    pub _pad2: f32,
 }
 
 /// GPU pipeline for rendering colored line-list geometry.
-pub(crate) struct LinePipeline {
+pub struct LinePipeline {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
@@ -49,7 +49,7 @@ pub(crate) struct LinePipeline {
 }
 
 impl LinePipeline {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -161,7 +161,7 @@ impl LinePipeline {
         }
     }
 
-    pub(crate) fn upload(
+    pub fn upload(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -183,11 +183,11 @@ impl LinePipeline {
         );
     }
 
-    pub(crate) fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
+    pub fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
     }
 
-    pub(crate) fn draw(&self, render_pass: &mut wgpu::RenderPass<'static>) {
+    pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'static>) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         if self.vertex_count > 0 {
@@ -197,7 +197,7 @@ impl LinePipeline {
     }
 }
 
-pub(crate) enum FrameOutcome {
+pub enum FrameOutcome {
     Ready(
         Box<wgpu::SurfaceTexture>,
         wgpu::TextureView,
@@ -208,15 +208,15 @@ pub(crate) enum FrameOutcome {
     Skip,
 }
 
-pub(crate) struct GpuContext {
+pub struct GpuContext {
     surface: wgpu::Surface<'static>,
-    pub(crate) device: Arc<wgpu::Device>,
-    pub(crate) queue: Arc<wgpu::Queue>,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
     surface_config: wgpu::SurfaceConfiguration,
 }
 
 impl GpuContext {
-    pub(crate) async fn new(window: Arc<Window>) -> Result<Self, ()> {
+    pub async fn new(window: Arc<Window>) -> Result<Self, ()> {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::default();
@@ -265,15 +265,15 @@ impl GpuContext {
         })
     }
 
-    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
         self.surface_config.format
     }
 
-    pub(crate) fn size(&self) -> (u32, u32) {
+    pub fn size(&self) -> (u32, u32) {
         (self.surface_config.width, self.surface_config.height)
     }
 
-    pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
@@ -282,7 +282,7 @@ impl GpuContext {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    pub(crate) fn begin_frame(&mut self) -> FrameOutcome {
+    pub fn begin_frame(&mut self) -> FrameOutcome {
         let (frame, reconfigure_after) = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) => (t, false),
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
@@ -301,7 +301,7 @@ impl GpuContext {
         FrameOutcome::Ready(Box::new(frame), view, encoder, reconfigure_after)
     }
 
-    pub(crate) fn end_frame(
+    pub fn end_frame(
         &self,
         frame: wgpu::SurfaceTexture,
         encoder: wgpu::CommandEncoder,

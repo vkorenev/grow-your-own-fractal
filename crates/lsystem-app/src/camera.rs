@@ -1,4 +1,4 @@
-use crate::line_renderer::Transform;
+use lsystem_renderer::line_renderer::Transform;
 
 pub struct Camera {
     pan: [f32; 2],

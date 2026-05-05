@@ -7,9 +7,11 @@ use winit::keyboard::Key;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::Camera;
-use crate::line_renderer::{ColorParams, FrameOutcome, GpuContext, Vertex};
-use crate::lsystem_bridge::{VertexData, color_params_from_config, geometry_to_vertices};
 use crate::ui::{EguiRenderer, UiState};
+use lsystem_renderer::line_renderer::{ColorParams, FrameOutcome, GpuContext, Vertex};
+use lsystem_renderer::lsystem_bridge::{
+    VertexData, color_params_from_config, geometry_to_vertices,
+};
 
 /// Events raised outside the winit event loop and routed back through
 /// `ApplicationHandler::user_event`. On wasm the GPU device is acquired

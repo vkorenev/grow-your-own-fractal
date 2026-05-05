@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lsystem-core = { path = "../lsystem-core" }
-bytemuck = { version = "1", features = ["derive"] }
+lsystem-renderer = { path = "../lsystem-renderer" }
 egui = "0.34"
 egui-wgpu = "0.34"
 egui-winit = { version = "0.34", default-features = false, features = ["wayland", "x11", "links"] }
