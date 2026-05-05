@@ -122,8 +122,6 @@ pub(crate) struct FractalPipelineResources {
     bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
-    /// Matches `App::geometry_version`; when they differ, the vertex buffer is re-uploaded.
-    geometry_version: u64,
 }
 
 impl FractalPipelineResources {
@@ -221,8 +219,7 @@ impl FractalPipelineResources {
             cache: None,
         });
 
-        // Placeholder; never bound for drawing (vertex_count stays 0 until the first
-        // FractalCallback::prepare swaps in a real buffer).
+        // Placeholder; never bound for drawing (vertex_count stays 0 until the first upload).
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: std::mem::size_of::<Vertex>() as u64,
@@ -237,38 +234,32 @@ impl FractalPipelineResources {
             bind_group,
             vertex_buffer,
             vertex_count: 0,
-            // u64::MAX never matches a real `App::geometry_version`, so the first
-            // update call always uploads.
-            geometry_version: u64::MAX,
         }
     }
 
-    pub(crate) fn update(
+    pub(crate) fn upload(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         vertices: &[Vertex],
-        transform: Transform,
-        geometry_version: u64,
         color_params: ColorParams,
     ) {
-        if geometry_version != self.geometry_version {
-            if !vertices.is_empty() {
-                self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-            }
-            self.vertex_count = vertices.len() as u32;
-            self.geometry_version = geometry_version;
-            // color_params changes exactly when geometry does (both updated in regenerate_if_dirty)
-            queue.write_buffer(
-                &self.color_params_buffer,
-                0,
-                bytemuck::bytes_of(&color_params),
-            );
+        if !vertices.is_empty() {
+            self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
         }
+        self.vertex_count = vertices.len() as u32;
+        queue.write_buffer(
+            &self.color_params_buffer,
+            0,
+            bytemuck::bytes_of(&color_params),
+        );
+    }
+
+    pub(crate) fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
     }
 
@@ -286,7 +277,7 @@ impl FractalPipelineResources {
 pub(crate) struct FractalCallback {
     pub vertices: Arc<Vec<Vertex>>,
     pub transform: Transform,
-    pub geometry_version: u64,
+    pub needs_upload: bool,
     pub color_params: ColorParams,
 }
 

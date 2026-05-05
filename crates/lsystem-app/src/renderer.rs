@@ -32,7 +32,7 @@ pub struct App {
     ui: UiState,
     vertices: Arc<Vec<Vertex>>,
     color_params: ColorParams,
-    geometry_version: u64,
+    needs_upload: bool,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     proxy: EventLoopProxy<UserEvent>,
 }
@@ -50,7 +50,7 @@ impl App {
             ui,
             vertices: Arc::new(vec![]),
             color_params: ColorParams::default(),
-            geometry_version: 0,
+            needs_upload: false,
             proxy,
         }
     }
@@ -71,7 +71,7 @@ impl App {
         let total_segments = (vertices.len() / 2) as u32;
         self.color_params = color_params_from_config(&cfg.colors.line, total_segments);
         self.vertices = Arc::new(vertices);
-        self.geometry_version += 1;
+        self.needs_upload = true;
     }
 }
 
@@ -233,7 +233,7 @@ impl App {
                         window,
                         &mut self.ui,
                         Arc::clone(&self.vertices),
-                        self.geometry_version,
+                        self.needs_upload,
                         self.color_params,
                         &mut self.camera,
                         self.bounds_min,
@@ -242,6 +242,7 @@ impl App {
                         &mut encoder,
                         surface_size,
                     );
+                    self.needs_upload = false;
                     fractal.end_frame(*frame, encoder, reconfigure_after);
                     // `repaint_delay == 0` covers active drags, scrolls, and
                     // animations; egui itself drives them.
