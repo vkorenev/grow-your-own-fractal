@@ -1,11 +1,4 @@
-use bytemuck::{Pod, Zeroable};
-
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct Transform {
-    pub scale: [f32; 2],
-    pub offset: [f32; 2],
-}
+use crate::fractal_renderer::Transform;
 
 pub struct Camera {
     pan: [f32; 2],
