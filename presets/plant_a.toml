@@ -6,6 +6,11 @@ angle = 25.0
 step = 1.0
 initial_heading = 90.0
 
+[line_color]
+mode = "gradient"
+start = [0.05, 0.35, 0.05]
+end = [0.6, 0.9, 0.1]
+
 [rules]
 X = "F+[[X]-X]-F[-FX]+X"
 F = "FF"

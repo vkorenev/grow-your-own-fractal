@@ -7,7 +7,10 @@ use winit::keyboard::Key;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::Camera;
-use crate::fractal_renderer::{FractalRenderer, FrameOutcome, Vertex, geometry_to_vertices};
+use crate::fractal_renderer::{
+    ColorParams, FractalRenderer, FrameOutcome, Vertex, color_params_from_config,
+    geometry_to_vertices,
+};
 use crate::ui::{EguiRenderer, UiState};
 
 /// Events raised outside the winit event loop and routed back through
@@ -28,6 +31,7 @@ pub struct App {
     egui: Option<EguiRenderer>,
     ui: UiState,
     vertices: Arc<Vec<Vertex>>,
+    color_params: ColorParams,
     geometry_version: u64,
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     proxy: EventLoopProxy<UserEvent>,
@@ -45,6 +49,7 @@ impl App {
             egui: None,
             ui,
             vertices: Arc::new(vec![]),
+            color_params: ColorParams::default(),
             geometry_version: 0,
             proxy,
         }
@@ -63,6 +68,8 @@ impl App {
         self.bounds_min = bounds_min;
         self.bounds_max = bounds_max;
         self.camera.reset();
+        let total_segments = (vertices.len() / 2) as u32;
+        self.color_params = color_params_from_config(&cfg.colors.line, total_segments);
         self.vertices = Arc::new(vertices);
         self.geometry_version += 1;
     }
@@ -227,6 +234,7 @@ impl App {
                         &mut self.ui,
                         Arc::clone(&self.vertices),
                         self.geometry_version,
+                        self.color_params,
                         &mut self.camera,
                         self.bounds_min,
                         self.bounds_max,

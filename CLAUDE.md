@@ -34,7 +34,7 @@ Two-crate workspace under `crates/`:
 
 | Module | Role |
 |--------|------|
-| `config.rs` | Parses TOML `Config` struct; validates axiom, rules, step/angle finiteness, bracket balance |
+| `config.rs` | Parses TOML `Config` struct (including `ColorConfig`/`LineColorConfig` for background and line colors); validates axiom, rules, step/angle finiteness, bracket balance |
 | `alphabet.rs` | Reserved symbols (`F f + - \| [ ]`), character set validation |
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; stack-based rewriting avoids materializing the full string |
 | `geometry.rs` | `Geometry::D2` wrapping `Vec<[Vec2; 2]>` line segments |
@@ -50,11 +50,11 @@ Data flow: `Config` → `ExpandIter` (lazy string rewriting) → `Turtle2D` → 
 |------|------|
 | `main.rs` | Thin native entry that calls `lib.rs::run_native()` |
 | `lib.rs` | Module declarations; `run_native()` builds an `EventLoop<UserEvent>` and calls `run_app`; `#[wasm_bindgen(start)] start()` does the same on web via `EventLoopExtWebSys::spawn_app` |
-| `fractal_renderer.rs` | Toolkit-independent wgpu module. `FractalRenderer` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `FractalPipelineResources` (pipeline, bind group, vertex/uniform buffers) — `update()` re-uploads vertices when `geometry_version` changes and writes the camera transform; `draw()` issues the line-list draw. `FractalCallback` — plain per-frame data struct (vertices, transform, geometry_version). On wasm `FractalRenderer` is built asynchronously and delivered via `UserEvent::GpuReady` |
+| `fractal_renderer.rs` | Toolkit-independent wgpu module. `FractalRenderer` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `FractalPipelineResources` (pipeline, bind group, vertex buffer, transform uniform, color-params uniform) — `update()` re-uploads vertices and color params when `geometry_version` changes and writes the camera transform every frame; `draw()` issues the line-list draw. `FractalCallback` — plain per-frame data struct (vertices, transform, geometry_version, color_params). On wasm `FractalRenderer` is built asynchronously and delivered via `UserEvent::GpuReady` |
 | `renderer.rs` | `App` (`ApplicationHandler<UserEvent>`) — owns `Camera`, geometry buffer, side-panel state. Routes `WindowEvent::RedrawRequested` straight to its own renderer; routes everything else through `egui-winit` |
 | `ui.rs` | `UiState` (preset/config state, egui layout including the central fractal canvas via `ui.allocate_painter()`, pan/zoom from the painter `Response`) + `EguiRenderer` (egui context, egui-wgpu integration, single render pass that does both the surface clear and the fractal+egui draw) + `impl egui_wgpu::CallbackTrait for FractalCallback` (thin egui adapter that delegates to `FractalPipelineResources::update/draw`) |
 | `camera.rs` | `Camera` (pan/zoom state), `Transform` uniform, `compute_transform` |
-| `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset); fragment shader outputs a fixed colour; topology is `LineList` |
+| `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset) and computes per-segment color from a `ColorParams` uniform using `vertex_index / 2`; supports solid, gradient, and HSV hue-cycle modes; fragment shader passes the interpolated color through; topology is `LineList` |
 
 ### `presets/`
 
@@ -67,7 +67,7 @@ Five bundled TOML L-System definitions (`koch_snowflake.toml`, `dragon_curve.tom
 - **3D forward-compat seams**: `Geometry::D3`, the `dimensions` TOML field (currently validated to `2` only), and the `Turtle` trait dispatch in `build()` are all present so that adding 3D is a purely additive extension — do not remove them as dead code.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
 - **Fractal lives in egui's layout**: the fractal canvas is allocated via `ui.allocate_painter()` inside an `egui::CentralPanel { frame: Frame::NONE }`, and drawn through an `egui_wgpu::CallbackTrait`. Pan/zoom come from the painter `Response` (no raw winit mouse handling); egui automatically sets the wgpu viewport to the allocated rect before invoking `paint()`, so the callback only sets pipeline/bind group/vertex buffer.
-- **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear(BLACK)` and contains every draw — both egui shapes and the fractal callback. `FractalRenderer::begin_frame` only acquires the surface texture; there is no separate clear pass.
+- **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear` with the config's `background_color` (defaulting to black) and contains every draw — both egui shapes and the fractal callback. `FractalRenderer::begin_frame` only acquires the surface texture; there is no separate clear pass.
 - **`RedrawRequested` is handled directly, never fed to `egui-winit`**: `egui-winit::on_window_event` returns `repaint = true` for *every* `WindowEvent` variant, including `RedrawRequested` itself — feeding it back would queue another `RedrawRequested` every frame and burn CPU. `App::window_event` short-circuits on `RedrawRequested`. This mirrors eframe's pattern.
-- **Geometry uploads are versioned**: `App` increments `geometry_version: u64` whenever it regenerates vertices; `FractalPipelineResources::update` compares against its stored version and re-creates the vertex buffer only when they differ. The transform uniform is rewritten every frame.
+- **Geometry uploads are versioned**: `App` increments `geometry_version: u64` whenever it regenerates vertices; `FractalPipelineResources::update` compares against its stored version and re-creates the vertex buffer and re-uploads `ColorParams` only when they differ. The transform uniform is rewritten every frame (camera can change every frame).
 - **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass; the `wasm-check` job catches WASM regressions early.

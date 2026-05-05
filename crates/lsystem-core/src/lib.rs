@@ -4,7 +4,7 @@ pub mod geometry;
 pub mod grammar;
 pub mod turtle;
 
-pub use config::{Config, ConfigError};
+pub use config::{ColorConfig, Config, ConfigError, LineColorConfig};
 pub use geometry::Geometry;
 pub use grammar::max_safe_iterations;
 pub use turtle::Turtle;

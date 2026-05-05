@@ -8,7 +8,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::camera::Camera;
-use crate::fractal_renderer::{FractalCallback, FractalPipelineResources, Vertex};
+use crate::fractal_renderer::{ColorParams, FractalCallback, FractalPipelineResources, Vertex};
 
 impl egui_wgpu::CallbackTrait for FractalCallback {
     fn prepare(
@@ -28,6 +28,7 @@ impl egui_wgpu::CallbackTrait for FractalCallback {
                 &self.vertices,
                 self.transform,
                 self.geometry_version,
+                self.color_params,
             );
         vec![]
     }
@@ -143,14 +144,30 @@ impl UiState {
         })
     }
 
+    pub fn background_color(&self) -> wgpu::Color {
+        let [r, g, b] = self
+            .base_config
+            .as_ref()
+            .map(|c| c.colors.background)
+            .unwrap_or_default();
+        wgpu::Color {
+            r: r as f64,
+            g: g as f64,
+            b: b as f64,
+            a: 1.0,
+        }
+    }
+
     /// Draw the egui UI. Mutates `camera` based on pan/zoom interactions inside the
     /// central panel.
     #[allow(deprecated)]
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         ctx: &egui::Context,
         vertices: Arc<Vec<Vertex>>,
         geometry_version: u64,
+        color_params: ColorParams,
         camera: &mut Camera,
         bounds_min: [f32; 2],
         bounds_max: [f32; 2],
@@ -284,6 +301,7 @@ impl UiState {
                         vertices,
                         transform,
                         geometry_version,
+                        color_params,
                     },
                 ));
             });
@@ -349,6 +367,7 @@ impl EguiRenderer {
         ui: &mut UiState,
         vertices: Arc<Vec<Vertex>>,
         geometry_version: u64,
+        color_params: ColorParams,
         camera: &mut Camera,
         bounds_min: [f32; 2],
         bounds_max: [f32; 2],
@@ -371,6 +390,7 @@ impl EguiRenderer {
             &self.ctx,
             vertices,
             geometry_version,
+            color_params,
             camera,
             bounds_min,
             bounds_max,
@@ -408,7 +428,7 @@ impl EguiRenderer {
                         ops: wgpu::Operations {
                             // Clearing here also serves as the fractal viewport background,
                             // which is why CentralPanel uses Frame::NONE (no own fill).
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            load: wgpu::LoadOp::Clear(ui.background_color()),
                             store: wgpu::StoreOp::Store,
                         },
                     })],
