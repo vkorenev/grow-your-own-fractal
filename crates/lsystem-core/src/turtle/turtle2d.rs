@@ -1,44 +1,45 @@
 use glam::Vec2;
 
-use super::Turtle;
-use crate::{Config, Geometry};
-
-#[derive(Default)]
-pub struct Turtle2D {
+pub(crate) struct Segments2D<I: Iterator<Item = char>> {
+    chars: I,
+    angle_rad: f32,
+    step: f32,
     position: Vec2,
     heading: f32,
     stack: Vec<(Vec2, f32)>,
 }
 
-impl Turtle2D {
-    pub fn new() -> Self {
-        Self::default()
+impl<I: Iterator<Item = char>> Segments2D<I> {
+    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        Self {
+            chars,
+            angle_rad: angle_deg.to_radians(),
+            step,
+            position: Vec2::ZERO,
+            heading: initial_heading_deg.to_radians(),
+            stack: Vec::new(),
+        }
     }
 }
 
-impl Turtle for Turtle2D {
-    fn interpret(&mut self, program: &mut dyn Iterator<Item = char>, cfg: &Config) -> Geometry {
-        let angle_rad = cfg.angle.to_radians();
+impl<I: Iterator<Item = char>> Iterator for Segments2D<I> {
+    type Item = [Vec2; 2];
 
-        self.position = Vec2::ZERO;
-        self.heading = cfg.initial_heading.to_radians();
-        self.stack.clear();
-
-        let mut segments = Vec::new();
-
-        for ch in program {
-            match ch {
+    fn next(&mut self) -> Option<[Vec2; 2]> {
+        loop {
+            match self.chars.next()? {
                 'F' => {
                     let next = self.position
-                        + Vec2::new(self.heading.cos(), self.heading.sin()) * cfg.step;
-                    segments.push([self.position, next]);
+                        + Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
+                    let seg = [self.position, next];
                     self.position = next;
+                    return Some(seg);
                 }
                 'f' => {
-                    self.position += Vec2::new(self.heading.cos(), self.heading.sin()) * cfg.step;
+                    self.position += Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
                 }
-                '+' => self.heading += angle_rad,
-                '-' => self.heading -= angle_rad,
+                '+' => self.heading += self.angle_rad,
+                '-' => self.heading -= self.angle_rad,
                 '|' => self.heading += std::f32::consts::PI,
                 '[' => self.stack.push((self.position, self.heading)),
                 ']' => {
@@ -49,11 +50,9 @@ impl Turtle for Turtle2D {
                         self.heading = head;
                     }
                 }
-                _ => {} // Non-terminal variable; no drawing command.
+                _ => {}
             }
         }
-
-        Geometry::D2 { segments }
     }
 }
 
@@ -69,9 +68,7 @@ mod tests {
     #[test]
     fn single_f_draws_one_segment() {
         let cfg = parse("name=\"t\"\naxiom=\"F\"\niterations=0\nangle=90.0\nstep=1.0");
-        let mut iter = crate::grammar::expand(&cfg.axiom, &cfg.rules, cfg.iterations);
-        let geom = Turtle2D::new().interpret(&mut iter, &cfg);
-        let Geometry::D2 { segments } = geom;
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!((a - Vec2::ZERO).length() < 1e-5);
@@ -80,13 +77,9 @@ mod tests {
 
     #[test]
     fn plus_turns_left() {
-        // F+F at 90° → one segment east, turn left 90°, one segment north.
         let cfg = parse("name=\"t\"\naxiom=\"F+F\"\niterations=0\nangle=90.0\nstep=1.0");
-        let mut iter = crate::grammar::expand(&cfg.axiom, &cfg.rules, cfg.iterations);
-        let geom = Turtle2D::new().interpret(&mut iter, &cfg);
-        let Geometry::D2 { segments } = geom;
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
         assert_eq!(segments.len(), 2);
-        // Second segment should start at (1, 0) and go to (1, 1).
         let [a, b] = segments[1];
         assert!((a - Vec2::new(1.0, 0.0)).length() < 1e-5);
         assert!((b - Vec2::new(1.0, 1.0)).length() < 1e-5);
@@ -101,11 +94,8 @@ mod tests {
         //   ]   → restore position=(1,0), heading=0
         //   -F  → turn south (-90°), draw (1,0)→(1,-1)
         let cfg = parse("name=\"t\"\naxiom=\"F[+F]-F\"\niterations=0\nangle=90.0\nstep=1.0");
-        let mut iter = crate::grammar::expand(&cfg.axiom, &cfg.rules, cfg.iterations);
-        let geom = Turtle2D::new().interpret(&mut iter, &cfg);
-        let Geometry::D2 { segments } = geom;
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
         assert_eq!(segments.len(), 3);
-        // Third segment starts back at the saved position (y=0), goes south.
         let [a3, b3] = segments[2];
         assert!(
             (a3 - Vec2::new(1.0, 0.0)).length() < 1e-5,
@@ -132,8 +122,7 @@ F = "F-F++F-F"
         for (iters, expected) in [(0u32, 3usize), (1, 12), (2, 48), (3, 192), (4, 768)] {
             let toml = format!("iterations = {iters}\n{base}");
             let cfg = parse(&toml);
-            let geom = crate::generate(&cfg);
-            let Geometry::D2 { segments } = geom;
+            let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
             assert_eq!(segments.len(), expected, "iter {iters}");
         }
     }
