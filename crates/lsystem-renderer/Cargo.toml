@@ -1,0 +1,11 @@
+[package]
+name = "lsystem-renderer"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+lsystem-core = { path = "../lsystem-core" }
+bytemuck = { version = "1", features = ["derive"] }
+wgpu = "29"
+winit = "0.30"

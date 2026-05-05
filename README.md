@@ -167,14 +167,16 @@ crates/
       geometry.rs           Geometry type: line segments as Vec<[Vec2; 2]>
       turtle/
         turtle2d.rs         2D turtle interpreter
+  lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
+    src/
+      line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext
+      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices, color_params_from_config
+      shader.wgsl           vertex + fragment shaders
   lsystem-app/              native + web entry points
     src/
       main.rs               native entry point
-      line_renderer.rs      toolkit-independent wgpu pipeline: Transform/Vertex/ColorParams types, LinePipeline, GpuContext
-      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices, color_params_from_config
       renderer.rs           winit ApplicationHandler that orchestrates each frame
       camera.rs             pan/zoom state and view transform
-      shader.wgsl           vertex + fragment shaders
       lib.rs                crate entry points for native and web
       ui.rs                 egui layout (side panel + central fractal canvas), FractalCallback, egui-wgpu wiring, CallbackTrait adapter
 

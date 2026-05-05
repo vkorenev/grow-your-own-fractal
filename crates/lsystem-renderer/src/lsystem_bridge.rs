@@ -2,13 +2,13 @@ use lsystem_core::{Geometry, LineColorConfig};
 
 use crate::line_renderer::{ColorParams, Vertex};
 
-pub(crate) struct VertexData {
-    pub(crate) vertices: Vec<Vertex>,
-    pub(crate) bounds_min: [f32; 2],
-    pub(crate) bounds_max: [f32; 2],
+pub struct VertexData {
+    pub vertices: Vec<Vertex>,
+    pub bounds_min: [f32; 2],
+    pub bounds_max: [f32; 2],
 }
 
-pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> VertexData {
+pub fn geometry_to_vertices(geometry: &Geometry) -> VertexData {
     let Geometry::D2 { segments } = geometry;
 
     let mut min_x = f32::INFINITY;
@@ -44,7 +44,7 @@ pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> VertexData {
     }
 }
 
-pub(crate) fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
+pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
     match *line {
         LineColorConfig::Solid(c) => ColorParams {
             mode: 0,
