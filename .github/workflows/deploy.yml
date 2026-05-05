@@ -30,10 +30,10 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v2
-      - run: trunk build --release --public-url /${{ github.event.repository.name }}/
+      - run: trunk build --release --public-url /${{ github.event.repository.name }}/ --config crates/lsystem-app/Trunk.toml
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: crates/lsystem-app/dist
       - id: deployment
         uses: actions/deploy-pages@v4
