@@ -13,7 +13,13 @@ pub(crate) struct Vertex {
     position: [f32; 2],
 }
 
-pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2], [f32; 2]) {
+pub(crate) struct VertexData {
+    pub vertices: Vec<Vertex>,
+    pub bounds_min: [f32; 2],
+    pub bounds_max: [f32; 2],
+}
+
+pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> VertexData {
     let Geometry::D2 { segments } = geometry;
 
     let mut min_x = f32::INFINITY;
@@ -42,7 +48,11 @@ pub(crate) fn geometry_to_vertices(geometry: &Geometry) -> (Vec<Vertex>, [f32; 2
         max_y = 1.0;
     }
 
-    (vertices, [min_x, min_y], [max_x, max_y])
+    VertexData {
+        vertices,
+        bounds_min: [min_x, min_y],
+        bounds_max: [max_x, max_y],
+    }
 }
 
 /// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
@@ -420,10 +430,14 @@ mod tests {
         let geom = generate(&cfg(
             "name=\"t\"\naxiom=\"A\"\niterations=0\nangle=90.0\nstep=1.0",
         ));
-        let (verts, min, max) = geometry_to_vertices(&geom);
-        assert!(verts.is_empty());
-        assert!(close(min[0], -1.0) && close(min[1], -1.0));
-        assert!(close(max[0], 1.0) && close(max[1], 1.0));
+        let VertexData {
+            vertices,
+            bounds_min,
+            bounds_max,
+        } = geometry_to_vertices(&geom);
+        assert!(vertices.is_empty());
+        assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
+        assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
     }
 
     #[test]
@@ -432,12 +446,16 @@ mod tests {
         let geom = generate(&cfg(
             "name=\"t\"\naxiom=\"F\"\niterations=0\nangle=90.0\nstep=1.0",
         ));
-        let (verts, min, max) = geometry_to_vertices(&geom);
-        assert_eq!(verts.len(), 2);
-        assert!(close(verts[0].position[0], 0.0) && close(verts[0].position[1], 0.0));
-        assert!(close(verts[1].position[0], 1.0) && close(verts[1].position[1], 0.0));
-        assert!(close(min[0], 0.0) && close(min[1], 0.0));
-        assert!(close(max[0], 1.0) && close(max[1], 0.0));
+        let VertexData {
+            vertices,
+            bounds_min,
+            bounds_max,
+        } = geometry_to_vertices(&geom);
+        assert_eq!(vertices.len(), 2);
+        assert!(close(vertices[0].position[0], 0.0) && close(vertices[0].position[1], 0.0));
+        assert!(close(vertices[1].position[0], 1.0) && close(vertices[1].position[1], 0.0));
+        assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
+        assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 0.0));
     }
 
     #[test]
@@ -446,9 +464,13 @@ mod tests {
         let geom = generate(&cfg(
             "name=\"t\"\naxiom=\"F+F-F\"\niterations=0\nangle=90.0\nstep=1.0",
         ));
-        let (verts, min, max) = geometry_to_vertices(&geom);
-        assert_eq!(verts.len(), 6);
-        assert!(close(min[0], 0.0) && close(min[1], 0.0));
-        assert!(close(max[0], 2.0) && close(max[1], 1.0));
+        let VertexData {
+            vertices,
+            bounds_min,
+            bounds_max,
+        } = geometry_to_vertices(&geom);
+        assert_eq!(vertices.len(), 6);
+        assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
+        assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
     }
 }
