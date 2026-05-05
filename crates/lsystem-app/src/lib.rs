@@ -1,5 +1,6 @@
 mod camera;
-mod fractal_renderer;
+mod line_renderer;
+mod lsystem_bridge;
 mod renderer;
 mod ui;
 
