@@ -163,14 +163,13 @@ crates/
     src/
       config.rs             TOML parsing + Config struct
       alphabet.rs           reserved-symbol sets, validation
-      grammar.rs            axiom + rule expansion (N iterations)
-      geometry.rs           Geometry type: line segments as Vec<[Vec2; 2]>
+      grammar.rs            axiom + rule expansion (N iterations); OwnedExpandIter for lifetime-free streaming
       turtle/
-        turtle2d.rs         2D turtle interpreter
+        turtle2d.rs         Segments2D<I>: pull iterator yielding [Vec2; 2] segments lazily
   lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
     src/
       line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext
-      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices, color_params_from_config
+      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices (accepts segment iterator), color_params_from_config
       shader.wgsl           vertex + fragment shaders
   lsystem-app/              native + web entry points
     src/

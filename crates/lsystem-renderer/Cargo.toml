@@ -7,5 +7,6 @@ license.workspace = true
 [dependencies]
 lsystem-core = { path = "../lsystem-core" }
 bytemuck = { version = "1", features = ["derive"] }
+glam = "0.32"
 wgpu = "29"
 winit = "0.30"

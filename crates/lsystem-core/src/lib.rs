@@ -1,17 +1,20 @@
 pub(crate) mod alphabet;
 pub mod config;
-pub mod geometry;
 pub mod grammar;
-pub mod turtle;
+pub(crate) mod turtle;
 
 pub use config::{ColorConfig, Config, ConfigError, LineColorConfig};
-pub use geometry::Geometry;
 pub use grammar::max_safe_iterations;
-pub use turtle::Turtle;
 
-/// Convenience function: expand the grammar and run the turtle in one call.
-pub fn generate(config: &Config) -> Geometry {
-    let mut iter = grammar::expand(&config.axiom, &config.rules, config.iterations);
-    let mut t = turtle::build(config);
-    t.interpret(&mut iter, config)
+use glam::Vec2;
+
+/// Expand the grammar and run the 2D turtle, returning a lazy iterator of
+/// line segments. The iterator owns all its state and does not borrow from `config`.
+pub fn generate(config: &Config) -> impl Iterator<Item = [Vec2; 2]> {
+    let chars = grammar::expand_owned(
+        config.axiom.clone(),
+        config.rules.clone(),
+        config.iterations,
+    );
+    turtle::turtle2d::Segments2D::new(chars, config.angle, config.step, config.initial_heading)
 }

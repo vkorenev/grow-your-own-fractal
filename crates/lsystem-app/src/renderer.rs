@@ -63,12 +63,11 @@ impl App {
         let Some(cfg) = self.ui.effective_config() else {
             return;
         };
-        let geometry = lsystem_core::generate(&cfg);
         let VertexData {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(&geometry);
+        } = geometry_to_vertices(lsystem_core::generate(&cfg));
         self.bounds_min = bounds_min;
         self.bounds_max = bounds_max;
         self.camera.reset();

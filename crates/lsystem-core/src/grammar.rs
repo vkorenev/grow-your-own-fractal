@@ -41,6 +41,52 @@ pub fn expand<'a>(
     }
 }
 
+pub(crate) struct OwnedExpandIter {
+    stack: Vec<(std::vec::IntoIter<char>, u32)>,
+    rules: HashMap<char, Vec<char>>,
+}
+
+impl Iterator for OwnedExpandIter {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        loop {
+            let top = self.stack.last_mut()?;
+            let depth = top.1;
+            match top.0.next() {
+                None => {
+                    self.stack.pop();
+                }
+                Some(ch) => {
+                    if depth > 0
+                        && let Some(rhs) = self.rules.get(&ch)
+                    {
+                        self.stack.push((rhs.clone().into_iter(), depth - 1));
+                        continue;
+                    }
+                    return Some(ch);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn expand_owned(
+    axiom: String,
+    rules: HashMap<char, String>,
+    iterations: u32,
+) -> OwnedExpandIter {
+    let char_rules: HashMap<char, Vec<char>> = rules
+        .into_iter()
+        .map(|(k, v)| (k, v.chars().collect()))
+        .collect();
+    let axiom_chars: Vec<char> = axiom.chars().collect();
+    OwnedExpandIter {
+        stack: vec![(axiom_chars.into_iter(), iterations)],
+        rules: char_rules,
+    }
+}
+
 /// Returns the maximum iteration count for which the total number of drawn segments
 /// (produced by `F` symbols) does not exceed `max_segments`.
 ///

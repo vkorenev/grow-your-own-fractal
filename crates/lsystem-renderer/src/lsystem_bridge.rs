@@ -1,4 +1,5 @@
-use lsystem_core::{Geometry, LineColorConfig};
+use glam::Vec2;
+use lsystem_core::LineColorConfig;
 
 use crate::line_renderer::{ColorParams, Vertex};
 
@@ -8,14 +9,12 @@ pub struct VertexData {
     pub bounds_max: [f32; 2],
 }
 
-pub fn geometry_to_vertices(geometry: &Geometry) -> VertexData {
-    let Geometry::D2 { segments } = geometry;
-
+pub fn geometry_to_vertices(segments: impl Iterator<Item = [Vec2; 2]>) -> VertexData {
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
-    let mut vertices = Vec::with_capacity(segments.len() * 2);
+    let mut vertices = Vec::new();
 
     for [a, b] in segments {
         min_x = min_x.min(a.x).min(b.x);
@@ -92,15 +91,13 @@ mod tests {
 
     #[test]
     fn empty_geometry_uses_fallback_bounds() {
-        // axiom has no F, so no segments are drawn
-        let geom = generate(&cfg(
-            "name=\"t\"\naxiom=\"A\"\niterations=0\nangle=90.0\nstep=1.0",
-        ));
         let VertexData {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(&geom);
+        } = geometry_to_vertices(generate(&cfg(
+            "name=\"t\"\naxiom=\"A\"\niterations=0\nangle=90.0\nstep=1.0",
+        )));
         assert!(vertices.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
@@ -108,15 +105,13 @@ mod tests {
 
     #[test]
     fn single_segment_produces_two_vertices_and_tight_bounds() {
-        // "F" at 0 iterations: one segment from (0,0) to (1,0)
-        let geom = generate(&cfg(
-            "name=\"t\"\naxiom=\"F\"\niterations=0\nangle=90.0\nstep=1.0",
-        ));
         let VertexData {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(&geom);
+        } = geometry_to_vertices(generate(&cfg(
+            "name=\"t\"\naxiom=\"F\"\niterations=0\nangle=90.0\nstep=1.0",
+        )));
         assert_eq!(vertices.len(), 2);
         assert!(close(vertices[0].position[0], 0.0) && close(vertices[0].position[1], 0.0));
         assert!(close(vertices[1].position[0], 1.0) && close(vertices[1].position[1], 0.0));
@@ -126,15 +121,13 @@ mod tests {
 
     #[test]
     fn bounds_are_tight_over_all_segments() {
-        // "F+F-F": three segments covering x=[0,2], y=[0,1]
-        let geom = generate(&cfg(
-            "name=\"t\"\naxiom=\"F+F-F\"\niterations=0\nangle=90.0\nstep=1.0",
-        ));
         let VertexData {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(&geom);
+        } = geometry_to_vertices(generate(&cfg(
+            "name=\"t\"\naxiom=\"F+F-F\"\niterations=0\nangle=90.0\nstep=1.0",
+        )));
         assert_eq!(vertices.len(), 6);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));

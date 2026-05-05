@@ -36,13 +36,12 @@ Three-crate workspace under `crates/`:
 |--------|------|
 | `config.rs` | Parses TOML `Config` struct (including `ColorConfig`/`LineColorConfig` for background and line colors); validates axiom, rules, step/angle finiteness, bracket balance |
 | `alphabet.rs` | Reserved symbols (`F f + - \| [ ]`), character set validation |
-| `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; stack-based rewriting avoids materializing the full string |
-| `geometry.rs` | `Geometry::D2` wrapping `Vec<[Vec2; 2]>` line segments |
-| `turtle/mod.rs` | `Turtle` trait + `build()` factory; currently always returns `Turtle2D` (reserved for future 3D dispatch) |
-| `turtle/turtle2d.rs` | `Turtle2D` — consumes char iterator, tracks position/heading via a stack, emits line segments |
-| `lib.rs` | Public API: `generate(config) -> Geometry` |
+| `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
+| `turtle/mod.rs` | Declares `turtle2d` submodule; documents the 3D extension path (add `Segments3D<I>`, dispatch in `generate()` on `cfg.dimensions`) |
+| `turtle/turtle2d.rs` | `Segments2D<I>` — pull iterator over `[Vec2; 2]` segments; owns position, heading, and bracket stack; yields one segment per `'F'` without collecting |
+| `lib.rs` | Public API: `generate(config) -> impl Iterator<Item = [Vec2; 2]>` |
 
-Data flow: `Config` → `ExpandIter` (lazy string rewriting) → `Turtle2D` → `Geometry`.
+Data flow: `Config` → `OwnedExpandIter` (owned lazy char rewriting) → `Segments2D` → streaming `[Vec2; 2]` segments.
 
 ### `lsystem-renderer` — toolkit-independent wgpu renderer
 
@@ -51,7 +50,7 @@ Depends on `lsystem-core` and `wgpu`/`winit`; no egui coupling.
 | File | Role |
 |------|------|
 | `line_renderer.rs` | `Transform` — scale + offset GPU uniform type. `GpuContext` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `LinePipeline` (pipeline, bind group, vertex buffer, transform uniform, color-params uniform) — `upload()` re-uploads vertices and `ColorParams`; `write_transform()` writes the camera transform every frame; `draw()` issues the line-list draw. On wasm `GpuContext` is built asynchronously and delivered via `UserEvent::GpuReady` |
-| `lsystem_bridge.rs` | L-system→GPU adapters. `geometry_to_vertices()` converts `Geometry` to a flat `Vertex` array with bounding box (`VertexData`). `color_params_from_config()` maps `LineColorConfig` to the `ColorParams` GPU uniform. |
+| `lsystem_bridge.rs` | L-system→GPU adapters. `geometry_to_vertices()` accepts `impl Iterator<Item = [Vec2; 2]>` and produces a flat `Vertex` array with bounding box (`VertexData`). `color_params_from_config()` maps `LineColorConfig` to the `ColorParams` GPU uniform. |
 | `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset) and computes per-segment color from a `ColorParams` uniform using `vertex_index / 2`; supports solid, gradient, and HSV hue-cycle modes; fragment shader passes the interpolated color through; topology is `LineList` |
 
 ### `lsystem-app` — entry points and egui UI
@@ -72,9 +71,10 @@ Five bundled TOML L-System definitions (`koch_snowflake.toml`, `dragon_curve.tom
 
 ## Key Design Decisions
 
-- **Lazy expansion**: `ExpandIter` avoids materializing the full string at each iteration, keeping memory bounded for high-iteration fractals.
+- **Streaming segment pipeline**: `generate()` returns a lazy `impl Iterator<Item = [Vec2; 2]>` — no intermediate `Vec<[Vec2; 2]>` is ever allocated. `OwnedExpandIter` (in `grammar.rs`) owns the axiom and rules as `Vec<char>` so the iterator carries no lifetime. `Segments2D` (in `turtle/turtle2d.rs`) yields one segment per `'F'` symbol, holding only position, heading, and a bracket stack. `geometry_to_vertices` streams the iterator directly into the GPU vertex buffer, so peak memory is one `Vec<Vertex>` rather than a segment vec plus a vertex vec simultaneously.
+- **Lazy expansion**: `ExpandIter` / `OwnedExpandIter` avoid materializing the full rewritten string, keeping memory bounded for high-iteration fractals.
 - **Dual target from day one**: `lsystem-core` has no platform-specific deps so it compiles for both native and `wasm32-unknown-unknown` without feature flags.
-- **3D forward-compat seams**: `Geometry::D3`, the `dimensions` TOML field (currently validated to `2` only), and the `Turtle` trait dispatch in `build()` are all present so that adding 3D is a purely additive extension — do not remove them as dead code.
+- **3D forward-compat seam**: the `dimensions` TOML field (currently validated to `2` only) is the extension point. To add 3D: add `turtle/turtle3d.rs` with a `Segments3D<I>` iterator analogous to `Segments2D`, then dispatch in `lib.rs::generate()` based on `cfg.dimensions`. No other registration is needed.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
 - **Fractal lives in egui's layout**: the fractal canvas is allocated via `ui.allocate_painter()` inside an `egui::CentralPanel { frame: Frame::NONE }`, and drawn through an `egui_wgpu::CallbackTrait`. Pan/zoom come from the painter `Response` (no raw winit mouse handling); egui automatically sets the wgpu viewport to the allocated rect before invoking `paint()`, so the callback only sets pipeline/bind group/vertex buffer.
 - **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear` with the config's `background_color` (defaulting to black) and contains every draw — both egui shapes and the fractal callback. `GpuContext::begin_frame` only acquires the surface texture; there is no separate clear pass.
