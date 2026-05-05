@@ -19,17 +19,13 @@ impl egui_wgpu::CallbackTrait for FractalCallback {
         _egui_encoder: &mut wgpu::CommandEncoder,
         callback_resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
-        callback_resources
+        let res = callback_resources
             .get_mut::<FractalPipelineResources>()
-            .unwrap()
-            .update(
-                device,
-                queue,
-                &self.vertices,
-                self.transform,
-                self.geometry_version,
-                self.color_params,
-            );
+            .unwrap();
+        if self.needs_upload {
+            res.upload(device, queue, &self.vertices, self.color_params);
+        }
+        res.write_transform(queue, self.transform);
         vec![]
     }
 
@@ -166,7 +162,7 @@ impl UiState {
         &mut self,
         ctx: &egui::Context,
         vertices: Arc<Vec<Vertex>>,
-        geometry_version: u64,
+        needs_upload: bool,
         color_params: ColorParams,
         camera: &mut Camera,
         bounds_min: [f32; 2],
@@ -300,7 +296,7 @@ impl UiState {
                     FractalCallback {
                         vertices,
                         transform,
-                        geometry_version,
+                        needs_upload,
                         color_params,
                     },
                 ));
@@ -366,7 +362,7 @@ impl EguiRenderer {
         window: &Window,
         ui: &mut UiState,
         vertices: Arc<Vec<Vertex>>,
-        geometry_version: u64,
+        needs_upload: bool,
         color_params: ColorParams,
         camera: &mut Camera,
         bounds_min: [f32; 2],
@@ -389,7 +385,7 @@ impl EguiRenderer {
         ui.draw(
             &self.ctx,
             vertices,
-            geometry_version,
+            needs_upload,
             color_params,
             camera,
             bounds_min,
