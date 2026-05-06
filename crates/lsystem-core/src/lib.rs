@@ -1,3 +1,6 @@
+#[cfg(feature = "svg")]
+pub mod svg_export;
+
 pub(crate) mod alphabet;
 pub mod config;
 pub mod grammar;

@@ -239,6 +239,15 @@ impl UiState {
                     if self.step != prev_step {
                         self.dirty = true;
                     }
+
+                    ui.separator();
+                    if ui.button("Export SVG").clicked()
+                        && let Some(cfg) = self.effective_config()
+                    {
+                        let svg = lsystem_core::svg_export::export_svg(&cfg);
+                        let filename = sanitize_svg_filename(&cfg.name);
+                        save_svg(svg, filename);
+                    }
                 }
 
                 ui.separator();
@@ -440,4 +449,69 @@ impl EguiRenderer {
 
         repaint_delay
     }
+}
+
+fn sanitize_svg_filename(name: &str) -> String {
+    let base: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{base}.svg")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_svg(svg: String, suggested_name: String) {
+    if let Some(path) = rfd::FileDialog::new()
+        .set_file_name(&suggested_name)
+        .add_filter("SVG Image", &["svg"])
+        .save_file()
+        && let Err(e) = std::fs::write(&path, svg.as_bytes())
+    {
+        log::error!("Failed to write SVG: {e}");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_svg(svg: String, suggested_name: String) {
+    use wasm_bindgen::JsCast;
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        return;
+    };
+
+    let array = js_sys::Array::new();
+    array.push(&wasm_bindgen::JsValue::from_str(&svg));
+    let props = web_sys::BlobPropertyBag::new();
+    props.set_type("image/svg+xml");
+    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&array, &props) else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return;
+    };
+
+    let Ok(el) = document.create_element("a") else {
+        return;
+    };
+    let Ok(anchor) = el.dyn_into::<web_sys::HtmlAnchorElement>() else {
+        return;
+    };
+    anchor.set_href(&url);
+    anchor.set_download(&suggested_name);
+    // Append to body so click() works in Firefox, then remove immediately after.
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&anchor);
+        anchor.click();
+        let _ = body.remove_child(&anchor);
+    }
+    let _ = web_sys::Url::revoke_object_url(&url);
 }
