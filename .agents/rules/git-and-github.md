@@ -2,7 +2,7 @@
 
 ## Git command conventions
 
-Avoid using `git -C <path>` to run git commands from a different directory. Instead, rely on the shell's working directory or `cd` into the target directory first. The `-C` flag prevents permission rules in `settings.local.json` from matching (e.g. `Bash(git status)` won't match `git -C /some/path status`).
+Avoid using `git -C <path>` to run git commands from a different directory. Instead, rely on the shell's working directory or `cd` into the target directory first. Some AI-agent permission matchers only recognize commands run from the repository working directory.
 
 ## Branch naming convention
 
@@ -16,12 +16,20 @@ Bug Fixes: fix/<short-description>
 
 Flexibility Note: You are encouraged to select alternative prefixes (e.g., docs/, refactor/, perf/, chore/, or test/) if the standard "feature" or "fix" categories do not accurately represent the scope of the work.
 
+## Commit messages
+
+Limit the subject line to 50 characters.
+
+Use the body to explain what changed and why, not how it was changed. Wrap the body at 72 characters.
+
 ## Attribution in commits
 
 AI contributions should include an `Assisted-by` trailer in the following format:
 ```
 Assisted-by: AGENT_NAME:MODEL_VERSION
 ```
+Use the `--trailer` command line option to specify the `Assisted-by` trailer when creating a commit.
+
 Where:
 `AGENT_NAME` is the name of the AI tool or framework
 `MODEL_VERSION` is the specific model version used
