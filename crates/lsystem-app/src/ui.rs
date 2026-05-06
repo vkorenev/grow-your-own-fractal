@@ -59,19 +59,9 @@ fn load_presets() -> Vec<(String, &'static str)> {
     files
         .into_iter()
         .filter_map(|f| {
-            let stem = f.path().file_stem()?.to_str()?;
-            let name = stem
-                .split('_')
-                .map(|w| {
-                    let mut chars = w.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            Some((name, f.contents_utf8()?))
+            let content = f.contents_utf8()?;
+            let name = Config::parse(content).ok()?.name;
+            Some((name, content))
         })
         .collect()
 }

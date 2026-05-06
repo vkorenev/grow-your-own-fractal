@@ -1,8 +1,8 @@
-name = "Sierpinski Triangle"
+name = "Sierpinski Curve"
 dimensions = 2
-axiom = "FXF-FF-FF"
-iterations = 9
-angle = 120.0
+axiom = "F+XF+F+XF"
+iterations = 5
+angle = 90.0
 step = 1.0
 initial_heading = 0.0
 
@@ -13,5 +13,4 @@ saturation = 1.0
 value = 0.9
 
 [rules]
-F = "FF"
-X = "-FXF+FXF+FXF-"
+X = "XF-F+F-XF+F+XF-F+F-X"

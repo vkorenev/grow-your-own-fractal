@@ -1,7 +1,7 @@
 name = "Plant A"
 dimensions = 2
 axiom = "X"
-iterations = 6
+iterations = 7
 angle = 25.0
 step = 1.0
 initial_heading = 90.0

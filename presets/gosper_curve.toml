@@ -1,8 +1,8 @@
-name = "Sierpinski Triangle"
+name = "Gosper Curve"
 dimensions = 2
-axiom = "FXF-FF-FF"
-iterations = 9
-angle = 120.0
+axiom = "XF"
+iterations = 4
+angle = 60.0
 step = 1.0
 initial_heading = 0.0
 
@@ -13,5 +13,5 @@ saturation = 1.0
 value = 0.9
 
 [rules]
-F = "FF"
-X = "-FXF+FXF+FXF-"
+X = "X+YF++YF-FX--FXFX-YF+"
+Y = "-FX+YFYF++YF+FX--FX-Y"
