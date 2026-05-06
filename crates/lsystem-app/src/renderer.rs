@@ -7,6 +7,7 @@ use winit::keyboard::Key;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::camera::Camera;
+use crate::export::handle_export;
 use crate::ui::{EguiRenderer, UiState};
 use lsystem_renderer::line_renderer::{ColorParams, FrameOutcome, GpuContext, Vertex};
 use lsystem_renderer::lsystem_bridge::{
@@ -226,7 +227,7 @@ impl App {
                 }
                 FrameOutcome::Ready(frame, view, mut encoder, reconfigure_after) => {
                     let surface_size = gpu.size();
-                    let repaint_delay = egui.render(
+                    let render_output = egui.render(
                         window,
                         &mut self.ui,
                         Arc::clone(&self.vertices),
@@ -241,9 +242,16 @@ impl App {
                     );
                     self.needs_upload = false;
                     gpu.end_frame(*frame, encoder, reconfigure_after);
+                    if let Some(export_request) = render_output.export_request {
+                        handle_export(
+                            export_request,
+                            Arc::clone(&gpu.device),
+                            Arc::clone(&gpu.queue),
+                        );
+                    }
                     // `repaint_delay == 0` covers active drags, scrolls, and
                     // animations; egui itself drives them.
-                    if reconfigure_after || repaint_delay.is_zero() {
+                    if reconfigure_after || render_output.repaint_delay.is_zero() {
                         window.request_redraw();
                     }
                 }

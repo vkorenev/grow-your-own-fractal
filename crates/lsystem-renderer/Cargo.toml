@@ -4,8 +4,14 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+default = []
+png = ["dep:futures-channel", "dep:png"]
+
 [dependencies]
 lsystem-core = { path = "../lsystem-core" }
 bytemuck = { version = "1", features = ["derive"] }
+futures-channel = { version = "0.3", optional = true }
 glam = "0.32"
+png = { version = "0.18", optional = true }
 wgpu = "29"

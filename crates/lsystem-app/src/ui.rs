@@ -8,6 +8,7 @@ use winit::event::WindowEvent;
 use winit::window::Window;
 
 use crate::camera::Camera;
+use crate::export::ExportRequest;
 use lsystem_renderer::line_renderer::{ColorParams, LinePipeline, Transform, Vertex};
 
 struct FractalCallback {
@@ -75,6 +76,7 @@ pub struct UiState {
     pub max_iterations: u32,
     pub angle: f32,
     pub step: f32,
+    pub png_width: u32,
     pub error: Option<String>,
     /// Set to true when geometry needs regenerating.
     pub dirty: bool,
@@ -97,6 +99,7 @@ impl UiState {
             max_iterations: 10,
             angle: 60.0,
             step: 1.0,
+            png_width: 2048,
             error: None,
             dirty: true,
         };
@@ -162,7 +165,9 @@ impl UiState {
         camera: &mut Camera,
         bounds_min: [f32; 2],
         bounds_max: [f32; 2],
-    ) {
+    ) -> Option<ExportRequest> {
+        let mut export_request = None;
+
         egui::Panel::left("controls")
             .resizable(false)
             .default_size(280.0)
@@ -241,13 +246,31 @@ impl UiState {
                     }
 
                     ui.separator();
-                    if ui.button("Export SVG").clicked()
-                        && let Some(cfg) = self.effective_config()
-                    {
-                        let svg = lsystem_core::svg_export::export_svg(&cfg);
-                        let filename = sanitize_svg_filename(&cfg.name);
-                        save_svg(svg, filename);
-                    }
+                    ui.horizontal(|ui| {
+                        ui.label("PNG width");
+                        ui.add(
+                            egui::DragValue::new(&mut self.png_width)
+                                .range(256..=4096)
+                                .speed(16),
+                        );
+                    });
+                    self.png_width = self.png_width.clamp(256, 4096);
+                    ui.horizontal(|ui| {
+                        if ui.button("Export SVG").clicked()
+                            && let Some(cfg) = self.effective_config()
+                        {
+                            export_request = Some(ExportRequest::Svg(cfg));
+                        }
+
+                        if ui.button("Export PNG").clicked()
+                            && let Some(cfg) = self.effective_config()
+                        {
+                            export_request = Some(ExportRequest::Png {
+                                config: cfg,
+                                width: self.png_width,
+                            });
+                        }
+                    });
                 }
 
                 ui.separator();
@@ -305,7 +328,14 @@ impl UiState {
                     },
                 ));
             });
+
+        export_request
     }
+}
+
+pub(crate) struct EguiRenderOutput {
+    pub(crate) repaint_delay: std::time::Duration,
+    pub(crate) export_request: Option<ExportRequest>,
 }
 
 pub struct EguiRenderer {
@@ -374,19 +404,24 @@ impl EguiRenderer {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         surface_size: (u32, u32),
-    ) -> std::time::Duration {
+    ) -> EguiRenderOutput {
         let (renderer, device, queue) = match (
             self.renderer.as_mut(),
             self.device.as_ref(),
             self.queue.as_ref(),
         ) {
             (Some(r), Some(d), Some(q)) => (r, d, q),
-            _ => return std::time::Duration::MAX,
+            _ => {
+                return EguiRenderOutput {
+                    repaint_delay: std::time::Duration::MAX,
+                    export_request: None,
+                };
+            }
         };
 
         let raw_input = self.winit_state.take_egui_input(window);
         self.ctx.begin_pass(raw_input);
-        ui.draw(
+        let export_request = ui.draw(
             &self.ctx,
             vertices,
             needs_upload,
@@ -447,71 +482,9 @@ impl EguiRenderer {
             renderer.free_texture(id);
         }
 
-        repaint_delay
+        EguiRenderOutput {
+            repaint_delay,
+            export_request,
+        }
     }
-}
-
-fn sanitize_svg_filename(name: &str) -> String {
-    let base: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("{base}.svg")
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_svg(svg: String, suggested_name: String) {
-    if let Some(path) = rfd::FileDialog::new()
-        .set_file_name(&suggested_name)
-        .add_filter("SVG Image", &["svg"])
-        .save_file()
-        && let Err(e) = std::fs::write(&path, svg.as_bytes())
-    {
-        log::error!("Failed to write SVG: {e}");
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn save_svg(svg: String, suggested_name: String) {
-    use wasm_bindgen::JsCast;
-
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Some(document) = window.document() else {
-        return;
-    };
-
-    let array = js_sys::Array::new();
-    array.push(&wasm_bindgen::JsValue::from_str(&svg));
-    let props = web_sys::BlobPropertyBag::new();
-    props.set_type("image/svg+xml");
-    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&array, &props) else {
-        return;
-    };
-    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
-        return;
-    };
-
-    let Ok(el) = document.create_element("a") else {
-        return;
-    };
-    let Ok(anchor) = el.dyn_into::<web_sys::HtmlAnchorElement>() else {
-        return;
-    };
-    anchor.set_href(&url);
-    anchor.set_download(&suggested_name);
-    // Append to body so click() works in Firefox, then remove immediately after.
-    if let Some(body) = document.body() {
-        let _ = body.append_child(&anchor);
-        anchor.click();
-        let _ = body.remove_child(&anchor);
-    }
-    let _ = web_sys::Url::revoke_object_url(&url);
 }

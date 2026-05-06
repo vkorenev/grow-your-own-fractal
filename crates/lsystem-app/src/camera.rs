@@ -1,4 +1,5 @@
 use lsystem_renderer::line_renderer::Transform;
+use lsystem_renderer::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
 
 pub struct Camera {
     pan: [f32; 2],
@@ -25,10 +26,7 @@ impl Camera {
         width: u32,
         height: u32,
     ) -> f32 {
-        let geom_w = (bounds_max[0] - bounds_min[0]).max(1.0);
-        let geom_h = (bounds_max[1] - bounds_min[1]).max(1.0);
-        let base = (width as f32 / geom_w).min(height as f32 / geom_h) * 0.9;
-        base * self.zoom
+        fitted_pixels_per_unit(bounds_min, bounds_max, width, height) * self.zoom
     }
 
     pub fn compute_transform(
@@ -38,15 +36,7 @@ impl Camera {
         width: u32,
         height: u32,
     ) -> Transform {
-        let cx = (bounds_min[0] + bounds_max[0]) * 0.5;
-        let cy = (bounds_min[1] + bounds_max[1]) * 0.5;
-        let ppu = self.px_per_unit(bounds_min, bounds_max, width, height);
-        let sx = ppu * 2.0 / width as f32;
-        let sy = ppu * 2.0 / height as f32;
-        Transform {
-            scale: [sx, sy],
-            offset: [(-cx + self.pan[0]) * sx, (-cy + self.pan[1]) * sy],
-        }
+        viewport_transform(bounds_min, bounds_max, width, height, self.pan, self.zoom)
     }
 
     pub fn pan_by_pixels(
