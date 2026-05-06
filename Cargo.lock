@@ -1281,7 +1281,6 @@ dependencies = [
  "glam",
  "lsystem-core",
  "wgpu",
- "winit",
 ]
 
 [[package]]

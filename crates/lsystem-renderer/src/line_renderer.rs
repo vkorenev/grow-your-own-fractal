@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
-use winit::window::Window;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -216,11 +215,13 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    pub async fn new(window: Arc<Window>) -> Result<Self, ()> {
-        let size = window.inner_size();
-
+    pub async fn new(
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, ()> {
         let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(window).map_err(|_| ())?;
+        let surface = instance.create_surface(target).map_err(|_| ())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -248,8 +249,8 @@ impl GpuContext {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: width.max(1),
+            height: height.max(1),
             present_mode: caps.present_modes[0],
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -273,12 +274,12 @@ impl GpuContext {
         (self.surface_config.width, self.surface_config.height)
     }
 
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width == 0 || new_size.height == 0 {
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
             return;
         }
-        self.surface_config.width = new_size.width;
-        self.surface_config.height = new_size.height;
+        self.surface_config.width = width;
+        self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
     }
 

@@ -49,7 +49,7 @@ Data flow: `Config` → `OwnedExpandIter` (owned lazy char rewriting) → `Segme
 
 ### `lsystem-renderer` — toolkit-independent wgpu renderer
 
-Depends on `lsystem-core` and `wgpu`/`winit`; no egui coupling.
+Depends on `lsystem-core` and `wgpu`.
 
 | File | Role |
 |------|------|

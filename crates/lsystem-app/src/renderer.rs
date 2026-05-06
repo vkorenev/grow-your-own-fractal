@@ -111,7 +111,9 @@ impl ApplicationHandler<UserEvent> for App {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let gpu = pollster::block_on(GpuContext::new(window)).expect("no GPU adapter found");
+            let size = window.inner_size();
+            let gpu = pollster::block_on(GpuContext::new(window, size.width, size.height))
+                .expect("no GPU adapter found");
             if let Some(egui) = &mut self.egui {
                 egui.attach_gpu(gpu.device.clone(), gpu.queue.clone(), gpu.surface_format());
             }
@@ -127,7 +129,8 @@ impl ApplicationHandler<UserEvent> for App {
             // App regains exclusive ownership before installing the GpuContext.
             let proxy = self.proxy.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                match GpuContext::new(window).await {
+                let size = window.inner_size();
+                match GpuContext::new(window, size.width, size.height).await {
                     Ok(gpu) => {
                         let _ = proxy.send_event(UserEvent::GpuReady(Box::new(gpu)));
                     }
@@ -151,7 +154,8 @@ impl ApplicationHandler<UserEvent> for App {
                 // been dropped. Re-sync the surface to the window's current size so the
                 // first frame isn't stuck at the stale init size.
                 if let (Some(gpu), Some(window)) = (&mut self.gpu, &self.window) {
-                    gpu.resize(window.inner_size());
+                    let s = window.inner_size();
+                    gpu.resize(s.width, s.height);
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -191,7 +195,7 @@ impl ApplicationHandler<UserEvent> for App {
 
             WindowEvent::Resized(size) => {
                 if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(size);
+                    gpu.resize(size.width, size.height);
                 }
             }
 
