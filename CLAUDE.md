@@ -22,6 +22,9 @@ cargo check --target wasm32-unknown-unknown -p lsystem-app
 
 # Run a single test
 cargo test -p lsystem-core config::tests::test_name
+
+# Run SVG export tests (svg feature must be enabled explicitly)
+cargo test -p lsystem-core --features svg svg_export
 ```
 
 `trunk` is managed by mise; run `mise install` to get the pinned version from `mise.toml`.
@@ -39,7 +42,8 @@ Three-crate workspace under `crates/`:
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
 | `turtle/mod.rs` | Declares `turtle2d` submodule; documents the 3D extension path (add `Segments3D<I>`, dispatch in `generate()` on `cfg.dimensions`) |
 | `turtle/turtle2d.rs` | `Segments2D<I>` — pull iterator over `[Vec2; 2]` segments; owns position, heading, and bracket stack; yields one segment per `'F'` without collecting |
-| `lib.rs` | Public API: `generate(config) -> impl Iterator<Item = [Vec2; 2]>` |
+| `svg_export.rs` | `export_svg(config) -> String` — generates an SVG string; gated behind the `svg` Cargo feature |
+| `lib.rs` | Public API: `generate(config) -> impl Iterator<Item = [Vec2; 2]>`; exposes `svg_export` as a public module when the `svg` feature is enabled |
 
 Data flow: `Config` → `OwnedExpandIter` (owned lazy char rewriting) → `Segments2D` → streaming `[Vec2; 2]` segments.
 
@@ -67,7 +71,7 @@ Depends on `lsystem-core`, `lsystem-renderer`, `egui`/`egui-wgpu`/`egui-winit`, 
 
 ### `presets/`
 
-Five bundled TOML L-System definitions (`koch_snowflake.toml`, `dragon_curve.toml`, `sierpinski_triangle.toml`, `plant_a.toml`, `hilbert_curve.toml`). New fractals are added here; they are embedded at compile time via `include_dir!` in `ui.rs` and auto-discovered — no registration step needed.
+Bundled TOML L-System definitions. New fractals are added here; they are embedded at compile time via `include_dir!` in `ui.rs` and auto-discovered — no registration step needed.
 
 ## Key Design Decisions
 
@@ -80,4 +84,5 @@ Five bundled TOML L-System definitions (`koch_snowflake.toml`, `dragon_curve.tom
 - **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear` with the config's `background_color` (defaulting to black) and contains every draw — both egui shapes and the fractal callback. `GpuContext::begin_frame` only acquires the surface texture; there is no separate clear pass.
 - **`RedrawRequested` is handled directly, never fed to `egui-winit`**: `egui-winit::on_window_event` returns `repaint = true` for *every* `WindowEvent` variant, including `RedrawRequested` itself — feeding it back would queue another `RedrawRequested` every frame and burn CPU. `App::window_event` short-circuits on `RedrawRequested`. This mirrors eframe's pattern.
 - **Caller-driven geometry uploads**: `App` sets `needs_upload: bool` whenever it regenerates vertices; the flag is passed through `FractalCallback` to the egui adapter, which calls `LinePipeline::upload` (vertex buffer + `ColorParams`) only when `true`, and `write_transform` (camera uniform) every frame. `needs_upload` is cleared in `App::handle_redraw` after `egui.render` returns.
+- **SVG export is a `lsystem-core` Cargo feature**: The `svg` feature adds `svg_export::export_svg(config) -> String`. It collects segments into a `Vec` (the only allocation — acceptable for export), computes a padded bounding box, and builds SVG XML. The Y-axis flip (turtle is Y-up, SVG is Y-down) is handled by a `<g transform="matrix(1 0 0 -1 0 0)">` group so turtle coordinates are written as-is; the viewBox compensates. `stroke-width`, `stroke-linecap`, and `fill` are set on the `<g>` and inherited by children. Solid mode emits a single `<path>`; gradient and hue-cycle modes emit per-segment `<line>` elements to match the shader's segment-index-based coloring exactly. On native, `rfd::FileDialog` handles the save dialog; on WASM, a programmatic Blob download is triggered via `web-sys`.
 - **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass; the `wasm-check` job catches WASM regressions early.

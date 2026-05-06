@@ -98,6 +98,10 @@ you can break long rules across lines for readability.
 | Scroll wheel | Zoom in / out toward the cursor |
 | `F` | Reset view to fit the fractal |
 
+### Exporting
+
+The **Export SVG** button in the left panel saves the current fractal (including the active iteration, angle, and step overrides) as a resolution-independent SVG file. On the desktop a native save dialog opens; in the browser the file is downloaded automatically.
+
 ### Bundled presets
 
 | File | Name | Description |
@@ -170,6 +174,7 @@ crates/
       grammar.rs            axiom + rule expansion (N iterations); OwnedExpandIter for lifetime-free streaming
       turtle/
         turtle2d.rs         Segments2D<I>: pull iterator yielding [Vec2; 2] segments lazily
+      svg_export.rs         SVG export — export_svg(config) -> String (enabled by the `svg` Cargo feature)
   lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
     src/
       line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext
