@@ -102,11 +102,15 @@ you can break long rules across lines for readability.
 
 | File | Name | Description |
 |------|------|-------------|
-| `presets/koch_snowflake.toml` | Koch Snowflake | Classic fractal snowflake; angle 60°, 4 iterations. |
-| `presets/dragon_curve.toml` | Dragon Curve | Self-similar curve folded from a strip of paper; angle 90°, 12 iterations. |
-| `presets/sierpinski_triangle.toml` | Sierpinski Triangle | Self-similar triangle; angle 120°, 6 iterations. |
-| `presets/plant_a.toml` | Plant A | Branching plant with push/pop brackets; angle 25°, 6 iterations. |
-| `presets/hilbert_curve.toml` | Hilbert Curve | Space-filling curve; angle 90°, 5 iterations. |
+| `presets/dragon_curve.toml` | Harter-Heightway Dragon | Self-similar curve obtained by repeatedly folding a strip of paper in half. |
+| `presets/gosper_curve.toml` | Gosper Curve | Space-filling curve that tiles the plane with hexagonal regions; also known as the flowsnake. |
+| `presets/hilbert_curve.toml` | Hilbert Curve | Space-filling curve that maps a line continuously to a 2D square while preserving locality. |
+| `presets/koch_snowflake.toml` | Koch Snowflake | Classic fractal snowflake built by iteratively replacing each edge with a triangular bump. |
+| `presets/peano_curve.toml` | Peano Curve | First known space-filling curve; fills a square with a continuous self-similar path. |
+| `presets/plant_a.toml` | Plant A | Branching plant-like structure modelled with push/pop brackets for recursive branching. |
+| `presets/sierpinski_curve.toml` | Sierpinski Curve | Space-filling curve traced along the boundary of a Sierpinski triangle. |
+| `presets/sierpinski_triangle.toml` | Sierpinski Triangle | Self-similar triangle subdivided into progressively smaller triangular holes. |
+| `presets/snowflake.toml` | Snowflake | Branching snowflake pattern with six-fold symmetry and recursive side branches. |
 
 ---
 
