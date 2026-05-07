@@ -29,7 +29,6 @@ pub(crate) fn App() -> impl IntoView {
         signal(initial.config.iterations.min(initial.max_iterations));
     let (max_iterations, set_max_iterations) = signal(initial.max_iterations.max(1));
     let (angle, set_angle) = signal(initial.config.angle);
-    let (step, set_step) = signal(initial.config.step);
     let (png_width, set_png_width) = signal(2048u32);
     let (unsupported, set_unsupported) = signal(false);
 
@@ -43,8 +42,7 @@ pub(crate) fn App() -> impl IntoView {
             let Some(canvas) = canvas_ref.get() else {
                 return;
             };
-            let Some(config) =
-                effective_config(base_config.get(), iterations.get(), angle.get(), step.get())
+            let Some(config) = effective_config(base_config.get(), iterations.get(), angle.get())
             else {
                 return;
             };
@@ -81,7 +79,6 @@ pub(crate) fn App() -> impl IntoView {
                 set_max_iterations.set(max);
                 set_iterations.set(applied.config.iterations.min(max));
                 set_angle.set(applied.config.angle);
-                set_step.set(applied.config.step);
                 set_base_config.set(Some(applied.config));
                 set_error.set(None);
                 render_current();
@@ -192,27 +189,6 @@ pub(crate) fn App() -> impl IntoView {
                         <output>{move || format!("{:.1}", angle.get())}</output>
                     </div>
 
-                    <label for="step">"Step"</label>
-                    <div class="row">
-                        <input
-                            id="step"
-                            type="range"
-                            min="0.1"
-                            max="10"
-                            step="0.1"
-                            prop:value=move || step.get().to_string()
-                            on:input={
-                                let render_current = Rc::clone(&render_current);
-                                move |ev| {
-                                    let next = input_value(ev).parse::<f32>().unwrap_or(1.0);
-                                    set_step.set(next.clamp(0.1, 10.0));
-                                    render_current();
-                                }
-                            }
-                        />
-                        <output>{move || format!("{:.1}", step.get())}</output>
-                    </div>
-
                     <label for="png-width">"PNG width"</label>
                     <input
                         id="png-width"
@@ -228,7 +204,7 @@ pub(crate) fn App() -> impl IntoView {
                     />
 
                     <div class="export-row">
-                        <button type="button" on:click=move |_| export_svg(base_config.get(), iterations.get(), angle.get(), step.get())>
+                        <button type="button" on:click=move |_| export_svg(base_config.get(), iterations.get(), angle.get())>
                             "Export SVG"
                         </button>
                         <button
@@ -241,7 +217,6 @@ pub(crate) fn App() -> impl IntoView {
                                         base_config.get(),
                                         iterations.get(),
                                         angle.get(),
-                                        step.get(),
                                         png_width.get(),
                                     );
                                 }

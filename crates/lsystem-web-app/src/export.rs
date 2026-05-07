@@ -7,8 +7,8 @@ use wasm_bindgen::JsCast;
 use crate::presets::effective_config;
 use crate::renderer::CanvasRenderer;
 
-pub(crate) fn export_svg(config: Option<Config>, iterations: u32, angle: f32, step: f32) {
-    let Some(config) = effective_config(config, iterations, angle, step) else {
+pub(crate) fn export_svg(config: Option<Config>, iterations: u32, angle: f32) {
+    let Some(config) = effective_config(config, iterations, angle) else {
         return;
     };
     let filename = sanitize_filename(&config.name, "svg");
@@ -27,10 +27,9 @@ pub(crate) fn export_png(
     config: Option<Config>,
     iterations: u32,
     angle: f32,
-    step: f32,
     width: u32,
 ) {
-    let Some(config) = effective_config(config, iterations, angle, step) else {
+    let Some(config) = effective_config(config, iterations, angle) else {
         return;
     };
     let Some((device, queue)) = renderer
