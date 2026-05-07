@@ -75,7 +75,6 @@ pub struct UiState {
     pub iterations: u32,
     pub max_iterations: u32,
     pub angle: f32,
-    pub step: f32,
     pub png_width: u32,
     pub error: Option<String>,
     /// Set to true when geometry needs regenerating.
@@ -98,7 +97,6 @@ impl UiState {
             iterations: 4,
             max_iterations: 10,
             angle: 60.0,
-            step: 1.0,
             png_width: 2048,
             error: None,
             dirty: true,
@@ -118,7 +116,6 @@ impl UiState {
                 .max(1);
                 self.iterations = cfg.iterations.min(self.max_iterations);
                 self.angle = cfg.angle;
-                self.step = cfg.step;
                 self.base_config = Some(cfg);
                 self.error = None;
                 self.dirty = true;
@@ -133,7 +130,6 @@ impl UiState {
         self.base_config.clone().map(|mut c| {
             c.iterations = self.iterations;
             c.angle = self.angle;
-            c.step = self.step;
             c
         })
     }
@@ -232,16 +228,6 @@ impl UiState {
                             .step_by(0.5),
                     );
                     if self.angle != prev_angle {
-                        self.dirty = true;
-                    }
-
-                    let prev_step = self.step;
-                    ui.add(
-                        egui::Slider::new(&mut self.step, 0.1..=10.0)
-                            .text("Step")
-                            .step_by(0.1),
-                    );
-                    if self.step != prev_step {
                         self.dirty = true;
                     }
 

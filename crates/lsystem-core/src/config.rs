@@ -175,6 +175,7 @@ struct RawConfig {
     axiom: String,
     iterations: u32,
     angle: f32,
+    #[serde(default = "default_step")]
     step: f32,
     #[serde(default)]
     initial_heading: f32,
@@ -211,6 +212,10 @@ fn default_dimensions() -> u8 {
     2
 }
 
+fn default_step() -> f32 {
+    1.0
+}
+
 fn default_line_color() -> [f32; 3] {
     [0.0, 0.9, 0.5]
 }
@@ -226,6 +231,7 @@ fn default_value() -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     const KOCH_TOML: &str = r#"
 name = "Koch Snowflake"
@@ -244,8 +250,40 @@ F = "F-F++F-F"
         let cfg = Config::parse(KOCH_TOML).unwrap();
         assert_eq!(cfg.axiom, "F++F++F");
         assert_eq!(cfg.angle, 60.0);
+        assert_eq!(cfg.step, 1.0);
         assert_eq!(cfg.iterations, 4);
         assert_eq!(cfg.rules[&'F'], "F-F++F-F");
+    }
+
+    #[test]
+    fn defaults_missing_step() {
+        let toml = r#"
+name = "test"
+axiom = "F"
+iterations = 1
+angle = 90.0
+"#;
+        let cfg = Config::parse(toml).unwrap();
+        assert_eq!(cfg.step, 1.0);
+    }
+
+    #[test]
+    fn bundled_presets_are_parseable() {
+        let presets_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../presets");
+        let mut preset_paths: Vec<_> = std::fs::read_dir(&presets_dir)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", presets_dir.display()))
+            .map(|entry| entry.expect("failed to read preset dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
+            .collect();
+        preset_paths.sort();
+
+        assert!(!preset_paths.is_empty(), "no preset TOML files found");
+        for path in preset_paths {
+            let toml = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+            Config::parse(&toml)
+                .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
+        }
     }
 
     #[test]

@@ -41,12 +41,10 @@ pub(crate) fn effective_config(
     config: Option<Config>,
     iterations: u32,
     angle: f32,
-    step: f32,
 ) -> Option<Config> {
     config.map(|mut config| {
         config.iterations = iterations;
         config.angle = angle;
-        config.step = step;
         config
     })
 }
