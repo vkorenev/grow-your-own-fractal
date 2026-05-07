@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/lsystem-core", "crates/lsystem-renderer", "crates/lsystem-app"]
+members = [
+    "crates/lsystem-core",
+    "crates/lsystem-renderer",
+    "crates/lsystem-app",
+    "crates/lsystem-web-app",
+]
 resolver = "3"
 
 [workspace.package]

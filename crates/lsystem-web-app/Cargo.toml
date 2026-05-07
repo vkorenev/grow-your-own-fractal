@@ -1,0 +1,43 @@
+[package]
+name = "lsystem-web-app"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lsystem-core = { path = "../lsystem-core", features = ["svg"] }
+lsystem-renderer = { path = "../lsystem-renderer", features = ["png"] }
+console_error_panic_hook = "0.1"
+console_log = "1"
+include_dir = "0.7"
+js-sys = "0.3"
+leptos = { version = "0.8", features = ["csr"] }
+log = "0.4"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "CssStyleDeclaration",
+    "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlTextAreaElement",
+    "KeyboardEvent",
+    "MouseEvent",
+    "PointerEvent",
+    "Url",
+    "WheelEvent",
+    "Window",
+] }
+wgpu = "29"

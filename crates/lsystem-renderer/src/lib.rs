@@ -1,3 +1,4 @@
+pub mod camera;
 pub mod line_renderer;
 pub mod lsystem_bridge;
 #[cfg(feature = "png")]

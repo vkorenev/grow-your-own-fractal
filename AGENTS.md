@@ -4,21 +4,28 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. Supports both native desktop and browser (WebAssembly/WebGPU) from a shared codebase. The fractal is rendered via an `egui_wgpu::CallbackTrait` adapter (in `ui.rs`) that bridges egui's paint-callback system to a toolkit-independent wgpu pipeline (`lsystem-renderer` crate); layout, hit-testing, and z-order all flow through egui, and `renderer.rs` is a thin winit orchestration layer that owns the surface and dispatches frames.
+**Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. The browser-first app (`lsystem-web-app`) uses Leptos/DOM controls with a WebGPU canvas backed by the toolkit-independent `lsystem-renderer` crate. The existing egui app (`lsystem-app`) is retained for native desktop and legacy egui web builds; its fractal draw path still uses an `egui_wgpu::CallbackTrait` adapter that bridges egui's paint-callback system to the shared wgpu line pipeline.
 
 ## Common Commands
 
 ```bash
 # Build & run
-cargo run -p lsystem-app          # native desktop
-trunk serve --config crates/lsystem-app/Trunk.toml    # web dev server at localhost:8080
-trunk build --release --config crates/lsystem-app/Trunk.toml  # web release build → crates/lsystem-app/dist/
+cargo run -p lsystem-app          # native desktop egui app
+trunk serve --config crates/lsystem-web-app/Trunk.toml    # browser app at localhost:8081
+trunk build --release --config crates/lsystem-web-app/Trunk.toml  # browser release → crates/lsystem-web-app/dist/
+trunk serve --config crates/lsystem-app/Trunk.toml    # legacy egui web app at localhost:8080
 
 # Verification (all run in CI)
-cargo test --workspace
 cargo fmt --check --all
 cargo clippy --workspace -- -D warnings
-cargo check --target wasm32-unknown-unknown -p lsystem-app
+cargo clippy --workspace --all-features -- -D warnings
+cargo test --workspace --all-features --all-targets
+cargo check --target wasm32-unknown-unknown --workspace
+cargo check --target wasm32-unknown-unknown --workspace --all-features
+cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
+cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
+trunk build --release --config crates/lsystem-app/Trunk.toml
+trunk build --release --config crates/lsystem-web-app/Trunk.toml
 
 # Run a single test
 cargo test -p lsystem-core config::tests::test_name
@@ -33,9 +40,11 @@ cargo test -p lsystem-core --features svg svg_export
 
 Before running Git or GitHub CLI commands, read `.agents/rules/git-and-github.md`.
 
+Successful CI runs on `main` trigger `.github/workflows/deploy.yml`, which deploys the Leptos browser app from `crates/lsystem-web-app/dist/` to GitHub Pages.
+
 ## Architecture
 
-Three-crate workspace under `crates/`:
+Four-crate workspace under `crates/`:
 
 ### `lsystem-core` — pure library, zero rendering deps
 
@@ -57,7 +66,8 @@ Depends on `lsystem-core` and `wgpu`.
 
 | File | Role |
 |------|------|
-| `line_renderer.rs` | `Transform` — scale + offset GPU uniform type. `GpuContext` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `LinePipeline` (pipeline, bind group, vertex buffer, transform uniform, color-params uniform) — `upload()` re-uploads vertices and `ColorParams`; `write_transform()` writes the camera transform every frame; `draw()` issues the line-list draw. On wasm `GpuContext` is built asynchronously and delivered via `UserEvent::GpuReady` |
+| `camera.rs` | Shared `Camera` pan/zoom state and view transform helpers used by both app crates |
+| `line_renderer.rs` | `Transform` — scale + offset GPU uniform type. `GpuContext` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `LinePipeline` (pipeline, bind group, vertex buffer, transform uniform, color-params uniform) — `upload()` re-uploads vertices and `ColorParams`; `write_transform()` writes the camera transform every frame; `draw()` issues the line-list draw. On wasm `GpuContext` is built asynchronously; the egui app delivers it through `UserEvent::GpuReady`, while the Leptos app awaits it from the canvas renderer |
 | `lsystem_bridge.rs` | L-system→GPU adapters. `geometry_to_vertices()` accepts `impl Iterator<Item = [Vec2; 2]>` and produces a flat `Vertex` array with bounding box (`VertexData`). `color_params_from_config()` maps `LineColorConfig` to the `ColorParams` GPU uniform. |
 | `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset) and computes per-segment color from a `ColorParams` uniform using `vertex_index / 2`; supports solid, gradient, and HSV hue-cycle modes; fragment shader passes the interpolated color through; topology is `LineList` |
 
@@ -71,11 +81,22 @@ Depends on `lsystem-core`, `lsystem-renderer`, `egui`/`egui-wgpu`/`egui-winit`, 
 | `lib.rs` | Module declarations; `run_native()` builds an `EventLoop<UserEvent>` and calls `run_app`; `#[wasm_bindgen(start)] start()` does the same on web via `EventLoopExtWebSys::spawn_app` |
 | `renderer.rs` | `App` (`ApplicationHandler<UserEvent>`) — owns `Camera`, geometry buffer, side-panel state. Routes `WindowEvent::RedrawRequested` straight to its own renderer; routes everything else through `egui-winit` |
 | `ui.rs` | `UiState` (preset/config state, egui layout including the central fractal canvas via `ui.allocate_painter()`, pan/zoom from the painter `Response`) + `EguiRenderer` (egui context, egui-wgpu integration, single render pass that does both the surface clear and the fractal+egui draw) + `FractalCallback` (per-frame data struct: vertices, transform, needs_upload, color_params) + `impl egui_wgpu::CallbackTrait for FractalCallback` (thin egui adapter that delegates to `LinePipeline::upload/write_transform/draw`) |
-| `camera.rs` | `Camera` (pan/zoom state), `compute_transform` |
+| `camera.rs` | Re-export of `lsystem_renderer::camera::Camera` |
+
+### `lsystem-web-app` — browser-first Leptos UI
+
+Depends on `lsystem-core`, `lsystem-renderer`, `leptos`, and browser `web-sys`/`wasm-bindgen` APIs.
+
+| File | Role |
+|------|------|
+| `lib.rs` | Leptos CSR entry point; DOM controls for presets, TOML, overrides, and exports; browser Blob downloads |
+| `renderer.rs` | `CanvasRenderer` — owns the WebGPU canvas `GpuContext`, `LinePipeline`, shared `Camera`, current vertices, color params, and background; handles canvas resize, pan, zoom, reset, and event-driven rendering |
+| `index.html` | Trunk entry that mounts the Leptos app |
+| `Trunk.toml` | Browser app build config, served locally on `127.0.0.1:8081` |
 
 ### `presets/`
 
-Bundled TOML L-System definitions. New fractals are added here; they are embedded at compile time via `include_dir!` in `ui.rs` and auto-discovered — no registration step needed.
+Bundled TOML L-System definitions. New fractals are added here; they are embedded at compile time via `include_dir!` in each app crate and auto-discovered — no registration step needed.
 
 ## Key Design Decisions
 
@@ -88,5 +109,7 @@ Bundled TOML L-System definitions. New fractals are added here; they are embedde
 - **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear` with the config's `background_color` (defaulting to black) and contains every draw — both egui shapes and the fractal callback. `GpuContext::begin_frame` only acquires the surface texture; there is no separate clear pass.
 - **`RedrawRequested` is handled directly, never fed to `egui-winit`**: `egui-winit::on_window_event` returns `repaint = true` for *every* `WindowEvent` variant, including `RedrawRequested` itself — feeding it back would queue another `RedrawRequested` every frame and burn CPU. `App::window_event` short-circuits on `RedrawRequested`. This mirrors eframe's pattern.
 - **Caller-driven geometry uploads**: `App` sets `needs_upload: bool` whenever it regenerates vertices; the flag is passed through `FractalCallback` to the egui adapter, which calls `LinePipeline::upload` (vertex buffer + `ColorParams`) only when `true`, and `write_transform` (camera uniform) every frame. `needs_upload` is cleared in `App::handle_redraw` after `egui.render` returns.
+- **DOM browser UI with GPU canvas**: `lsystem-web-app` owns browser UI state in Leptos signals and renders the fractal into a dedicated `<canvas>`. It creates a WebGPU surface from `web_sys::HtmlCanvasElement`, reuses `LinePipeline`, and drives rendering from explicit DOM events instead of a continuous repaint loop.
+- **Surface acquisition recovery**: `GpuContext::begin_frame` retries `CurrentSurfaceTexture::Outdated` once after reconfiguring the surface. True `SurfaceLost` is reported explicitly to callers.
 - **SVG export is a `lsystem-core` Cargo feature**: The `svg` feature adds `svg_export::export_svg(config) -> String`. It collects segments into a `Vec` (the only allocation — acceptable for export), computes a padded bounding box, and builds SVG XML. The Y-axis flip (turtle is Y-up, SVG is Y-down) is handled by a `<g transform="matrix(1 0 0 -1 0 0)">` group so turtle coordinates are written as-is; the viewBox compensates. `stroke-width`, `stroke-linecap`, and `fill` are set on the `<g>` and inherited by children. Solid mode emits a single `<path>`; gradient and hue-cycle modes emit per-segment `<line>` elements to match the shader's segment-index-based coloring exactly. On native, `rfd::FileDialog` handles the save dialog; on WASM, a programmatic Blob download is triggered via `web-sys`.
-- **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass; the `wasm-check` job catches WASM regressions early.
+- **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass. CI tests the workspace with all features/all targets, checks and lints native default/all-features builds, checks and lints `wasm32-unknown-unknown` default/all-features builds, and builds both Trunk web apps. GitHub Pages deploys the Leptos browser app.

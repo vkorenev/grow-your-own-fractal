@@ -1,8 +1,9 @@
 # Grow Your Own Fractal
 
 An interactive [L-System](https://en.wikipedia.org/wiki/L-system) (Lindenmayer
-system) visualizer built with Rust, WebGPU, and WebAssembly. Runs natively on
-the desktop and in the browser from the same codebase.
+system) visualizer built with Rust, WebGPU, and WebAssembly. The browser app
+uses DOM controls with a WebGPU canvas; a native egui desktop app is also kept
+in the workspace.
 
 ---
 
@@ -100,7 +101,10 @@ you can break long rules across lines for readability.
 
 ### Exporting
 
-The **Export SVG** button in the left panel saves the current fractal (including the active iteration, angle, and step overrides) as a resolution-independent SVG file. On the desktop a native save dialog opens; in the browser the file is downloaded automatically.
+The **Export SVG** button saves the current fractal, including the active
+iteration, angle, and step overrides, as a resolution-independent SVG file.
+The **Export PNG** button renders the same effective config to a raster PNG
+using the selected PNG width.
 
 ### Bundled presets
 
@@ -140,22 +144,33 @@ mise install   # installs trunk at the version pinned in mise.toml
 cargo run -p lsystem-app
 ```
 
-**Web — development server:**
+**Web — browser app development server:**
 
 ```sh
-trunk serve          # opens http://localhost:8080 automatically
+trunk serve --config crates/lsystem-web-app/Trunk.toml
 ```
 
-**Web — release build:**
+This serves the Leptos/DOM app at <http://127.0.0.1:8081/>.
+
+**Web — browser app release build:**
 
 ```sh
-trunk build --release    # output in dist/
+trunk build --release --config crates/lsystem-web-app/Trunk.toml
+```
+
+The release output is written to `crates/lsystem-web-app/dist/`.
+
+**Legacy egui web app:**
+
+```sh
+trunk serve --config crates/lsystem-app/Trunk.toml
+trunk build --release --config crates/lsystem-app/Trunk.toml
 ```
 
 ### Running tests
 
 ```sh
-cargo test --workspace
+cargo test --workspace --all-features --all-targets
 ```
 
 ### Project structure
@@ -165,6 +180,7 @@ Cargo.toml                  workspace manifest
 rust-toolchain.toml         pins stable Rust + wasm32 target + components
 mise.toml                   pins trunk version (read by CI and local dev)
 .github/workflows/ci.yml    fmt · clippy · test · wasm-check · trunk-build
+.github/workflows/deploy.yml deploys the Leptos web app to GitHub Pages
 
 crates/
   lsystem-core/             pure Rust, no rendering deps
@@ -177,19 +193,26 @@ crates/
       svg_export.rs         SVG export — export_svg(config) -> String (enabled by the `svg` Cargo feature)
   lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
     src/
+      camera.rs             shared pan/zoom state and view transform
       line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext
       lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices (accepts segment iterator), color_params_from_config
       shader.wgsl           vertex + fragment shaders
-  lsystem-app/              native + web entry points
+  lsystem-app/              egui native app, plus retained egui web entry point
     src/
       main.rs               native entry point
       renderer.rs           winit ApplicationHandler that orchestrates each frame
-      camera.rs             pan/zoom state and view transform
+      camera.rs             re-export of shared renderer Camera
       lib.rs                crate entry points for native and web
       ui.rs                 egui layout (side panel + central fractal canvas), FractalCallback, egui-wgpu wiring, CallbackTrait adapter
+  lsystem-web-app/          browser-first Leptos app with DOM controls and a WebGPU canvas
+    src/
+      lib.rs                Leptos app, DOM controls, preset loading, browser downloads
+      renderer.rs           canvas-owned WebGPU renderer using lsystem-renderer
 
-index.html                  trunk entry: canvas + WebGPU detection
-Trunk.toml                  trunk build config
+crates/lsystem-app/index.html         egui web Trunk entry
+crates/lsystem-app/Trunk.toml         egui web Trunk config
+crates/lsystem-web-app/index.html     Leptos web Trunk entry
+crates/lsystem-web-app/Trunk.toml     Leptos web Trunk config
 
 presets/                    bundled TOML L-System definitions
 ```
@@ -198,13 +221,17 @@ presets/                    bundled TOML L-System definitions
 
 Every push and pull request to `main` runs five jobs:
 
-| Job | Command |
-|-----|---------|
+| Job | Commands |
+|-----|----------|
 | fmt | `cargo fmt --check --all` |
-| clippy | `cargo clippy --workspace -- -D warnings` |
-| test | `cargo test --workspace` |
-| wasm-check | `cargo check --target wasm32-unknown-unknown -p lsystem-app` |
-| trunk-build | `trunk build --release` |
+| clippy | `cargo clippy --workspace -- -D warnings`; `cargo clippy --workspace --all-features -- -D warnings` |
+| test | `cargo test --workspace --all-features --all-targets` |
+| wasm-check | workspace `cargo check` and `cargo clippy` for `wasm32-unknown-unknown`, with default and all features |
+| trunk-build | release builds for `crates/lsystem-app/Trunk.toml` and `crates/lsystem-web-app/Trunk.toml` |
+
+Successful CI runs on `main` trigger the deploy workflow, which builds
+`crates/lsystem-web-app` with the repository GitHub Pages public URL and deploys
+`crates/lsystem-web-app/dist/`.
 
 ### License
 
