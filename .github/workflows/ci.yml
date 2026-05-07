@@ -17,7 +17,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -27,41 +27,47 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-features -- -D warnings
 
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test --workspace --all-features --all-targets
 
   wasm-check:
     name: WASM Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32-unknown-unknown -p lsystem-app
+      - run: cargo check --target wasm32-unknown-unknown --workspace
+      - run: cargo check --target wasm32-unknown-unknown --workspace --all-features
+      - run: cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
 
   trunk-build:
     name: Trunk Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v3
       - run: trunk build --release --config crates/lsystem-app/Trunk.toml
+      - run: trunk build --release --config crates/lsystem-web-app/Trunk.toml

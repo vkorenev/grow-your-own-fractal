@@ -186,7 +186,7 @@ impl LinePipeline {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
     }
 
-    pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'static>) {
+    pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         if self.vertex_count > 0 {
@@ -203,13 +203,15 @@ pub enum FrameOutcome {
         wgpu::CommandEncoder,
         bool,
     ),
-    Reconfigured,
+    SurfaceLost,
     Skip,
 }
 
 pub struct GpuContext {
     surface: wgpu::Surface<'static>,
+    #[allow(clippy::arc_with_non_send_sync)]
     pub device: Arc<wgpu::Device>,
+    #[allow(clippy::arc_with_non_send_sync)]
     pub queue: Arc<wgpu::Queue>,
     surface_config: wgpu::SurfaceConfiguration,
 }
@@ -235,7 +237,9 @@ impl GpuContext {
             .await
             .map_err(|_| ())?;
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let device = Arc::new(device);
+        #[allow(clippy::arc_with_non_send_sync)]
         let queue = Arc::new(queue);
 
         let caps = surface.get_capabilities(&adapter);
@@ -284,21 +288,28 @@ impl GpuContext {
     }
 
     pub fn begin_frame(&mut self) -> FrameOutcome {
-        let (frame, reconfigure_after) = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t) => (t, false),
-            wgpu::CurrentSurfaceTexture::Suboptimal(t) => (t, true),
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.surface_config);
-                return FrameOutcome::Reconfigured;
+        let mut retried_after_outdated = false;
+        let (frame, reconfigure_after) = loop {
+            match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(t) => break (t, false),
+                wgpu::CurrentSurfaceTexture::Suboptimal(t) => break (t, true),
+                wgpu::CurrentSurfaceTexture::Outdated => {
+                    if retried_after_outdated {
+                        return FrameOutcome::Skip;
+                    }
+                    self.surface.configure(&self.device, &self.surface_config);
+                    retried_after_outdated = true;
+                }
+                wgpu::CurrentSurfaceTexture::Lost => return FrameOutcome::SurfaceLost,
+                wgpu::CurrentSurfaceTexture::Timeout
+                | wgpu::CurrentSurfaceTexture::Occluded
+                | wgpu::CurrentSurfaceTexture::Validation => return FrameOutcome::Skip,
             }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Validation => return FrameOutcome::Skip,
         };
 
         let view = frame.texture.create_view(&Default::default());
         let encoder = self.device.create_command_encoder(&Default::default());
-        // The surface is cleared by the egui render pass (LoadOp::Clear).
+        // The surface is cleared by the caller's render pass (LoadOp::Clear).
         FrameOutcome::Ready(Box::new(frame), view, encoder, reconfigure_after)
     }
 

@@ -222,8 +222,8 @@ impl App {
         {
             match gpu.begin_frame() {
                 FrameOutcome::Skip => {}
-                FrameOutcome::Reconfigured => {
-                    window.request_redraw();
+                FrameOutcome::SurfaceLost => {
+                    log::error!("GPU surface was lost");
                 }
                 FrameOutcome::Ready(frame, view, mut encoder, reconfigure_after) => {
                     let surface_size = gpu.size();
