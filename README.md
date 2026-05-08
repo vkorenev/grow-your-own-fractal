@@ -1,9 +1,9 @@
 # Grow Your Own Fractal
 
 An interactive [L-System](https://en.wikipedia.org/wiki/L-system) (Lindenmayer
-system) visualizer built with Rust, WebGPU, and WebAssembly. The browser app
-uses DOM controls with a WebGPU canvas; a native egui desktop app is also kept
-in the workspace.
+system) visualizer built with Rust, WebGPU, and WebAssembly. The workspace
+includes an Iced native/wasm app and a browser-first Leptos app with DOM
+controls and a WebGPU canvas.
 
 ---
 
@@ -160,7 +160,7 @@ trunk build --release --config crates/lsystem-web-app/Trunk.toml
 
 The release output is written to `crates/lsystem-web-app/dist/`.
 
-**Legacy egui web app:**
+**Web — Iced app:**
 
 ```sh
 trunk serve --config crates/lsystem-app/Trunk.toml
@@ -197,20 +197,19 @@ crates/
       line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext
       lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices (accepts segment iterator), color_params_from_config
       shader.wgsl           vertex + fragment shaders
-  lsystem-app/              egui native app, plus retained egui web entry point
+  lsystem-app/              Iced native app, plus retained Iced web entry point
     src/
       main.rs               native entry point
-      renderer.rs           winit ApplicationHandler that orchestrates each frame
-      camera.rs             re-export of shared renderer Camera
       lib.rs                crate entry points for native and web
-      ui.rs                 egui layout (side panel + central fractal canvas), FractalCallback, egui-wgpu wiring, CallbackTrait adapter
+      ui.rs                 Iced layout, app state, and shader widget integration
+      export.rs             native/browser SVG and PNG export helpers
   lsystem-web-app/          browser-first Leptos app with DOM controls and a WebGPU canvas
     src/
       lib.rs                Leptos app, DOM controls, preset loading, browser downloads
       renderer.rs           canvas-owned WebGPU renderer using lsystem-renderer
 
-crates/lsystem-app/index.html         egui web Trunk entry
-crates/lsystem-app/Trunk.toml         egui web Trunk config
+crates/lsystem-app/index.html         Iced web Trunk entry
+crates/lsystem-app/Trunk.toml         Iced web Trunk config
 crates/lsystem-web-app/index.html     Leptos web Trunk entry
 crates/lsystem-web-app/Trunk.toml     Leptos web Trunk config
 

@@ -4,16 +4,16 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. The browser-first app (`lsystem-web-app`) uses Leptos/DOM controls with a WebGPU canvas backed by the toolkit-independent `lsystem-renderer` crate. The existing egui app (`lsystem-app`) is retained for native desktop and legacy egui web builds; its fractal draw path still uses an `egui_wgpu::CallbackTrait` adapter that bridges egui's paint-callback system to the shared wgpu line pipeline.
+**Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. The browser-first app (`lsystem-web-app`) uses Leptos/DOM controls with a WebGPU canvas backed by the toolkit-independent `lsystem-renderer` crate. The `lsystem-app` crate uses Iced for native desktop and retained wasm builds; its fractal viewport is an `iced::widget::shader` custom primitive backed by the shared wgpu line pipeline.
 
 ## Common Commands
 
 ```bash
 # Build & run
-cargo run -p lsystem-app          # native desktop egui app
+cargo run -p lsystem-app          # native desktop Iced app
 trunk serve --config crates/lsystem-web-app/Trunk.toml    # browser app at localhost:8081
 trunk build --release --config crates/lsystem-web-app/Trunk.toml  # browser release → crates/lsystem-web-app/dist/
-trunk serve --config crates/lsystem-app/Trunk.toml    # legacy egui web app at localhost:8080
+trunk serve --config crates/lsystem-app/Trunk.toml    # Iced web app at localhost:8080
 
 # Verification (all run in CI)
 cargo fmt --check --all
@@ -67,21 +67,20 @@ Depends on `lsystem-core` and `wgpu`.
 | File | Role |
 |------|------|
 | `camera.rs` | Shared `Camera` pan/zoom state and view transform helpers used by both app crates |
-| `line_renderer.rs` | `Transform` — scale + offset GPU uniform type. `GpuContext` — owns the wgpu surface; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `LinePipeline` (pipeline, bind group, vertex buffer, transform uniform, color-params uniform) — `upload()` re-uploads vertices and `ColorParams`; `write_transform()` writes the camera transform every frame; `draw()` issues the line-list draw. On wasm `GpuContext` is built asynchronously; the egui app delivers it through `UserEvent::GpuReady`, while the Leptos app awaits it from the canvas renderer |
+| `line_renderer.rs` | `Transform` — scale + offset GPU uniform type. `GpuContext` — owns the wgpu surface for non-Iced canvas users; `begin_frame` acquires the next surface texture and `end_frame` submits + presents. `LinePipeline` (pipeline, bind group, reusable vertex buffer, transform uniform, color-params uniform) — `upload()` grows/reuses the vertex buffer and writes `ColorParams`; `write_transform()` writes the camera transform every frame; `draw()` issues the line-list draw. |
 | `lsystem_bridge.rs` | L-system→GPU adapters. `geometry_to_vertices()` accepts `impl Iterator<Item = [Vec2; 2]>` and produces a flat `Vertex` array with bounding box (`VertexData`). `color_params_from_config()` maps `LineColorConfig` to the `ColorParams` GPU uniform. |
 | `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset) and computes per-segment color from a `ColorParams` uniform using `vertex_index / 2`; supports solid, gradient, and HSV hue-cycle modes; fragment shader passes the interpolated color through; topology is `LineList` |
 
-### `lsystem-app` — entry points and egui UI
+### `lsystem-app` — entry points and Iced UI
 
-Depends on `lsystem-core`, `lsystem-renderer`, `egui`/`egui-wgpu`/`egui-winit`, and `winit`.
+Depends on `lsystem-core`, `lsystem-renderer`, `iced`, and browser/native export support crates.
 
 | File | Role |
 |------|------|
 | `main.rs` | Thin native entry that calls `lib.rs::run_native()` |
-| `lib.rs` | Module declarations; `run_native()` builds an `EventLoop<UserEvent>` and calls `run_app`; `#[wasm_bindgen(start)] start()` does the same on web via `EventLoopExtWebSys::spawn_app` |
-| `renderer.rs` | `App` (`ApplicationHandler<UserEvent>`) — owns `Camera`, geometry buffer, side-panel state. Routes `WindowEvent::RedrawRequested` straight to its own renderer; routes everything else through `egui-winit` |
-| `ui.rs` | `UiState` (preset/config state, egui layout including the central fractal canvas via `ui.allocate_painter()`, pan/zoom from the painter `Response`) + `EguiRenderer` (egui context, egui-wgpu integration, single render pass that does both the surface clear and the fractal+egui draw) + `FractalCallback` (per-frame data struct: vertices, transform, needs_upload, color_params) + `impl egui_wgpu::CallbackTrait for FractalCallback` (thin egui adapter that delegates to `LinePipeline::upload/write_transform/draw`) |
-| `camera.rs` | Re-export of `lsystem_renderer::camera::Camera` |
+| `lib.rs` | Module declarations; `run_native()` starts the Iced app on desktop; `#[wasm_bindgen(start)] start()` starts the same Iced app on web |
+| `ui.rs` | `FractalApp` state/update/view, preset/config controls, pan/zoom messages, and `iced::widget::shader` integration that uploads geometry by scene revision |
+| `export.rs` | Native/browser SVG and PNG export helpers; PNG export creates an offscreen wgpu device instead of borrowing Iced's renderer device |
 
 ### `lsystem-web-app` — browser-first Leptos UI
 
@@ -105,11 +104,10 @@ Bundled TOML L-System definitions. New fractals are added here; they are embedde
 - **Dual target from day one**: `lsystem-core` has no platform-specific deps so it compiles for both native and `wasm32-unknown-unknown` without feature flags.
 - **3D forward-compat seam**: the `dimensions` TOML field (currently validated to `2` only) is the extension point. To add 3D: add `turtle/turtle3d.rs` with a `Segments3D<I>` iterator analogous to `Segments2D`, then dispatch in `lib.rs::generate()` based on `cfg.dimensions`. No other registration is needed.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
-- **Fractal lives in egui's layout**: the fractal canvas is allocated via `ui.allocate_painter()` inside an `egui::CentralPanel { frame: Frame::NONE }`, and drawn through an `egui_wgpu::CallbackTrait`. Pan/zoom come from the painter `Response` (no raw winit mouse handling); egui automatically sets the wgpu viewport to the allocated rect before invoking `paint()`, so the callback only sets pipeline/bind group/vertex buffer.
-- **One render pass per frame**: the egui-wgpu render pass uses `LoadOp::Clear` with the config's `background_color` (defaulting to black) and contains every draw — both egui shapes and the fractal callback. `GpuContext::begin_frame` only acquires the surface texture; there is no separate clear pass.
-- **`RedrawRequested` is handled directly, never fed to `egui-winit`**: `egui-winit::on_window_event` returns `repaint = true` for *every* `WindowEvent` variant, including `RedrawRequested` itself — feeding it back would queue another `RedrawRequested` every frame and burn CPU. `App::window_event` short-circuits on `RedrawRequested`. This mirrors eframe's pattern.
-- **Caller-driven geometry uploads**: `App` sets `needs_upload: bool` whenever it regenerates vertices; the flag is passed through `FractalCallback` to the egui adapter, which calls `LinePipeline::upload` (vertex buffer + `ColorParams`) only when `true`, and `write_transform` (camera uniform) every frame. `needs_upload` is cleared in `App::handle_redraw` after `egui.render` returns.
+- **Fractal lives in an Iced shader widget**: `lsystem-app` renders the fractal through `iced::widget::shader`. Iced owns the window, surface, event loop, and render pass; the custom primitive owns only the fractal GPU pipeline state.
+- **Scene-revision uploads**: `FractalApp` increments a scene revision whenever geometry changes. The Iced shader pipeline uploads vertices and color params only when the revision changes, while camera transforms are written during prepare.
+- **Reusable vertex buffer**: `LinePipeline::upload` grows the GPU vertex buffer to the next power-of-two capacity when needed and otherwise updates it with `Queue::write_buffer`, avoiding a new buffer allocation on every geometry upload.
 - **DOM browser UI with GPU canvas**: `lsystem-web-app` owns browser UI state in Leptos signals and renders the fractal into a dedicated `<canvas>`. It creates a WebGPU surface from `web_sys::HtmlCanvasElement`, reuses `LinePipeline`, and drives rendering from explicit DOM events instead of a continuous repaint loop.
-- **Surface acquisition recovery**: `GpuContext::begin_frame` retries `CurrentSurfaceTexture::Outdated` once after reconfiguring the surface. True `SurfaceLost` is reported explicitly to callers.
+- **Surface acquisition recovery**: `GpuContext::begin_frame` retries `SurfaceError::Outdated` once after reconfiguring the surface. True `SurfaceError::Lost` is reported explicitly to callers.
 - **SVG export is a `lsystem-core` Cargo feature**: The `svg` feature adds `svg_export::export_svg(config) -> String`. It collects segments into a `Vec` (the only allocation — acceptable for export), computes a padded bounding box, and builds SVG XML. The Y-axis flip (turtle is Y-up, SVG is Y-down) is handled by a `<g transform="matrix(1 0 0 -1 0 0)">` group so turtle coordinates are written as-is; the viewBox compensates. `stroke-width`, `stroke-linecap`, and `fill` are set on the `<g>` and inherited by children. Solid mode emits a single `<path>`; gradient and hue-cycle modes emit per-segment `<line>` elements to match the shader's segment-index-based coloring exactly. On native, `rfd::FileDialog` handles the save dialog; on WASM, a programmatic Blob download is triggered via `web-sys`.
 - **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass. CI tests the workspace with all features/all targets, checks and lints native default/all-features builds, checks and lints `wasm32-unknown-unknown` default/all-features builds, and builds both Trunk web apps. GitHub Pages deploys the Leptos browser app.

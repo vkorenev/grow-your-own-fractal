@@ -22,6 +22,8 @@ pub struct PngExport {
 pub enum PngExportError {
     InvalidWidth(u32),
     InvalidHeight(u32),
+    NoAdapter,
+    RequestDevice(wgpu::RequestDeviceError),
     Map(wgpu::BufferAsyncError),
     MapChannelClosed,
     Poll(wgpu::PollError),
@@ -43,6 +45,8 @@ impl Display for PngExportError {
                     "derived PNG height must be in 1..={MAX_DIMENSION}, got {height}"
                 )
             }
+            Self::NoAdapter => write!(f, "no GPU adapter available for PNG export"),
+            Self::RequestDevice(err) => write!(f, "failed to create PNG export GPU device: {err}"),
             Self::Map(err) => write!(f, "failed to map PNG readback buffer: {err}"),
             Self::MapChannelClosed => write!(f, "PNG readback callback was dropped"),
             Self::Poll(err) => write!(f, "failed to poll GPU device for PNG readback: {err}"),
@@ -52,6 +56,27 @@ impl Display for PngExportError {
 }
 
 impl Error for PngExportError {}
+
+pub async fn render_png_standalone(
+    config: &Config,
+    width: u32,
+) -> Result<PngExport, PngExportError> {
+    let instance = wgpu::Instance::default();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|_| PngExportError::NoAdapter)?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .map_err(PngExportError::RequestDevice)?;
+
+    render_png(&device, &queue, config, width).await
+}
 
 pub async fn render_png(
     device: &wgpu::Device,
@@ -130,7 +155,6 @@ pub async fn render_png(
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
-                multiview_mask: None,
             })
             .forget_lifetime();
         pipeline.draw(&mut pass);

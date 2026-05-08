@@ -9,9 +9,10 @@ default = []
 png = ["dep:futures-channel", "dep:png"]
 
 [dependencies]
-lsystem-core = { path = "../lsystem-core" }
+lsystem-core.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 futures-channel = { version = "0.3", optional = true }
-glam = "0.32"
+glam.workspace = true
+log.workspace = true
 png = { version = "0.18", optional = true }
-wgpu = "29"
+wgpu.workspace = true

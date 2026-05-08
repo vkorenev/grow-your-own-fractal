@@ -9,38 +9,65 @@ pub struct VertexData {
     pub bounds_max: [f32; 2],
 }
 
-pub fn geometry_to_vertices(segments: impl Iterator<Item = [Vec2; 2]>) -> VertexData {
-    let mut min_x = f32::INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-    let mut vertices = Vec::new();
+pub struct VertexDataBuilder {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    vertices: Vec<Vertex>,
+}
 
-    for [a, b] in segments {
-        min_x = min_x.min(a.x).min(b.x);
-        min_y = min_y.min(a.y).min(b.y);
-        max_x = max_x.max(a.x).max(b.x);
-        max_y = max_y.max(a.y).max(b.y);
-        vertices.push(Vertex {
+impl VertexDataBuilder {
+    pub fn new() -> Self {
+        Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+            vertices: Vec::new(),
+        }
+    }
+
+    pub fn push_segment(&mut self, [a, b]: [Vec2; 2]) {
+        self.min_x = self.min_x.min(a.x).min(b.x);
+        self.min_y = self.min_y.min(a.y).min(b.y);
+        self.max_x = self.max_x.max(a.x).max(b.x);
+        self.max_y = self.max_y.max(a.y).max(b.y);
+        self.vertices.push(Vertex {
             position: [a.x, a.y],
         });
-        vertices.push(Vertex {
+        self.vertices.push(Vertex {
             position: [b.x, b.y],
         });
     }
 
-    if min_x.is_infinite() {
-        min_x = -1.0;
-        max_x = 1.0;
-        min_y = -1.0;
-        max_y = 1.0;
-    }
+    pub fn finish(self) -> VertexData {
+        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
+            ([-1.0, -1.0], [1.0, 1.0])
+        } else {
+            ([self.min_x, self.min_y], [self.max_x, self.max_y])
+        };
 
-    VertexData {
-        vertices,
-        bounds_min: [min_x, min_y],
-        bounds_max: [max_x, max_y],
+        VertexData {
+            vertices: self.vertices,
+            bounds_min,
+            bounds_max,
+        }
     }
+}
+
+impl Default for VertexDataBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn geometry_to_vertices(segments: impl Iterator<Item = [Vec2; 2]>) -> VertexData {
+    let mut builder = VertexDataBuilder::new();
+    for segment in segments {
+        builder.push_segment(segment);
+    }
+    builder.finish()
 }
 
 pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
