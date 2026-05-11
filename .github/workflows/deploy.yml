@@ -32,10 +32,14 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v3
+      - run: mkdir -p pages/iced
       - run: trunk build --release --public-url /${{ github.event.repository.name }}/ --config crates/lsystem-web-app/Trunk.toml
+      - run: cp -R crates/lsystem-web-app/dist/. pages/
+      - run: trunk build --release --public-url /${{ github.event.repository.name }}/iced/ --config crates/lsystem-app/Trunk.toml
+      - run: cp -R crates/lsystem-app/dist/. pages/iced/
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: crates/lsystem-web-app/dist
+          path: pages
       - id: deployment
         uses: actions/deploy-pages@v5
