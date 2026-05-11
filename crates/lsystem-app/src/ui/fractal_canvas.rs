@@ -235,11 +235,10 @@ impl shader::Program<Message> for FractalProgram {
         cursor: mouse::Cursor,
     ) -> Option<shader::Action<Message>> {
         match event {
-            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-                if cursor_over(cursor, bounds).is_some() =>
-            {
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+                let position = cursor_over(cursor, bounds)?;
                 state.dragging = true;
-                state.last_cursor = cursor_over(cursor, bounds);
+                state.last_cursor = Some(position);
                 Some(shader::Action::capture())
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.dragging => {
@@ -302,15 +301,7 @@ impl shader::Program<Message> for FractalProgram {
 fn cursor_over(cursor: mouse::Cursor, bounds: Rectangle) -> Option<Point> {
     let position = cursor_position(cursor)?;
 
-    if position.x >= bounds.x
-        && position.y >= bounds.y
-        && position.x <= bounds.x + bounds.width
-        && position.y <= bounds.y + bounds.height
-    {
-        Some(position)
-    } else {
-        None
-    }
+    bounds.contains(position).then_some(position)
 }
 
 fn cursor_position(cursor: mouse::Cursor) -> Option<Point> {
