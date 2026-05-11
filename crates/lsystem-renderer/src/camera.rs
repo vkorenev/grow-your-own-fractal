@@ -1,6 +1,7 @@
 use crate::line_renderer::Transform;
 use crate::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
 
+#[derive(Clone, Debug)]
 pub struct Camera {
     pan: [f32; 2],
     zoom: f32,

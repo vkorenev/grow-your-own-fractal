@@ -1,28 +1,100 @@
-use std::sync::Arc;
-
 use lsystem_core::Config;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ExportKind {
+    Svg,
+    Png,
+}
+
+impl ExportKind {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Svg => "svg",
+            Self::Png => "png",
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn label(self) -> &'static str {
+        match self {
+            Self::Svg => "SVG",
+            Self::Png => "PNG",
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn filter_name(self) -> &'static str {
+        match self {
+            Self::Svg => "SVG Image",
+            Self::Png => "PNG Image",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum ExportRequest {
+    #[cfg(not(target_arch = "wasm32"))]
+    Svg { config: Config, path: PathBuf },
+    #[cfg(not(target_arch = "wasm32"))]
+    Png {
+        config: Config,
+        width: u32,
+        path: PathBuf,
+    },
+    #[cfg(target_arch = "wasm32")]
     Svg(Config),
+    #[cfg(target_arch = "wasm32")]
     Png { config: Config, width: u32 },
 }
 
-pub(crate) fn handle_export(
-    request: ExportRequest,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-) {
+#[derive(Debug, Clone)]
+pub(crate) enum ExportOutcome {
+    Saved(&'static str),
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Cancelled,
+    Failed(String),
+}
+
+pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
     match request {
-        ExportRequest::Svg(cfg) => {
-            let filename = sanitize_filename(&cfg.name, "svg");
-            let svg = lsystem_core::svg_export::export_svg(&cfg);
-            save_svg(svg, filename);
+        #[cfg(not(target_arch = "wasm32"))]
+        ExportRequest::Svg { config, path } => {
+            let svg = lsystem_core::svg_export::export_svg(&config);
+            save_svg(svg, path)
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        ExportRequest::Png {
+            config,
+            width,
+            path,
+        } => save_png(config, width, path).await,
+        #[cfg(target_arch = "wasm32")]
+        ExportRequest::Svg(config) => {
+            let filename = suggested_filename(&config, ExportKind::Svg);
+            let svg = lsystem_core::svg_export::export_svg(&config);
+            save_svg(svg, filename)
+        }
+        #[cfg(target_arch = "wasm32")]
         ExportRequest::Png { config, width } => {
-            let filename = sanitize_filename(&config.name, "png");
-            save_png(device, queue, config, width, filename);
+            let filename = suggested_filename(&config, ExportKind::Png);
+            save_png(config, width, filename).await
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn choose_export_path(config: &Config, kind: ExportKind) -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .set_file_name(suggested_filename(config, kind))
+        .add_filter(kind.filter_name(), &[kind.extension()])
+        .save_file()
+}
+
+fn suggested_filename(config: &Config, kind: ExportKind) -> String {
+    sanitize_filename(&config.name, kind.extension())
 }
 
 fn sanitize_filename(name: &str, extension: &str) -> String {
@@ -40,85 +112,61 @@ fn sanitize_filename(name: &str, extension: &str) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn save_svg(svg: String, suggested_name: String) {
-    if let Some(path) = rfd::FileDialog::new()
-        .set_file_name(&suggested_name)
-        .add_filter("SVG Image", &["svg"])
-        .save_file()
-        && let Err(e) = std::fs::write(&path, svg.as_bytes())
-    {
-        log::error!("Failed to write SVG: {e}");
+fn save_svg(svg: String, path: PathBuf) -> ExportOutcome {
+    match std::fs::write(&path, svg.as_bytes()) {
+        Ok(()) => ExportOutcome::Saved(ExportKind::Svg.label()),
+        Err(e) => ExportOutcome::Failed(e.to_string()),
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn save_png(
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    cfg: Config,
-    width: u32,
-    suggested_name: String,
-) {
-    if let Some(path) = rfd::FileDialog::new()
-        .set_file_name(&suggested_name)
-        .add_filter("PNG Image", &["png"])
-        .save_file()
-    {
-        match pollster::block_on(lsystem_renderer::png_export::render_png(
-            &device, &queue, &cfg, width,
-        )) {
-            Ok(png) => {
-                if let Err(e) = std::fs::write(&path, png.bytes) {
-                    log::error!("Failed to write PNG: {e}");
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to export PNG: {e}");
-            }
+async fn save_png(cfg: Config, width: u32, path: PathBuf) -> ExportOutcome {
+    match lsystem_renderer::png_export::render_png_standalone(&cfg, width).await {
+        Ok(png) => match std::fs::write(&path, png.bytes) {
+            Ok(()) => ExportOutcome::Saved(ExportKind::Png.label()),
+            Err(e) => ExportOutcome::Failed(e.to_string()),
+        },
+        Err(e) => {
+            log::error!("Failed to export PNG: {e}");
+            ExportOutcome::Failed(e.to_string())
         }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn save_svg(svg: String, suggested_name: String) {
+fn save_svg(svg: String, suggested_name: String) -> ExportOutcome {
     let array = js_sys::Array::new();
     array.push(&wasm_bindgen::JsValue::from_str(&svg));
     let props = web_sys::BlobPropertyBag::new();
     props.set_type("image/svg+xml");
     let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&array, &props) else {
-        return;
+        return ExportOutcome::Failed("failed to create SVG Blob".to_string());
     };
     download_blob(blob, suggested_name);
+    ExportOutcome::Saved("SVG")
 }
 
 #[cfg(target_arch = "wasm32")]
-fn save_png(
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    cfg: Config,
-    width: u32,
-    suggested_name: String,
-) {
-    wasm_bindgen_futures::spawn_local(async move {
-        match lsystem_renderer::png_export::render_png(&device, &queue, &cfg, width).await {
-            Ok(png) => {
-                let array = js_sys::Array::new();
-                let bytes = js_sys::Uint8Array::from(png.bytes.as_slice());
-                array.push(&bytes);
-                let props = web_sys::BlobPropertyBag::new();
-                props.set_type("image/png");
-                let Ok(blob) =
-                    web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props)
-                else {
-                    return;
-                };
-                download_blob(blob, suggested_name);
-            }
-            Err(e) => {
-                log::error!("Failed to export PNG: {e}");
-            }
+async fn save_png(cfg: Config, width: u32, suggested_name: String) -> ExportOutcome {
+    match lsystem_renderer::png_export::render_png_standalone(&cfg, width).await {
+        Ok(png) => {
+            let array = js_sys::Array::new();
+            let bytes = js_sys::Uint8Array::from(png.bytes.as_slice());
+            array.push(&bytes);
+            let props = web_sys::BlobPropertyBag::new();
+            props.set_type("image/png");
+            let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props)
+            else {
+                return ExportOutcome::Failed("failed to create PNG Blob".to_string());
+            };
+            download_blob(blob, suggested_name);
+            ExportOutcome::Saved("PNG")
         }
-    });
+        Err(e) => {
+            log::error!("Failed to export PNG: {e}");
+            ExportOutcome::Failed(e.to_string())
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

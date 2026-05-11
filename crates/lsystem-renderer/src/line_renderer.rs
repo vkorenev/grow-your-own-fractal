@@ -43,7 +43,8 @@ pub struct LinePipeline {
     uniform_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    vertex_buffer: wgpu::Buffer,
+    vertex_buffer: Option<wgpu::Buffer>,
+    vertex_capacity: u64,
     vertex_count: u32,
 }
 
@@ -105,8 +106,8 @@ impl LinePipeline {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[Some(&bgl)],
-            immediate_size: 0,
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -138,16 +139,8 @@ impl LinePipeline {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
+            multiview: None,
             cache: None,
-        });
-
-        // Placeholder; never bound for drawing (vertex_count stays 0 until the first upload).
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: std::mem::size_of::<Vertex>() as u64,
-            usage: wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: false,
         });
 
         Self {
@@ -155,7 +148,8 @@ impl LinePipeline {
             uniform_buffer,
             color_params_buffer,
             bind_group,
-            vertex_buffer,
+            vertex_buffer: None,
+            vertex_capacity: 0,
             vertex_count: 0,
         }
     }
@@ -167,12 +161,20 @@ impl LinePipeline {
         vertices: &[Vertex],
         color_params: ColorParams,
     ) {
-        if !vertices.is_empty() {
-            self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        let required_size = std::mem::size_of_val(vertices) as u64;
+        if required_size > 0 {
+            if self.vertex_capacity < required_size {
+                self.vertex_capacity = required_size.next_power_of_two();
+                self.vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("lsystem_line_vertices"),
+                    size: self.vertex_capacity,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            if let Some(buffer) = &self.vertex_buffer {
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(vertices));
+            }
         }
         self.vertex_count = vertices.len() as u32;
         queue.write_buffer(
@@ -189,8 +191,10 @@ impl LinePipeline {
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
-        if self.vertex_count > 0 {
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        if self.vertex_count > 0
+            && let Some(vertex_buffer) = &self.vertex_buffer
+        {
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.draw(0..self.vertex_count, 0..1);
         }
     }
@@ -291,19 +295,25 @@ impl GpuContext {
         let mut retried_after_outdated = false;
         let (frame, reconfigure_after) = loop {
             match self.surface.get_current_texture() {
-                wgpu::CurrentSurfaceTexture::Success(t) => break (t, false),
-                wgpu::CurrentSurfaceTexture::Suboptimal(t) => break (t, true),
-                wgpu::CurrentSurfaceTexture::Outdated => {
+                Ok(texture) => {
+                    let reconfigure_after = texture.suboptimal;
+                    break (texture, reconfigure_after);
+                }
+                Err(wgpu::SurfaceError::Outdated) => {
                     if retried_after_outdated {
                         return FrameOutcome::Skip;
                     }
                     self.surface.configure(&self.device, &self.surface_config);
                     retried_after_outdated = true;
                 }
-                wgpu::CurrentSurfaceTexture::Lost => return FrameOutcome::SurfaceLost,
-                wgpu::CurrentSurfaceTexture::Timeout
-                | wgpu::CurrentSurfaceTexture::Occluded
-                | wgpu::CurrentSurfaceTexture::Validation => return FrameOutcome::Skip,
+                Err(wgpu::SurfaceError::Lost) => return FrameOutcome::SurfaceLost,
+                Err(wgpu::SurfaceError::OutOfMemory) => {
+                    log::error!("Failed to acquire surface texture: GPU out of memory");
+                    return FrameOutcome::Skip;
+                }
+                Err(wgpu::SurfaceError::Timeout | wgpu::SurfaceError::Other) => {
+                    return FrameOutcome::Skip;
+                }
             }
         };
 

@@ -9,3 +9,18 @@ resolver = "3"
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+console_error_panic_hook = "0.1"
+console_log = "1"
+glam = "0.32"
+iced = { version = "0.14", default-features = false }
+include_dir = "0.7"
+js-sys = "0.3"
+log = "0.4"
+lsystem-core = { path = "crates/lsystem-core" }
+lsystem-renderer = { path = "crates/lsystem-renderer" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = "0.3"
+wgpu = "27"

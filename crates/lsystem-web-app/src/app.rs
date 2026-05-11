@@ -27,7 +27,7 @@ pub(crate) fn App() -> impl IntoView {
     let (error, set_error) = signal(None::<String>);
     let (iterations, set_iterations) =
         signal(initial.config.iterations.min(initial.max_iterations));
-    let (max_iterations, set_max_iterations) = signal(initial.max_iterations.max(1));
+    let (max_iterations, set_max_iterations) = signal(initial.max_iterations);
     let (angle, set_angle) = signal(initial.config.angle);
     let (png_width, set_png_width) = signal(2048u32);
     let (unsupported, set_unsupported) = signal(false);
@@ -75,7 +75,7 @@ pub(crate) fn App() -> impl IntoView {
         let render_current = Rc::clone(&render_current);
         move |text: String| match apply_toml(&text) {
             Ok(applied) => {
-                let max = applied.max_iterations.max(1);
+                let max = applied.max_iterations;
                 set_max_iterations.set(max);
                 set_iterations.set(applied.config.iterations.min(max));
                 set_angle.set(applied.config.angle);
@@ -153,14 +153,14 @@ pub(crate) fn App() -> impl IntoView {
                         <input
                             id="iterations"
                             type="range"
-                            min="1"
+                            min="0"
                             max=move || max_iterations.get().to_string()
                             prop:value=move || iterations.get().to_string()
                             on:input={
                                 let render_current = Rc::clone(&render_current);
                                 move |ev| {
-                                    let next = input_value(ev).parse::<u32>().unwrap_or(1);
-                                    set_iterations.set(next.clamp(1, max_iterations.get()));
+                                    let next = input_value(ev).parse::<u32>().unwrap_or(0);
+                                    set_iterations.set(next.clamp(0, max_iterations.get()));
                                     render_current();
                                 }
                             }
