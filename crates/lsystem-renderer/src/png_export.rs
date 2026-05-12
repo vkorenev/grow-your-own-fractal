@@ -6,6 +6,7 @@ use lsystem_core::Config;
 
 use crate::line_renderer::LinePipeline;
 use crate::lsystem_bridge::{color_params_from_config, geometry_to_vertices, viewport_transform};
+use crate::wgpu_util;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const MIN_WIDTH: u32 = 256;
@@ -61,7 +62,7 @@ pub async fn render_png_standalone(
     config: &Config,
     width: u32,
 ) -> Result<PngExport, PngExportError> {
-    let instance = wgpu::Instance::default();
+    let instance = wgpu_util::new_instance();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
@@ -71,9 +72,10 @@ pub async fn render_png_standalone(
         .await
         .map_err(|_| PngExportError::NoAdapter)?;
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu_util::device_descriptor("png_export_device"))
         .await
         .map_err(PngExportError::RequestDevice)?;
+    wgpu_util::install_uncaptured_error_handler(&device, "PNG export");
 
     render_png(&device, &queue, config, width).await
 }
@@ -104,7 +106,10 @@ pub async fn render_png(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = texture.create_view(&Default::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("png_export_texture_view"),
+        ..Default::default()
+    });
 
     let total_segments = (data.vertices.len() / 2) as u32;
     let color_params = color_params_from_config(&config.colors.line, total_segments);
@@ -135,28 +140,27 @@ pub async fn render_png(
     });
     {
         let [r, g, b] = config.colors.background;
-        let mut pass = encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("png_export_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: r as f64,
-                            g: g as f64,
-                            b: b as f64,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            })
-            .forget_lifetime();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("png_export_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: r as f64,
+                        g: g as f64,
+                        b: b as f64,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+            multiview_mask: None,
+        });
         pipeline.draw(&mut pass);
     }
     encoder.copy_texture_to_buffer(

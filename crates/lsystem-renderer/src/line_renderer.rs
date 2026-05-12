@@ -1,7 +1,11 @@
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
+
+use crate::wgpu_util;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -51,12 +55,12 @@ pub struct LinePipeline {
 impl LinePipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
+            label: Some("lsystem_line_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
+            label: Some("lsystem_line_transform_uniform"),
             contents: bytemuck::bytes_of(&Transform {
                 scale: [1.0, 1.0],
                 offset: [0.0, 0.0],
@@ -65,7 +69,7 @@ impl LinePipeline {
         });
 
         let color_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
+            label: Some("lsystem_line_color_uniform"),
             contents: bytemuck::bytes_of(&ColorParams::default()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -76,21 +80,27 @@ impl LinePipeline {
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,
-                min_binding_size: None,
+                min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Transform>() as u64),
             },
             count: None,
         };
         let color_entry = wgpu::BindGroupLayoutEntry {
             binding: 1,
-            ..uniform_entry
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<ColorParams>() as u64),
+            },
+            count: None,
         };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
+            label: Some("lsystem_line_bind_group_layout"),
             entries: &[uniform_entry, color_entry],
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
+            label: Some("lsystem_line_bind_group"),
             layout: &bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -105,13 +115,13 @@ impl LinePipeline {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bgl],
-            push_constant_ranges: &[],
+            label: Some("lsystem_line_pipeline_layout"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
+            label: Some("lsystem_line_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -139,7 +149,7 @@ impl LinePipeline {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -189,6 +199,7 @@ impl LinePipeline {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.push_debug_group("lsystem_line_draw");
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         if self.vertex_count > 0
@@ -197,18 +208,70 @@ impl LinePipeline {
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.draw(0..self.vertex_count, 0..1);
         }
+        render_pass.pop_debug_group();
+    }
+}
+
+pub struct SurfaceFrame {
+    pub frame: Box<wgpu::SurfaceTexture>,
+    pub view: wgpu::TextureView,
+    pub encoder: wgpu::CommandEncoder,
+    pub reconfigure_after_present: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameSkipReason {
+    Timeout,
+    Occluded,
+    Validation,
+    RepeatedOutdated,
+}
+
+impl Display for FrameSkipReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => write!(f, "surface acquisition timed out"),
+            Self::Occluded => write!(f, "surface is occluded"),
+            Self::Validation => write!(f, "surface acquisition hit a validation error"),
+            Self::RepeatedOutdated => write!(f, "surface remained outdated after reconfigure"),
+        }
     }
 }
 
 pub enum FrameOutcome {
-    Ready(
-        Box<wgpu::SurfaceTexture>,
-        wgpu::TextureView,
-        wgpu::CommandEncoder,
-        bool,
-    ),
+    Ready(SurfaceFrame),
     SurfaceLost,
-    Skip,
+    Skipped(FrameSkipReason),
+}
+
+#[derive(Debug)]
+pub enum GpuInitError {
+    CreateSurface(wgpu::CreateSurfaceError),
+    RequestAdapter(wgpu::RequestAdapterError),
+    RequestDevice(wgpu::RequestDeviceError),
+    NoSurfaceConfig,
+}
+
+impl Display for GpuInitError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CreateSurface(err) => write!(f, "failed to create WebGPU surface: {err}"),
+            Self::RequestAdapter(err) => write!(f, "failed to request WebGPU adapter: {err}"),
+            Self::RequestDevice(err) => write!(f, "failed to request WebGPU device: {err}"),
+            Self::NoSurfaceConfig => write!(f, "WebGPU surface has no supported texture formats"),
+        }
+    }
+}
+
+impl Error for GpuInitError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::CreateSurface(err) => Some(err),
+            Self::RequestAdapter(err) => Some(err),
+            Self::RequestDevice(err) => Some(err),
+            Self::NoSurfaceConfig => None,
+        }
+    }
 }
 
 pub struct GpuContext {
@@ -225,9 +288,11 @@ impl GpuContext {
         target: impl Into<wgpu::SurfaceTarget<'static>>,
         width: u32,
         height: u32,
-    ) -> Result<Self, ()> {
-        let instance = wgpu::Instance::default();
-        let surface = instance.create_surface(target).map_err(|_| ())?;
+    ) -> Result<Self, GpuInitError> {
+        let instance = wgpu_util::new_instance();
+        let surface = instance
+            .create_surface(target)
+            .map_err(GpuInitError::CreateSurface)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -235,11 +300,12 @@ impl GpuContext {
                 force_fallback_adapter: false,
             })
             .await
-            .map_err(|_| ())?;
+            .map_err(GpuInitError::RequestAdapter)?;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu_util::device_descriptor("lsystem_surface_device"))
             .await
-            .map_err(|_| ())?;
+            .map_err(GpuInitError::RequestDevice)?;
+        wgpu_util::install_uncaptured_error_handler(&device, "surface renderer");
 
         #[allow(clippy::arc_with_non_send_sync)]
         let device = Arc::new(device);
@@ -252,15 +318,16 @@ impl GpuContext {
             .iter()
             .find(|f| f.is_srgb())
             .copied()
-            .unwrap_or(caps.formats[0]);
+            .or_else(|| caps.formats.first().copied())
+            .ok_or(GpuInitError::NoSurfaceConfig)?;
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: width.max(1),
             height: height.max(1),
-            present_mode: caps.present_modes[0],
-            alpha_mode: caps.alpha_modes[0],
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -295,32 +362,45 @@ impl GpuContext {
         let mut retried_after_outdated = false;
         let (frame, reconfigure_after) = loop {
             match self.surface.get_current_texture() {
-                Ok(texture) => {
-                    let reconfigure_after = texture.suboptimal;
-                    break (texture, reconfigure_after);
+                wgpu::CurrentSurfaceTexture::Success(texture) => {
+                    break (texture, false);
                 }
-                Err(wgpu::SurfaceError::Outdated) => {
+                wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                    break (texture, true);
+                }
+                wgpu::CurrentSurfaceTexture::Outdated => {
                     if retried_after_outdated {
-                        return FrameOutcome::Skip;
+                        return FrameOutcome::Skipped(FrameSkipReason::RepeatedOutdated);
                     }
                     self.surface.configure(&self.device, &self.surface_config);
                     retried_after_outdated = true;
                 }
-                Err(wgpu::SurfaceError::Lost) => return FrameOutcome::SurfaceLost,
-                Err(wgpu::SurfaceError::OutOfMemory) => {
-                    log::error!("Failed to acquire surface texture: GPU out of memory");
-                    return FrameOutcome::Skip;
+                wgpu::CurrentSurfaceTexture::Lost => return FrameOutcome::SurfaceLost,
+                wgpu::CurrentSurfaceTexture::Timeout => {
+                    return FrameOutcome::Skipped(FrameSkipReason::Timeout);
                 }
-                Err(wgpu::SurfaceError::Timeout | wgpu::SurfaceError::Other) => {
-                    return FrameOutcome::Skip;
+                wgpu::CurrentSurfaceTexture::Occluded => {
+                    return FrameOutcome::Skipped(FrameSkipReason::Occluded);
+                }
+                wgpu::CurrentSurfaceTexture::Validation => {
+                    return FrameOutcome::Skipped(FrameSkipReason::Validation);
                 }
             }
         };
 
         let view = frame.texture.create_view(&Default::default());
-        let encoder = self.device.create_command_encoder(&Default::default());
+        let encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("lsystem_surface_encoder"),
+            });
         // The surface is cleared by the caller's render pass (LoadOp::Clear).
-        FrameOutcome::Ready(Box::new(frame), view, encoder, reconfigure_after)
+        FrameOutcome::Ready(SurfaceFrame {
+            frame: Box::new(frame),
+            view,
+            encoder,
+            reconfigure_after_present: reconfigure_after,
+        })
     }
 
     pub fn end_frame(

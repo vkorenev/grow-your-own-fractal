@@ -1,7 +1,7 @@
 use iced::widget::{
     button, column, container, pick_list, row, scrollable, slider, text, text_editor, text_input,
 };
-use iced::{Background, Color, Element, Length, Theme};
+use iced::{Color, Element, Length, Theme};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
@@ -17,12 +17,9 @@ impl FractalApp {
         let mut controls = column![
             text(TITLE).size(24),
             text("Preset").size(13),
-            pick_list(
-                preset_names,
-                self.selected_preset.clone(),
-                Message::PresetSelected
-            )
-            .width(Length::Fill),
+            pick_list(self.selected_preset.clone(), preset_names, String::clone)
+                .on_select(Message::PresetSelected)
+                .width(Length::Fill),
             text("Config (TOML)").size(13),
             text_editor(&self.toml)
                 .height(260)
@@ -72,7 +69,7 @@ impl FractalApp {
             .width(CONTROL_WIDTH)
             .height(Length::Fill)
             .style(|theme: &Theme| container::Style {
-                background: Some(Background::Color(theme.palette().background)),
+                background: Some(theme.palette().background.base.color.into()),
                 ..Default::default()
             })
             .into()
