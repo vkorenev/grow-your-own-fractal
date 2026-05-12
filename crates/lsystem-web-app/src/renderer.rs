@@ -3,7 +3,8 @@ use std::sync::Arc;
 use lsystem_core::Config;
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
-    ColorParams, FrameOutcome, GpuContext, LinePipeline, Vertex,
+    ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline,
+    SurfaceFrame, Vertex,
 };
 use lsystem_renderer::lsystem_bridge::{
     VertexData, color_params_from_config, geometry_to_vertices,
@@ -21,8 +22,15 @@ pub struct CanvasRenderer {
     needs_upload: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderStatus {
+    Rendered,
+    SurfaceLost,
+    Skipped(FrameSkipReason),
+}
+
 impl CanvasRenderer {
-    pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<Self, ()> {
+    pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<Self, GpuInitError> {
         let (width, height, _) = sync_canvas_size(&canvas);
         let gpu = GpuContext::new(wgpu::SurfaceTarget::Canvas(canvas), width, height).await?;
         let pipeline = LinePipeline::new(&gpu.device, gpu.surface_format());
@@ -39,7 +47,11 @@ impl CanvasRenderer {
         })
     }
 
-    pub fn set_config_and_render(&mut self, canvas: &web_sys::HtmlCanvasElement, config: &Config) {
+    pub fn set_config_and_render(
+        &mut self,
+        canvas: &web_sys::HtmlCanvasElement,
+        config: &Config,
+    ) -> RenderStatus {
         let VertexData {
             vertices,
             bounds_min,
@@ -60,7 +72,7 @@ impl CanvasRenderer {
         self.bounds_max = bounds_max;
         self.camera.reset();
         self.needs_upload = true;
-        self.render(canvas);
+        self.render(canvas)
     }
 
     pub fn pan_and_render(
@@ -68,7 +80,7 @@ impl CanvasRenderer {
         canvas: &web_sys::HtmlCanvasElement,
         css_dx: f32,
         css_dy: f32,
-    ) {
+    ) -> RenderStatus {
         let (_, _, dpr) = sync_canvas_size(canvas);
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
@@ -80,7 +92,7 @@ impl CanvasRenderer {
             width,
             height,
         );
-        self.render(canvas);
+        self.render(canvas)
     }
 
     pub fn zoom_and_render(
@@ -90,7 +102,7 @@ impl CanvasRenderer {
         delta_mode: u32,
         client_x: f32,
         client_y: f32,
-    ) {
+    ) -> RenderStatus {
         let (_, _, dpr) = sync_canvas_size(canvas);
         let rect = canvas.get_bounding_client_rect();
         let cursor = [
@@ -107,71 +119,96 @@ impl CanvasRenderer {
             canvas.width().max(1),
             canvas.height().max(1),
         );
-        self.render(canvas);
+        self.render(canvas)
     }
 
-    pub fn reset_and_render(&mut self, canvas: &web_sys::HtmlCanvasElement) {
+    pub fn reset_and_render(&mut self, canvas: &web_sys::HtmlCanvasElement) -> RenderStatus {
         self.camera.reset();
-        self.render(canvas);
+        self.render(canvas)
     }
 
-    pub fn render(&mut self, canvas: &web_sys::HtmlCanvasElement) {
+    pub fn render(&mut self, canvas: &web_sys::HtmlCanvasElement) -> RenderStatus {
         let (width, height, _) = sync_canvas_size(canvas);
         if self.gpu.size() != (width, height) {
             self.gpu.resize(width, height);
         }
 
         match self.gpu.begin_frame() {
-            FrameOutcome::Skip => {}
-            FrameOutcome::SurfaceLost => {
-                log::error!("WebGPU surface was lost");
-            }
-            FrameOutcome::Ready(frame, view, mut encoder, reconfigure_after) => {
-                if self.needs_upload {
-                    self.pipeline.upload(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &self.vertices,
-                        self.color_params,
-                    );
-                    self.needs_upload = false;
-                }
-                self.pipeline.write_transform(
-                    &self.gpu.queue,
-                    self.camera.compute_transform(
-                        self.bounds_min,
-                        self.bounds_max,
-                        width.max(1),
-                        height.max(1),
-                    ),
-                );
-
-                {
-                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("web_app_fractal_pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(self.background),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        occlusion_query_set: None,
-                        timestamp_writes: None,
-                    });
-                    self.pipeline.draw(&mut pass);
-                }
-
-                self.gpu.end_frame(*frame, encoder, reconfigure_after);
+            FrameOutcome::Skipped(reason) => RenderStatus::Skipped(reason),
+            FrameOutcome::SurfaceLost => RenderStatus::SurfaceLost,
+            FrameOutcome::Ready(frame) => {
+                self.render_frame(width, height, frame);
+                RenderStatus::Rendered
             }
         }
     }
 
+    pub async fn recover_surface_and_render(
+        &mut self,
+        canvas: web_sys::HtmlCanvasElement,
+    ) -> Result<RenderStatus, GpuInitError> {
+        let (width, height, _) = sync_canvas_size(&canvas);
+        let gpu =
+            GpuContext::new(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height).await?;
+        self.pipeline = LinePipeline::new(&gpu.device, gpu.surface_format());
+        self.gpu = gpu;
+        self.needs_upload = true;
+        Ok(self.render(&canvas))
+    }
+
     pub fn device_queue(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         (Arc::clone(&self.gpu.device), Arc::clone(&self.gpu.queue))
+    }
+
+    fn render_frame(&mut self, width: u32, height: u32, frame: SurfaceFrame) {
+        let SurfaceFrame {
+            frame,
+            view,
+            mut encoder,
+            reconfigure_after_present,
+        } = frame;
+
+        if self.needs_upload {
+            self.pipeline.upload(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.vertices,
+                self.color_params,
+            );
+            self.needs_upload = false;
+        }
+        self.pipeline.write_transform(
+            &self.gpu.queue,
+            self.camera.compute_transform(
+                self.bounds_min,
+                self.bounds_max,
+                width.max(1),
+                height.max(1),
+            ),
+        );
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("web_app_fractal_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(self.background),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            self.pipeline.draw(&mut pass);
+        }
+
+        self.gpu
+            .end_frame(*frame, encoder, reconfigure_after_present);
     }
 }
 

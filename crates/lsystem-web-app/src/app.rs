@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
+use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
 use crate::export::{export_png, export_svg};
 use crate::presets::{apply_toml, effective_config, load_presets};
-use crate::renderer::CanvasRenderer;
+use crate::renderer::{CanvasRenderer, RenderStatus};
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
@@ -30,14 +31,64 @@ pub(crate) fn App() -> impl IntoView {
     let (max_iterations, set_max_iterations) = signal(initial.max_iterations);
     let (angle, set_angle) = signal(initial.config.angle);
     let (png_width, set_png_width) = signal(2048u32);
-    let (unsupported, set_unsupported) = signal(false);
+    let (gpu_error, set_gpu_error) = signal(None::<String>);
 
     let canvas_ref = NodeRef::<Canvas>::new();
     let renderer = Rc::new(RefCell::new(None::<CanvasRenderer>));
     let last_pointer = Rc::new(RefCell::new(None::<(i32, f64, f64)>));
 
+    let recover_after_render = {
+        let renderer = Rc::clone(&renderer);
+        move |status: RenderStatus, canvas: web_sys::HtmlCanvasElement| match status {
+            RenderStatus::Rendered
+            | RenderStatus::Skipped(FrameSkipReason::Timeout | FrameSkipReason::Occluded) => {}
+            RenderStatus::Skipped(reason) => {
+                log::error!("Skipped WebGPU frame: {reason}");
+            }
+            RenderStatus::SurfaceLost => {
+                log::error!("WebGPU surface was lost; attempting to recreate it");
+                let renderer = Rc::clone(&renderer);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let Some(mut renderer_state) = renderer.borrow_mut().take() else {
+                        return;
+                    };
+
+                    match renderer_state
+                        .recover_surface_and_render(canvas.clone())
+                        .await
+                    {
+                        Ok(RenderStatus::Rendered)
+                        | Ok(RenderStatus::Skipped(
+                            FrameSkipReason::Timeout | FrameSkipReason::Occluded,
+                        )) => {
+                            set_gpu_error.set(None);
+                            *renderer.borrow_mut() = Some(renderer_state);
+                        }
+                        Ok(RenderStatus::Skipped(reason)) => {
+                            log::error!("Skipped WebGPU frame after surface recovery: {reason}");
+                            set_gpu_error.set(None);
+                            *renderer.borrow_mut() = Some(renderer_state);
+                        }
+                        Ok(RenderStatus::SurfaceLost) => {
+                            log::error!("WebGPU surface was lost again after recovery");
+                            set_gpu_error.set(Some(
+                                "WebGPU surface was lost again after recovery".to_string(),
+                            ));
+                        }
+                        Err(err) => {
+                            log::error!("Failed to recover WebGPU surface: {err}");
+                            set_gpu_error.set(Some(err.to_string()));
+                        }
+                    }
+                });
+            }
+        }
+    };
+    let recover_after_render = Rc::new(recover_after_render);
+
     let render_current = {
         let renderer = Rc::clone(&renderer);
+        let recover_after_render = Rc::clone(&recover_after_render);
         move || {
             let Some(canvas) = canvas_ref.get() else {
                 return;
@@ -46,9 +97,12 @@ pub(crate) fn App() -> impl IntoView {
             else {
                 return;
             };
-            if let Some(renderer) = renderer.borrow_mut().as_mut() {
-                renderer.set_config_and_render(&canvas, &config);
-            }
+            with_renderer(
+                canvas,
+                &renderer,
+                &recover_after_render,
+                |renderer, canvas| renderer.set_config_and_render(canvas, &config),
+            );
         }
     };
     let render_current = Rc::new(render_current);
@@ -60,16 +114,24 @@ pub(crate) fn App() -> impl IntoView {
             wasm_bindgen_futures::spawn_local(async move {
                 match CanvasRenderer::new(canvas.clone()).await {
                     Ok(new_renderer) => {
+                        set_gpu_error.set(None);
                         *renderer.borrow_mut() = Some(new_renderer);
                         render_current();
                     }
-                    Err(()) => set_unsupported.set(true),
+                    Err(err) => {
+                        log::error!("Failed to initialize WebGPU renderer: {err}");
+                        set_gpu_error.set(Some(err.to_string()));
+                    }
                 }
             });
         }
     });
 
-    install_resize_listener(canvas_ref, Rc::clone(&renderer));
+    install_resize_listener(
+        canvas_ref,
+        Rc::clone(&renderer),
+        Rc::clone(&recover_after_render),
+    );
 
     let apply_text = {
         let render_current = Rc::clone(&render_current);
@@ -250,6 +312,7 @@ pub(crate) fn App() -> impl IntoView {
                     on:pointermove={
                         let renderer = Rc::clone(&renderer);
                         let last_pointer = Rc::clone(&last_pointer);
+                        let recover_after_render = Rc::clone(&recover_after_render);
                         move |ev: web_sys::PointerEvent| {
                             let mut last = last_pointer.borrow_mut();
                             let Some((id, last_x, last_y)) = *last else {
@@ -263,10 +326,15 @@ pub(crate) fn App() -> impl IntoView {
                             let dx = x - last_x;
                             let dy = y - last_y;
                             *last = Some((id, x, y));
-                            if let Some(canvas) = canvas_ref.get()
-                                && let Some(renderer) = renderer.borrow_mut().as_mut()
-                            {
-                                renderer.pan_and_render(&canvas, dx as f32, dy as f32);
+                            if let Some(canvas) = canvas_ref.get() {
+                                with_renderer(
+                                    canvas,
+                                    &renderer,
+                                    &recover_after_render,
+                                    |renderer, canvas| {
+                                        renderer.pan_and_render(canvas, dx as f32, dy as f32)
+                                    },
+                                );
                             }
                         }
                     }
@@ -285,37 +353,48 @@ pub(crate) fn App() -> impl IntoView {
                     }
                     on:wheel={
                         let renderer = Rc::clone(&renderer);
+                        let recover_after_render = Rc::clone(&recover_after_render);
                         move |ev: web_sys::WheelEvent| {
                             ev.prevent_default();
-                            if let Some(canvas) = canvas_ref.get()
-                                && let Some(renderer) = renderer.borrow_mut().as_mut()
-                            {
-                                renderer.zoom_and_render(
-                                    &canvas,
-                                    ev.delta_y() as f32,
-                                    ev.delta_mode(),
-                                    ev.client_x() as f32,
-                                    ev.client_y() as f32,
+                            if let Some(canvas) = canvas_ref.get() {
+                                with_renderer(
+                                    canvas,
+                                    &renderer,
+                                    &recover_after_render,
+                                    |renderer, canvas| {
+                                        renderer.zoom_and_render(
+                                            canvas,
+                                            ev.delta_y() as f32,
+                                            ev.delta_mode(),
+                                            ev.client_x() as f32,
+                                            ev.client_y() as f32,
+                                        )
+                                    },
                                 );
                             }
                         }
                     }
                     on:keydown={
                         let renderer = Rc::clone(&renderer);
+                        let recover_after_render = Rc::clone(&recover_after_render);
                         move |ev: web_sys::KeyboardEvent| {
                             if ev.key().eq_ignore_ascii_case("f")
                                 && let Some(canvas) = canvas_ref.get()
-                                && let Some(renderer) = renderer.borrow_mut().as_mut()
                             {
-                                renderer.reset_and_render(&canvas);
+                                with_renderer(
+                                    canvas,
+                                    &renderer,
+                                    &recover_after_render,
+                                    |renderer, canvas| renderer.reset_and_render(canvas),
+                                );
                             }
                         }
                     }
                 />
-                <div class:hidden=move || !unsupported.get() class="unsupported">
+                <div class:hidden=move || gpu_error.get().is_none() class="unsupported">
                     <div>
                         <h2>"WebGPU is not available in this browser."</h2>
-                        <p>"Try the latest Chrome, Edge, or Firefox Nightly with WebGPU enabled."</p>
+                        <p>{move || gpu_error.get().unwrap_or_else(|| "Try the latest Chrome, Edge, or Firefox Nightly with WebGPU enabled.".to_string())}</p>
                     </div>
                 </div>
             </section>
@@ -344,18 +423,42 @@ fn select_value(ev: web_sys::Event) -> String {
         .unwrap_or_default()
 }
 
-fn install_resize_listener(
+fn with_renderer<F, H>(
+    canvas: web_sys::HtmlCanvasElement,
+    renderer: &Rc<RefCell<Option<CanvasRenderer>>>,
+    recover_after_render: &Rc<H>,
+    render: F,
+) where
+    F: FnOnce(&mut CanvasRenderer, &web_sys::HtmlCanvasElement) -> RenderStatus,
+    H: Fn(RenderStatus, web_sys::HtmlCanvasElement) + 'static,
+{
+    let status = renderer
+        .borrow_mut()
+        .as_mut()
+        .map(|renderer| render(renderer, &canvas));
+    if let Some(status) = status {
+        recover_after_render(status, canvas);
+    }
+}
+
+fn install_resize_listener<H>(
     canvas_ref: NodeRef<Canvas>,
     renderer: Rc<RefCell<Option<CanvasRenderer>>>,
-) {
+    recover_after_render: Rc<H>,
+) where
+    H: Fn(RenderStatus, web_sys::HtmlCanvasElement) + 'static,
+{
     let Some(window) = web_sys::window() else {
         return;
     };
     let closure = Closure::<dyn FnMut()>::new(move || {
-        if let Some(canvas) = canvas_ref.get()
-            && let Some(renderer) = renderer.borrow_mut().as_mut()
-        {
-            renderer.render(&canvas);
+        if let Some(canvas) = canvas_ref.get() {
+            with_renderer(
+                canvas,
+                &renderer,
+                &recover_after_render,
+                |renderer, canvas| renderer.render(canvas),
+            );
         }
     });
     if window

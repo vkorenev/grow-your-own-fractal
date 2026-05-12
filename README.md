@@ -102,7 +102,7 @@ you can break long rules across lines for readability.
 ### Exporting
 
 The **Export SVG** button saves the current fractal, including the active
-iteration, angle, and step overrides, as a resolution-independent SVG file.
+iteration and angle overrides, as a resolution-independent SVG file.
 The **Export PNG** button renders the same effective config to a raster PNG
 using the selected PNG width.
 
@@ -135,6 +135,10 @@ using the selected PNG width.
 ```sh
 mise install   # installs trunk at the version pinned in mise.toml
 ```
+
+The Iced dependency is pinned to a specific upstream git revision in the
+workspace manifest so the Iced renderer and the shared `wgpu` dependency stay on
+the same major version. Update them together.
 
 ### Building
 
@@ -194,19 +198,27 @@ crates/
   lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
     src/
       camera.rs             shared pan/zoom state and view transform
-      line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext
+      line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext, surface errors/status
       lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices (accepts segment iterator), color_params_from_config
+      png_export.rs         offscreen wgpu PNG renderer (enabled by the `png` Cargo feature)
+      wgpu_util.rs          shared wgpu instance/device/error-handler helpers
       shader.wgsl           vertex + fragment shaders
   lsystem-app/              Iced native app, plus retained Iced web entry point
     src/
       main.rs               native entry point
       lib.rs                crate entry points for native and web
-      ui.rs                 Iced layout, app state, and shader widget integration
+      ui.rs                 Iced UI module shell
+      ui/app_state.rs       app state, update loop, async geometry generation, preset/config handling
+      ui/controls.rs        Iced controls and side panel layout
+      ui/fractal_canvas.rs  Iced shader widget integration and viewport input handling
       export.rs             native/browser SVG and PNG export helpers
   lsystem-web-app/          browser-first Leptos app with DOM controls and a WebGPU canvas
     src/
-      lib.rs                Leptos app, DOM controls, preset loading, browser downloads
-      renderer.rs           canvas-owned WebGPU renderer using lsystem-renderer
+      lib.rs                wasm entry point
+      app.rs                Leptos app, DOM controls, viewport input, WebGPU error display
+      presets.rs            embedded preset loading and effective-config helpers
+      export.rs             browser SVG/PNG download helpers
+      renderer.rs           canvas-owned WebGPU renderer using lsystem-renderer, including surface recovery
 
 crates/lsystem-app/index.html         Iced web Trunk entry
 crates/lsystem-app/Trunk.toml         Iced web Trunk config
