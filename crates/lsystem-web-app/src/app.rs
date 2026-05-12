@@ -62,10 +62,12 @@ pub(crate) fn App() -> impl IntoView {
                             FrameSkipReason::Timeout | FrameSkipReason::Occluded,
                         )) => {
                             set_gpu_error.set(None);
+                            *renderer.borrow_mut() = Some(renderer_state);
                         }
                         Ok(RenderStatus::Skipped(reason)) => {
                             log::error!("Skipped WebGPU frame after surface recovery: {reason}");
                             set_gpu_error.set(None);
+                            *renderer.borrow_mut() = Some(renderer_state);
                         }
                         Ok(RenderStatus::SurfaceLost) => {
                             log::error!("WebGPU surface was lost again after recovery");
@@ -78,8 +80,6 @@ pub(crate) fn App() -> impl IntoView {
                             set_gpu_error.set(Some(err.to_string()));
                         }
                     }
-
-                    *renderer.borrow_mut() = Some(renderer_state);
                 });
             }
         }
