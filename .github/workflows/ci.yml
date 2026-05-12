@@ -68,6 +68,6 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v4
       - run: trunk build --release --config crates/lsystem-app/Trunk.toml
       - run: trunk build --release --config crates/lsystem-web-app/Trunk.toml

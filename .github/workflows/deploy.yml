@@ -31,7 +31,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v4
       - run: mkdir -p pages/iced
       - run: trunk build --release --public-url /${{ github.event.repository.name }}/ --config crates/lsystem-web-app/Trunk.toml
       - run: cp -R crates/lsystem-web-app/dist/. pages/
