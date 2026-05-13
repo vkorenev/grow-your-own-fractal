@@ -255,10 +255,10 @@ pub enum GpuInitError {
 impl Display for GpuInitError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CreateSurface(err) => write!(f, "failed to create WebGPU surface: {err}"),
-            Self::RequestAdapter(err) => write!(f, "failed to request WebGPU adapter: {err}"),
-            Self::RequestDevice(err) => write!(f, "failed to request WebGPU device: {err}"),
-            Self::NoSurfaceConfig => write!(f, "WebGPU surface has no supported texture formats"),
+            Self::CreateSurface(err) => write!(f, "failed to create GPU surface: {err}"),
+            Self::RequestAdapter(err) => write!(f, "failed to request GPU adapter: {err}"),
+            Self::RequestDevice(err) => write!(f, "failed to request GPU device: {err}"),
+            Self::NoSurfaceConfig => write!(f, "GPU surface has no supported texture formats"),
         }
     }
 }
@@ -289,7 +289,7 @@ impl GpuContext {
         width: u32,
         height: u32,
     ) -> Result<Self, GpuInitError> {
-        let instance = wgpu_util::new_instance();
+        let instance = wgpu_util::new_instance().await;
         let surface = instance
             .create_surface(target)
             .map_err(GpuInitError::CreateSurface)?;
@@ -301,8 +301,17 @@ impl GpuContext {
             })
             .await
             .map_err(GpuInitError::RequestAdapter)?;
+        let adapter_info = adapter.get_info();
+        log::info!(
+            "Selected surface GPU adapter: {} ({})",
+            adapter_info.name,
+            adapter_info.backend
+        );
         let (device, queue) = adapter
-            .request_device(&wgpu_util::device_descriptor("lsystem_surface_device"))
+            .request_device(&wgpu_util::device_descriptor(
+                "lsystem_surface_device",
+                &adapter,
+            ))
             .await
             .map_err(GpuInitError::RequestDevice)?;
         wgpu_util::install_uncaptured_error_handler(&device, "surface renderer");

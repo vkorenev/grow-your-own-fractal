@@ -62,7 +62,7 @@ pub async fn render_png_standalone(
     config: &Config,
     width: u32,
 ) -> Result<PngExport, PngExportError> {
-    let instance = wgpu_util::new_instance();
+    let instance = wgpu_util::new_instance().await;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
@@ -71,8 +71,14 @@ pub async fn render_png_standalone(
         })
         .await
         .map_err(|_| PngExportError::NoAdapter)?;
+    let adapter_info = adapter.get_info();
+    log::info!(
+        "Selected PNG export GPU adapter: {} ({})",
+        adapter_info.name,
+        adapter_info.backend
+    );
     let (device, queue) = adapter
-        .request_device(&wgpu_util::device_descriptor("png_export_device"))
+        .request_device(&wgpu_util::device_descriptor("png_export_device", &adapter))
         .await
         .map_err(PngExportError::RequestDevice)?;
     wgpu_util::install_uncaptured_error_handler(&device, "PNG export");

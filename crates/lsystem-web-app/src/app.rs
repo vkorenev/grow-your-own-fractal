@@ -43,10 +43,10 @@ pub(crate) fn App() -> impl IntoView {
             RenderStatus::Rendered
             | RenderStatus::Skipped(FrameSkipReason::Timeout | FrameSkipReason::Occluded) => {}
             RenderStatus::Skipped(reason) => {
-                log::error!("Skipped WebGPU frame: {reason}");
+                log::error!("Skipped GPU frame: {reason}");
             }
             RenderStatus::SurfaceLost => {
-                log::error!("WebGPU surface was lost; attempting to recreate it");
+                log::error!("GPU surface was lost; attempting to recreate it");
                 let renderer = Rc::clone(&renderer);
                 wasm_bindgen_futures::spawn_local(async move {
                     let Some(mut renderer_state) = renderer.borrow_mut().take() else {
@@ -65,18 +65,18 @@ pub(crate) fn App() -> impl IntoView {
                             *renderer.borrow_mut() = Some(renderer_state);
                         }
                         Ok(RenderStatus::Skipped(reason)) => {
-                            log::error!("Skipped WebGPU frame after surface recovery: {reason}");
+                            log::error!("Skipped GPU frame after surface recovery: {reason}");
                             set_gpu_error.set(None);
                             *renderer.borrow_mut() = Some(renderer_state);
                         }
                         Ok(RenderStatus::SurfaceLost) => {
-                            log::error!("WebGPU surface was lost again after recovery");
+                            log::error!("GPU surface was lost again after recovery");
                             set_gpu_error.set(Some(
-                                "WebGPU surface was lost again after recovery".to_string(),
+                                "GPU surface was lost again after recovery".to_string(),
                             ));
                         }
                         Err(err) => {
-                            log::error!("Failed to recover WebGPU surface: {err}");
+                            log::error!("Failed to recover GPU surface: {err}");
                             set_gpu_error.set(Some(err.to_string()));
                         }
                     }
@@ -119,7 +119,7 @@ pub(crate) fn App() -> impl IntoView {
                         render_current();
                     }
                     Err(err) => {
-                        log::error!("Failed to initialize WebGPU renderer: {err}");
+                        log::error!("Failed to initialize GPU renderer: {err}");
                         set_gpu_error.set(Some(err.to_string()));
                     }
                 }
@@ -393,8 +393,8 @@ pub(crate) fn App() -> impl IntoView {
                 />
                 <div class:hidden=move || gpu_error.get().is_none() class="unsupported">
                     <div>
-                        <h2>"WebGPU is not available in this browser."</h2>
-                        <p>{move || gpu_error.get().unwrap_or_else(|| "Try the latest Chrome, Edge, or Firefox Nightly with WebGPU enabled.".to_string())}</p>
+                        <h2>"GPU rendering is not available in this browser."</h2>
+                        <p>{move || gpu_error.get().unwrap_or_else(|| "Try a browser with WebGPU or WebGL2 enabled.".to_string())}</p>
                     </div>
                 </div>
             </section>
