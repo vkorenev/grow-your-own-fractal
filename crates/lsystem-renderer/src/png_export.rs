@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use futures_channel::oneshot;
 use lsystem_core::Config;
 
-use crate::line_renderer::LinePipeline;
+use crate::line_renderer::LinePipeline2D;
 use crate::lsystem_bridge::{color_params_from_config, geometry_to_vertices, viewport_transform};
 use crate::wgpu_util;
 
@@ -119,7 +119,7 @@ pub async fn render_png(
 
     let total_segments = (data.vertices.len() / 2) as u32;
     let color_params = color_params_from_config(&config.colors.line, total_segments);
-    let mut pipeline = LinePipeline::new(device, FORMAT);
+    let mut pipeline = LinePipeline2D::new(device, FORMAT);
     pipeline.upload(device, queue, &data.vertices, color_params);
     pipeline.write_transform(
         queue,

@@ -26,11 +26,12 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
 
 pub(crate) fn apply_toml(text: &str) -> Result<AppliedConfig, lsystem_core::ConfigError> {
     let config = Config::parse(text)?;
-    let max_iterations = lsystem_core::max_safe_iterations(
-        &config.axiom,
-        &config.rules,
-        lsystem_renderer::line_renderer::MAX_SEGMENTS,
-    );
+    let max_seg = if config.dimensions == 3 {
+        lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
+    } else {
+        lsystem_renderer::line_renderer::MAX_SEGMENTS
+    };
+    let max_iterations = lsystem_core::max_safe_iterations(&config.axiom, &config.rules, max_seg);
     Ok(AppliedConfig {
         config,
         max_iterations,

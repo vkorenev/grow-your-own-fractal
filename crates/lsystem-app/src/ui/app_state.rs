@@ -1,6 +1,6 @@
 use iced::keyboard;
 use iced::widget::row;
-use iced::{Element, Event, Length, Point, Size, Subscription, Task, event};
+use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use include_dir::{Dir, include_dir};
 use lsystem_core::Config;
 use std::sync::{
@@ -16,6 +16,9 @@ use super::fractal_canvas::{Scene, SceneBuildResult, build_scene};
 use super::{PNG_MAX_WIDTH, PNG_MIN_WIDTH};
 
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
+
+const ROTATION_STEP_DEG: f32 = 5.0;
+const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -35,11 +38,23 @@ pub(super) enum Message {
         dy: f32,
         size: Size,
     },
+    FractalOrbit {
+        dx: f32,
+        dy: f32,
+    },
     FractalZoom {
         delta_y: f32,
         cursor: Point,
         size: Size,
     },
+    RotateBy {
+        d_az: f32,
+        d_el: f32,
+    },
+    RollBy(f32),
+    ToggleAutoRotate,
+    SetAutoRotateSpeed(f32),
+    AnimationTick,
 }
 
 pub(super) struct FractalApp {
@@ -56,6 +71,8 @@ pub(super) struct FractalApp {
     pub(super) export_status: Option<String>,
     pub(super) scene_pending: bool,
     pub(super) scene: Scene,
+    pub(super) auto_rotate: bool,
+    pub(super) auto_rotate_speed: f32,
     scene_generation: Arc<AtomicU64>,
 }
 
@@ -83,6 +100,8 @@ impl FractalApp {
             export_status: None,
             scene_pending: false,
             scene: Scene::default(),
+            auto_rotate: false,
+            auto_rotate_speed: 45.0,
             scene_generation: Arc::new(AtomicU64::new(0)),
         };
         let task = app.apply_config();
@@ -121,7 +140,12 @@ impl FractalApp {
                 }
                 Task::none()
             }
-            Message::ExportSvg => self.export(ExportKind::Svg),
+            Message::ExportSvg => {
+                if self.scene.is_3d() {
+                    return Task::none();
+                }
+                self.export(ExportKind::Svg)
+            }
             Message::ExportPng => self.export(ExportKind::Png),
             Message::ExportFinished(outcome) => {
                 self.export_status = Some(match outcome {
@@ -148,12 +172,41 @@ impl FractalApp {
                 self.scene.pan_by_pixels(dx, dy, size);
                 Task::none()
             }
+            Message::FractalOrbit { dx, dy } => {
+                self.scene.orbit_by_pixels(dx, dy);
+                Task::none()
+            }
             Message::FractalZoom {
                 delta_y,
                 cursor,
                 size,
             } => {
                 self.scene.zoom_toward_cursor(delta_y, cursor, size);
+                Task::none()
+            }
+            Message::RotateBy { d_az, d_el } => {
+                if self.scene.is_3d() {
+                    self.scene.orbit_by(d_az, d_el);
+                }
+                Task::none()
+            }
+            Message::RollBy(degrees) => {
+                if self.scene.is_3d() {
+                    self.scene.roll_by(degrees);
+                }
+                Task::none()
+            }
+            Message::ToggleAutoRotate => {
+                self.auto_rotate = !self.auto_rotate;
+                Task::none()
+            }
+            Message::SetAutoRotateSpeed(speed) => {
+                self.auto_rotate_speed = speed;
+                Task::none()
+            }
+            Message::AnimationTick => {
+                self.scene
+                    .auto_rotate_by(self.auto_rotate_speed * AUTO_ROTATE_DT_SECS);
                 Task::none()
             }
         }
@@ -166,29 +219,72 @@ impl FractalApp {
     }
 
     pub(super) fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(|event, status, _window| {
+        let is_3d = self.scene.is_3d();
+        let auto_rotate = self.auto_rotate;
+
+        let key_sub = event::listen_with(|event, status, _window| {
             if status == event::Status::Captured {
                 return None;
             }
             match event {
-                Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: keyboard::Key::Character(ch),
-                    repeat: false,
-                    ..
-                }) if ch.eq_ignore_ascii_case("f") => Some(Message::Fit),
+                Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => match &key {
+                    keyboard::Key::Character(ch) if ch.eq_ignore_ascii_case("f") => {
+                        Some(Message::Fit)
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
+                        Some(Message::RotateBy {
+                            d_az: -ROTATION_STEP_DEG,
+                            d_el: 0.0,
+                        })
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
+                        Some(Message::RotateBy {
+                            d_az: ROTATION_STEP_DEG,
+                            d_el: 0.0,
+                        })
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
+                        Some(Message::RotateBy {
+                            d_az: 0.0,
+                            d_el: ROTATION_STEP_DEG,
+                        })
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
+                        Some(Message::RotateBy {
+                            d_az: 0.0,
+                            d_el: -ROTATION_STEP_DEG,
+                        })
+                    }
+                    keyboard::Key::Character(ch) if ch.eq_ignore_ascii_case("q") => {
+                        Some(Message::RollBy(-ROTATION_STEP_DEG))
+                    }
+                    keyboard::Key::Character(ch) if ch.eq_ignore_ascii_case("e") => {
+                        Some(Message::RollBy(ROTATION_STEP_DEG))
+                    }
+                    _ => None,
+                },
                 _ => None,
             }
-        })
+        });
+
+        if is_3d && auto_rotate {
+            let frames = window::frames().map(|_| Message::AnimationTick);
+            Subscription::batch([key_sub, frames])
+        } else {
+            key_sub
+        }
     }
 
     fn apply_config(&mut self) -> Task<Message> {
         match Config::parse(&self.toml.text()) {
             Ok(config) => {
-                self.max_iterations = lsystem_core::max_safe_iterations(
-                    &config.axiom,
-                    &config.rules,
-                    lsystem_renderer::line_renderer::MAX_SEGMENTS,
-                ) as u32;
+                let max_seg = if config.dimensions == 3 {
+                    lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
+                } else {
+                    lsystem_renderer::line_renderer::MAX_SEGMENTS
+                };
+                self.max_iterations =
+                    lsystem_core::max_safe_iterations(&config.axiom, &config.rules, max_seg) as u32;
                 self.iterations = config.iterations.min(self.max_iterations);
                 self.angle = config.angle;
                 self.base_config = Some(config);
@@ -226,8 +322,9 @@ impl FractalApp {
         self.scene_pending = true;
         self.export_status = None;
 
+        let prev_camera = self.scene.camera.clone();
         Task::perform(
-            build_scene(config, generation, token),
+            build_scene(config, generation, token, prev_camera),
             Message::SceneGenerated,
         )
     }

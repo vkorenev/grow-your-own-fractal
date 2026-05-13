@@ -20,7 +20,7 @@ pub enum ConfigError {
         position: usize,
     },
 
-    #[error("unsupported dimensions value {0} (must be 2)")]
+    #[error("unsupported dimensions value {0} (must be 2 or 3)")]
     InvalidDimensions(u8),
 
     #[error("unmatched `]` at position {position} in `{field}`")]
@@ -80,13 +80,15 @@ impl Default for ColorConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub name: String,
+    /// Number of spatial dimensions: 2 or 3.
+    pub dimensions: u8,
     pub axiom: String,
     pub iterations: u32,
     /// Turn angle in degrees.
     pub angle: f32,
     /// Length of each forward step.
     pub step: f32,
-    /// Turtle heading at the start, in degrees (0 = +X, counter-clockwise positive).
+    /// Turtle heading at the start, in degrees (0 = +X, counter-clockwise positive). 2D only.
     pub initial_heading: f32,
     /// Production rules: single ASCII letter → replacement string.
     pub rules: HashMap<char, String>,
@@ -97,7 +99,7 @@ impl Config {
     pub fn parse(toml_str: &str) -> Result<Self, ConfigError> {
         let raw: RawConfig = toml::from_str(toml_str)?;
 
-        if raw.dimensions != 2 {
+        if raw.dimensions != 2 && raw.dimensions != 3 {
             return Err(ConfigError::InvalidDimensions(raw.dimensions));
         }
         if !raw.step.is_finite() || raw.step <= 0.0 {
@@ -112,7 +114,7 @@ impl Config {
 
         // Strip whitespace from axiom and rule RHS, then validate symbols.
         let axiom: String = raw.axiom.chars().filter(|c| !c.is_whitespace()).collect();
-        validate_symbols(&axiom, "axiom")?;
+        validate_symbols(&axiom, "axiom", raw.dimensions)?;
         validate_bracket_balance(&axiom, "axiom")?;
 
         let mut rules = HashMap::with_capacity(raw.rules.len());
@@ -129,7 +131,7 @@ impl Config {
             }
 
             let rhs: String = rhs_raw.chars().filter(|c| !c.is_whitespace()).collect();
-            validate_symbols(&rhs, &format!("rules.{key}"))?;
+            validate_symbols(&rhs, &format!("rules.{key}"), raw.dimensions)?;
             validate_bracket_balance(&rhs, &format!("rules.{key}"))?;
             rules.insert(key, rhs);
         }
@@ -156,6 +158,7 @@ impl Config {
 
         Ok(Config {
             name: raw.name,
+            dimensions: raw.dimensions,
             axiom,
             iterations: raw.iterations,
             angle: raw.angle,
@@ -320,16 +323,6 @@ step = 1.0
     }
 
     #[test]
-    fn rejects_unsupported_symbol() {
-        let toml = "name=\"bad\"\naxiom=\"F&F\"\niterations=1\nangle=90.0\nstep=1.0";
-        let err = Config::parse(toml).unwrap_err();
-        assert!(
-            matches!(err, ConfigError::InvalidSymbol { ch: '&', .. }),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn rejects_multi_char_rule_key() {
         let toml = r#"
 name = "bad"
@@ -350,7 +343,7 @@ FF = "FFF"
 
     #[test]
     fn rejects_invalid_dimensions() {
-        for bad_dim in [3u8, 4] {
+        for bad_dim in [1u8, 4] {
             let toml = format!(
                 "name=\"bad\"\ndimensions={bad_dim}\naxiom=\"F\"\niterations=1\nangle=90.0\nstep=1.0"
             );
@@ -360,6 +353,23 @@ FF = "FFF"
                 "dim={bad_dim}: unexpected error: {err}"
             );
         }
+    }
+
+    #[test]
+    fn accepts_dimensions_3_with_3d_symbols() {
+        let toml =
+            "name=\"t\"\ndimensions=3\naxiom=\"F&F^F/F\"\niterations=0\nangle=90.0\nstep=1.0";
+        Config::parse(toml).expect("3D config with 3D symbols should be valid");
+    }
+
+    #[test]
+    fn rejects_3d_symbols_in_2d_config() {
+        let toml = "name=\"bad\"\naxiom=\"F&F\"\niterations=1\nangle=90.0\nstep=1.0";
+        let err = Config::parse(toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidSymbol { ch: '&', .. }),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -9,20 +9,50 @@ use crate::wgpu_util;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
+pub struct Vertex2D {
+    pub position: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct Vertex3D {
+    pub position: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Transform {
     pub scale: [f32; 2],
     pub offset: [f32; 2],
 }
 
+/// Column-major MVP matrix uniform.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 2],
+pub struct Mvp {
+    pub matrix: [[f32; 4]; 4],
+}
+
+impl Default for Mvp {
+    fn default() -> Self {
+        Self {
+            matrix: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+        }
+    }
 }
 
 /// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
-/// Each segment occupies 2 vertices × `size_of::<Vertex>()` bytes.
-pub const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex>() as u64);
+/// Each 2D segment occupies 2 vertices × `size_of::<Vertex2D>()` bytes.
+pub const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex2D>() as u64);
+
+/// Maximum number of 3D line segments that fit in a 256 MiB vertex buffer.
+/// Each 3D segment occupies 2 vertices × `size_of::<Vertex3D>()` bytes.
+pub const MAX_SEGMENTS_3D: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex3D>() as u64);
 
 /// Per-frame color parameters written to the GPU as a uniform.
 /// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
@@ -41,26 +71,83 @@ pub struct ColorParams {
     pub _pad2: f32,
 }
 
-/// GPU pipeline for rendering colored line-list geometry.
-pub struct LinePipeline {
+struct GrowableVertexBuffer {
+    buffer: Option<wgpu::Buffer>,
+    capacity: u64,
+    count: u32,
+}
+
+impl GrowableVertexBuffer {
+    fn new() -> Self {
+        Self {
+            buffer: None,
+            capacity: 0,
+            count: 0,
+        }
+    }
+
+    fn upload<V: bytemuck::Pod>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[V],
+        label: &str,
+    ) {
+        let required = std::mem::size_of_val(vertices) as u64;
+        if required > 0 {
+            if self.capacity < required {
+                self.capacity = required.next_power_of_two();
+                self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size: self.capacity,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            if let Some(buffer) = &self.buffer {
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(vertices));
+            }
+        }
+        self.count = vertices.len() as u32;
+    }
+}
+
+fn draw_line_list(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    vertex_buffer: &GrowableVertexBuffer,
+    debug_label: &str,
+) {
+    render_pass.push_debug_group(debug_label);
+    render_pass.set_pipeline(pipeline);
+    render_pass.set_bind_group(0, bind_group, &[]);
+    if vertex_buffer.count > 0
+        && let Some(buf) = &vertex_buffer.buffer
+    {
+        render_pass.set_vertex_buffer(0, buf.slice(..));
+        render_pass.draw(0..vertex_buffer.count, 0..1);
+    }
+    render_pass.pop_debug_group();
+}
+
+pub struct LinePipeline2D {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    vertex_buffer: Option<wgpu::Buffer>,
-    vertex_capacity: u64,
-    vertex_count: u32,
+    vertex_buffer: GrowableVertexBuffer,
 }
 
-impl LinePipeline {
+impl LinePipeline2D {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("lsystem_line_shader"),
+            label: Some("lsystem_2d_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("lsystem_line_transform_uniform"),
+            label: Some("lsystem_2d_transform_uniform"),
             contents: bytemuck::bytes_of(&Transform {
                 scale: [1.0, 1.0],
                 offset: [0.0, 0.0],
@@ -69,38 +156,43 @@ impl LinePipeline {
         });
 
         let color_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("lsystem_line_color_uniform"),
+            label: Some("lsystem_2d_color_uniform"),
             contents: bytemuck::bytes_of(&ColorParams::default()),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let uniform_entry = wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Transform>() as u64),
-            },
-            count: None,
-        };
-        let color_entry = wgpu::BindGroupLayoutEntry {
-            binding: 1,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<ColorParams>() as u64),
-            },
-            count: None,
-        };
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("lsystem_line_bind_group_layout"),
-            entries: &[uniform_entry, color_entry],
+            label: Some("lsystem_2d_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Transform>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<ColorParams>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("lsystem_line_bind_group"),
+            label: Some("lsystem_2d_bind_group"),
             layout: &bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -115,19 +207,19 @@ impl LinePipeline {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("lsystem_line_pipeline_layout"),
+            label: Some("lsystem_2d_pipeline_layout"),
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("lsystem_line_pipeline"),
+            label: Some("lsystem_2d_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                    array_stride: std::mem::size_of::<Vertex2D>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x2],
                 }],
@@ -158,9 +250,7 @@ impl LinePipeline {
             uniform_buffer,
             color_params_buffer,
             bind_group,
-            vertex_buffer: None,
-            vertex_capacity: 0,
-            vertex_count: 0,
+            vertex_buffer: GrowableVertexBuffer::new(),
         }
     }
 
@@ -168,25 +258,11 @@ impl LinePipeline {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        vertices: &[Vertex],
+        vertices: &[Vertex2D],
         color_params: ColorParams,
     ) {
-        let required_size = std::mem::size_of_val(vertices) as u64;
-        if required_size > 0 {
-            if self.vertex_capacity < required_size {
-                self.vertex_capacity = required_size.next_power_of_two();
-                self.vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("lsystem_line_vertices"),
-                    size: self.vertex_capacity,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            if let Some(buffer) = &self.vertex_buffer {
-                queue.write_buffer(buffer, 0, bytemuck::cast_slice(vertices));
-            }
-        }
-        self.vertex_count = vertices.len() as u32;
+        self.vertex_buffer
+            .upload(device, queue, vertices, "lsystem_2d_vertices");
         queue.write_buffer(
             &self.color_params_buffer,
             0,
@@ -199,16 +275,162 @@ impl LinePipeline {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        render_pass.push_debug_group("lsystem_line_draw");
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.bind_group, &[]);
-        if self.vertex_count > 0
-            && let Some(vertex_buffer) = &self.vertex_buffer
-        {
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.draw(0..self.vertex_count, 0..1);
+        draw_line_list(
+            render_pass,
+            &self.pipeline,
+            &self.bind_group,
+            &self.vertex_buffer,
+            "lsystem_2d_line_draw",
+        );
+    }
+}
+
+pub struct LinePipeline3D {
+    pipeline: wgpu::RenderPipeline,
+    mvp_buffer: wgpu::Buffer,
+    color_params_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    vertex_buffer: GrowableVertexBuffer,
+}
+
+impl LinePipeline3D {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lsystem_3d_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader3d.wgsl").into()),
+        });
+
+        let mvp_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("lsystem_3d_mvp_uniform"),
+            contents: bytemuck::bytes_of(&Mvp::default()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let color_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("lsystem_3d_color_uniform"),
+            contents: bytemuck::bytes_of(&ColorParams::default()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lsystem_3d_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Mvp>() as u64),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<ColorParams>() as u64
+                        ),
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("lsystem_3d_bind_group"),
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: mvp_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: color_params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("lsystem_3d_pipeline_layout"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("lsystem_3d_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex3D>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            mvp_buffer,
+            color_params_buffer,
+            bind_group,
+            vertex_buffer: GrowableVertexBuffer::new(),
         }
-        render_pass.pop_debug_group();
+    }
+
+    pub fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: &[Vertex3D],
+        color_params: ColorParams,
+    ) {
+        self.vertex_buffer
+            .upload(device, queue, vertices, "lsystem_3d_vertices");
+        queue.write_buffer(
+            &self.color_params_buffer,
+            0,
+            bytemuck::bytes_of(&color_params),
+        );
+    }
+
+    pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
+        queue.write_buffer(&self.mvp_buffer, 0, bytemuck::bytes_of(&mvp));
+    }
+
+    pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        draw_line_list(
+            render_pass,
+            &self.pipeline,
+            &self.bind_group,
+            &self.vertex_buffer,
+            "lsystem_3d_line_draw",
+        );
     }
 }
 

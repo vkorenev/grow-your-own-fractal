@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -11,6 +11,9 @@ use wasm_bindgen::closure::Closure;
 use crate::export::{export_png, export_svg};
 use crate::presets::{apply_toml, effective_config, load_presets};
 use crate::renderer::{CanvasRenderer, RenderStatus};
+
+const ROTATION_STEP_DEG: f32 = 5.0;
+const AUTO_ROTATE_DT_MS: f32 = 16.0;
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
@@ -32,10 +35,20 @@ pub(crate) fn App() -> impl IntoView {
     let (angle, set_angle) = signal(initial.config.angle);
     let (png_width, set_png_width) = signal(2048u32);
     let (gpu_error, set_gpu_error) = signal(None::<String>);
+    let (auto_rotate, set_auto_rotate) = signal(false);
+    let (auto_rotate_speed, set_auto_rotate_speed) = signal(45.0f32);
+
+    let is_3d = move || {
+        base_config
+            .get()
+            .map(|c| c.dimensions == 3)
+            .unwrap_or(false)
+    };
 
     let canvas_ref = NodeRef::<Canvas>::new();
     let renderer = Rc::new(RefCell::new(None::<CanvasRenderer>));
     let last_pointer = Rc::new(RefCell::new(None::<(i32, f64, f64)>));
+    let interval_id: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
 
     let recover_after_render = {
         let renderer = Rc::clone(&renderer);
@@ -152,6 +165,52 @@ pub(crate) fn App() -> impl IntoView {
     };
     let apply_text = Rc::new(apply_text);
 
+    let toggle_auto_rotate = {
+        let renderer = Rc::clone(&renderer);
+        let recover_after_render = Rc::clone(&recover_after_render);
+        let interval_id = Rc::clone(&interval_id);
+        move |_: web_sys::MouseEvent| {
+            if auto_rotate.get() {
+                if let Some(id) = interval_id.take()
+                    && let Some(window) = web_sys::window()
+                {
+                    window.clear_interval_with_handle(id);
+                }
+                set_auto_rotate.set(false);
+            } else {
+                set_auto_rotate.set(true);
+                let renderer = Rc::clone(&renderer);
+                let recover_after_render = Rc::clone(&recover_after_render);
+                let interval_id_store = Rc::clone(&interval_id);
+                let interval_id_cancel = Rc::clone(&interval_id);
+                let closure = Closure::<dyn FnMut()>::new(move || {
+                    let degrees = auto_rotate_speed.get() * (AUTO_ROTATE_DT_MS / 1000.0);
+                    if let Some(canvas) = canvas_ref.get() {
+                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| {
+                            r.auto_rotate_and_render(c, degrees)
+                        });
+                    }
+                    // Stop if auto_rotate signal was turned off from outside.
+                    if !auto_rotate.get()
+                        && let Some(id) = interval_id_cancel.take()
+                        && let Some(window) = web_sys::window()
+                    {
+                        window.clear_interval_with_handle(id);
+                    }
+                });
+                if let Some(window) = web_sys::window()
+                    && let Ok(id) = window.set_interval_with_callback_and_timeout_and_arguments_0(
+                        closure.as_ref().unchecked_ref(),
+                        AUTO_ROTATE_DT_MS as i32,
+                    )
+                {
+                    interval_id_store.set(Some(id));
+                }
+                closure.forget();
+            }
+        }
+    };
+
     let preset_options = presets
         .iter()
         .enumerate()
@@ -266,7 +325,11 @@ pub(crate) fn App() -> impl IntoView {
                     />
 
                     <div class="export-row">
-                        <button type="button" on:click=move |_| export_svg(base_config.get(), iterations.get(), angle.get())>
+                        <button
+                            type="button"
+                            class:hidden=move || is_3d()
+                            on:click=move |_| export_svg(base_config.get(), iterations.get(), angle.get())
+                        >
                             "Export SVG"
                         </button>
                         <button
@@ -286,6 +349,31 @@ pub(crate) fn App() -> impl IntoView {
                         >
                             "Export PNG"
                         </button>
+                    </div>
+
+                    <div class:hidden=move || !is_3d()>
+                        <button
+                            type="button"
+                            on:click=toggle_auto_rotate
+                        >
+                            {move || if auto_rotate.get() { "Auto-rotate: On" } else { "Auto-rotate: Off" }}
+                        </button>
+                        <label for="auto-rotate-speed">"Speed (°/s)"</label>
+                        <div class="row">
+                            <input
+                                id="auto-rotate-speed"
+                                type="range"
+                                min="10"
+                                max="360"
+                                step="10"
+                                prop:value=move || auto_rotate_speed.get().to_string()
+                                on:input=move |ev| {
+                                    let next = input_value(ev).parse::<f32>().unwrap_or(45.0);
+                                    set_auto_rotate_speed.set(next.clamp(10.0, 360.0));
+                                }
+                            />
+                            <output>{move || format!("{:.0}", auto_rotate_speed.get())}</output>
+                        </div>
                     </div>
                 </div>
             </aside>
@@ -332,7 +420,7 @@ pub(crate) fn App() -> impl IntoView {
                                     &renderer,
                                     &recover_after_render,
                                     |renderer, canvas| {
-                                        renderer.pan_and_render(canvas, dx as f32, dy as f32)
+                                        renderer.drag_and_render(canvas, dx as f32, dy as f32)
                                     },
                                 );
                             }
@@ -378,15 +466,46 @@ pub(crate) fn App() -> impl IntoView {
                         let renderer = Rc::clone(&renderer);
                         let recover_after_render = Rc::clone(&recover_after_render);
                         move |ev: web_sys::KeyboardEvent| {
-                            if ev.key().eq_ignore_ascii_case("f")
-                                && let Some(canvas) = canvas_ref.get()
-                            {
+                            let Some(canvas) = canvas_ref.get() else { return };
+                            let key = ev.key();
+                            if key.eq_ignore_ascii_case("f") {
                                 with_renderer(
                                     canvas,
                                     &renderer,
                                     &recover_after_render,
                                     |renderer, canvas| renderer.reset_and_render(canvas),
                                 );
+                            } else if is_3d() {
+                                let handled = match key.as_str() {
+                                    "ArrowLeft" => {
+                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, -ROTATION_STEP_DEG, 0.0));
+                                        true
+                                    }
+                                    "ArrowRight" => {
+                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, ROTATION_STEP_DEG, 0.0));
+                                        true
+                                    }
+                                    "ArrowUp" => {
+                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, 0.0, ROTATION_STEP_DEG));
+                                        true
+                                    }
+                                    "ArrowDown" => {
+                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, 0.0, -ROTATION_STEP_DEG));
+                                        true
+                                    }
+                                    "q" | "Q" => {
+                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.roll_and_render(c, -ROTATION_STEP_DEG));
+                                        true
+                                    }
+                                    "e" | "E" => {
+                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.roll_and_render(c, ROTATION_STEP_DEG));
+                                        true
+                                    }
+                                    _ => false,
+                                };
+                                if handled {
+                                    ev.prevent_default();
+                                }
                             }
                         }
                     }
