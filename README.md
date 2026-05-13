@@ -1,9 +1,10 @@
 # Grow Your Own Fractal
 
 An interactive [L-System](https://en.wikipedia.org/wiki/L-system) (Lindenmayer
-system) visualizer built with Rust, WebGPU, and WebAssembly. The workspace
+system) visualizer built with Rust, wgpu, and WebAssembly. The workspace
 includes an Iced native/wasm app and a browser-first Leptos app with DOM
-controls and a WebGPU canvas.
+controls and a GPU canvas that uses WebGPU with a WebGL2 fallback on browser
+wasm targets.
 
 ---
 
@@ -130,7 +131,7 @@ using the selected PNG width.
 |------|---------|
 | [Rust](https://rustup.rs/) stable | compiler (version pinned in `rust-toolchain.toml`) |
 | [mise](https://mise.jdx.dev/) | installs pinned tools — trunk (version pinned in `mise.toml`) |
-| Chrome ≥ 113 / Edge | WebGPU support in the browser |
+| Modern browser | WebGPU support, or WebGL2 for the fallback renderer |
 
 ```sh
 mise install   # installs trunk at the version pinned in mise.toml
@@ -212,13 +213,13 @@ crates/
       ui/controls.rs        Iced controls and side panel layout
       ui/fractal_canvas.rs  Iced shader widget integration and viewport input handling
       export.rs             native/browser SVG and PNG export helpers
-  lsystem-web-app/          browser-first Leptos app with DOM controls and a WebGPU canvas
+  lsystem-web-app/          browser-first Leptos app with DOM controls and a GPU canvas
     src/
       lib.rs                wasm entry point
-      app.rs                Leptos app, DOM controls, viewport input, WebGPU error display
+      app.rs                Leptos app, DOM controls, viewport input, GPU error display
       presets.rs            embedded preset loading and effective-config helpers
       export.rs             browser SVG/PNG download helpers
-      renderer.rs           canvas-owned WebGPU renderer using lsystem-renderer, including surface recovery
+      renderer.rs           canvas-owned wgpu renderer using lsystem-renderer, including surface recovery
 
 crates/lsystem-app/index.html         Iced web Trunk entry
 crates/lsystem-app/Trunk.toml         Iced web Trunk config
