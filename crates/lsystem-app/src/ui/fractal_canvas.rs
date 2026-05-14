@@ -33,8 +33,6 @@ enum SceneGeometry {
     },
 }
 
-
-
 #[derive(Clone)]
 pub(super) struct Scene {
     geometry: SceneGeometry,

@@ -32,16 +32,17 @@ pub(crate) fn export_png(
     let Some(config) = effective_config(config, iterations, angle) else {
         return;
     };
-    let Some((device, queue)) = renderer
-        .borrow()
-        .as_ref()
-        .map(|renderer| renderer.device_queue())
-    else {
+    let Some((device, queue, camera)) = renderer.borrow().as_ref().map(|renderer| {
+        let (device, queue) = renderer.device_queue();
+        (device, queue, renderer.camera())
+    }) else {
         return;
     };
     let filename = sanitize_filename(&config.name, "png");
     wasm_bindgen_futures::spawn_local(async move {
-        match lsystem_renderer::png_export::render_png(&device, &queue, &config, width).await {
+        match lsystem_renderer::png_export::render_png(&device, &queue, &config, width, &camera)
+            .await
+        {
             Ok(png) => {
                 let array = js_sys::Array::new();
                 let bytes = js_sys::Uint8Array::from(png.bytes.as_slice());

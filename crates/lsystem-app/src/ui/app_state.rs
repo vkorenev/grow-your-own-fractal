@@ -365,6 +365,7 @@ impl FractalApp {
                     config,
                     width: png_width,
                     path,
+                    camera: self.scene.camera.clone(),
                 },
             }
         };
@@ -375,6 +376,7 @@ impl FractalApp {
             ExportKind::Png => ExportRequest::Png {
                 config,
                 width: png_width,
+                camera: self.scene.camera.clone(),
             },
         };
 

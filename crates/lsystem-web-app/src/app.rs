@@ -148,14 +148,24 @@ pub(crate) fn App() -> impl IntoView {
 
     let apply_text = {
         let render_current = Rc::clone(&render_current);
+        let interval_id = Rc::clone(&interval_id);
         move |text: String| match apply_toml(&text) {
             Ok(applied) => {
                 let max = applied.max_iterations;
+                let new_is_3d = applied.config.dimensions == 3;
                 set_max_iterations.set(max);
                 set_iterations.set(applied.config.iterations.min(max));
                 set_angle.set(applied.config.angle);
                 set_base_config.set(Some(applied.config));
                 set_error.set(None);
+                if !new_is_3d && auto_rotate.get() {
+                    if let Some(id) = interval_id.take()
+                        && let Some(window) = web_sys::window()
+                    {
+                        window.clear_interval_with_handle(id);
+                    }
+                    set_auto_rotate.set(false);
+                }
                 render_current();
             }
             Err(err) => {

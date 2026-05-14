@@ -246,6 +246,10 @@ impl CanvasRenderer {
         (Arc::clone(&self.gpu.device), Arc::clone(&self.gpu.queue))
     }
 
+    pub fn camera(&self) -> Camera {
+        self.camera.clone()
+    }
+
     fn render_frame(&mut self, width: u32, height: u32, frame: SurfaceFrame) {
         let SurfaceFrame {
             frame,
