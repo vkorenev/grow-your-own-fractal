@@ -1,8 +1,22 @@
+[metadata]
 name = "Snowflake"
+
+[l-system]
 dimensions = 2
 axiom = "[F]+[F]+[F]+[F]+[F]+[F]"
 iterations = 4
-angle = 60.0
 
-[rules]
+[l-system.rules]
 F = "F[+FF][-FF]FF[+F][-F]FF"
+
+[turtle]
+angle = 60.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]

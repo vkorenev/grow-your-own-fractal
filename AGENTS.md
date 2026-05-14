@@ -52,17 +52,17 @@ Four-crate workspace under `crates/`:
 
 | Module | Role |
 |--------|------|
-| `config.rs` | Parses TOML `Config` struct (including `ColorConfig`/`LineColorConfig` for background and line colors); validates axiom, rules, step/angle finiteness, bracket balance |
+| `config.rs` | Parses nested TOML into a format-preserving `ConfigDocument` backed by `toml_edit::DocumentMut`, validates to `Config` (`GenerationConfig` plus `ColorConfig`/`LineColorConfig`), serializes unchanged documents byte-for-byte, and validates symbols, rules, step/angle finiteness, bracket balance, and per-component RGB color ranges |
 | `alphabet.rs` | Reserved symbols (`F f + - \| [ ]` for 2D; additionally `& ^ / \` for 3D), character set validation per `dimensions` |
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
 | `turtle/mod.rs` | Declares `turtle2d` and `turtle3d` submodules |
 | `turtle/turtle2d.rs` | `Segments2D<I>` — pull iterator over `[Vec2; 2]` segments; owns position, heading, and bracket stack; yields one segment per `'F'` without collecting |
 | `turtle/turtle3d.rs` | `Segments3D<I>` — pull iterator over `[Vec3; 2]` segments; uses `glam::Quat` orientation (heading = `orientation * Vec3::X`); dispatches `& ^ / \` pitch/roll symbols in addition to the 2D set |
 | `svg_export.rs` | `export_svg(config) -> String` — generates an SVG string; gated behind the `svg` Cargo feature |
-| `lib.rs` | Public API: `generate(config) -> impl Iterator<Item = [Vec2; 2]>` and `generate_3d(config) -> impl Iterator<Item = [Vec3; 2]>`; exposes `svg_export` when the `svg` feature is enabled |
+| `lib.rs` | Public API: `generate(generation_config) -> impl Iterator<Item = [Vec2; 2]>` and `generate_3d(generation_config) -> impl Iterator<Item = [Vec3; 2]>`; exposes `svg_export` when the `svg` feature is enabled |
 
-Data flow (2D): `Config` → `OwnedExpandIter` → `Segments2D` → streaming `[Vec2; 2]` segments.
-Data flow (3D): `Config` → `OwnedExpandIter` → `Segments3D` → streaming `[Vec3; 2]` segments.
+Data flow (2D): `ConfigDocument` → `Config` → `GenerationConfig` → `OwnedExpandIter` → `Segments2D` → streaming `[Vec2; 2]` segments.
+Data flow (3D): `ConfigDocument` → `Config` → `GenerationConfig` → `OwnedExpandIter` → `Segments3D` → streaming `[Vec3; 2]` segments.
 
 ### `lsystem-renderer` — toolkit-independent wgpu renderer
 
@@ -118,6 +118,8 @@ Bundled TOML L-System definitions. New fractals are added here; they are embedde
 - **Iced/wgpu version coupling**: the workspace `wgpu` dependency is pinned to version 29 and Iced is pinned to a specific upstream git revision that uses the same wgpu major version. Do not independently bump `wgpu` or the Iced git revision; update them in lockstep and verify native + wasm builds.
 - **3D turtle uses quaternion orientation**: `Segments3D<I>` stores a `glam::Quat` orientation instead of a scalar heading angle. Heading = `orientation * Vec3::X`; left = `* Vec3::Y`; up = `* Vec3::Z`. Each rotation symbol applies `orientation *= Quat::from_rotation_*(angle)` in local space, so rotations compose correctly regardless of prior orientation.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
+- **Format-preserving config documents**: `ConfigDocument` owns a `toml_edit::DocumentMut`, so parsing and serializing an unchanged preset preserves comments, spacing, and string quoting byte-for-byte. New canonical TOML uses the nested schema only: `[metadata]`, `[l-system]`, explicit `[l-system.rules]`, `[turtle]`, `[colors]`, and `[colors.line]`.
+- **Hue-cycle config uses RGB input**: `LineColorConfig::HueCycle { initial }` stores the starting color as an RGB array. SVG export and the renderer derive HSV parameters from that RGB value at the output boundary.
 - **Fractal lives in an Iced shader widget**: `lsystem-app` renders the fractal through `iced::widget::shader`. Iced owns the window, surface, event loop, and render pass; the custom primitive owns only the fractal GPU pipeline state.
 - **Async scene generation**: `FractalApp` schedules geometry generation with `Task::perform` when presets, TOML, iterations, or angle change. Each request gets a monotonic generation token; stale results are ignored, so rapid slider changes do not block the UI with outdated work.
 - **Scene-revision uploads**: `FractalApp::schedule_scene_generation()` increments a monotonic generation token whenever geometry is requested. Completed scene builds store that token as `Scene::revision`; the Iced shader pipeline uploads vertices and color params only when the observed revision changes, while camera transforms are written during prepare.

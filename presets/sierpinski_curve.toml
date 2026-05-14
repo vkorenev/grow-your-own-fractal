@@ -1,11 +1,22 @@
+[metadata]
 name = "Sierpinski Curve"
+
+[l-system]
 dimensions = 2
 axiom = "F+XF+F+XF"
 iterations = 5
-angle = 90.0
 
-[line_color]
-mode = "hue_cycle"
-
-[rules]
+[l-system.rules]
 X = "XF-F+F-XF+F+XF-F+F-X"
+
+[turtle]
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "hue_cycle"
+initial = [0.9, 0.0, 0.0]

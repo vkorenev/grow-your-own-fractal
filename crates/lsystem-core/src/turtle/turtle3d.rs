@@ -111,18 +111,32 @@ mod tests {
     fn generate_3d_uses_config_initial_heading() {
         let cfg = Config::parse(
             r#"
+[metadata]
 name = "t"
+
+[l-system]
 dimensions = 3
 axiom = "F"
 iterations = 0
+
+[l-system.rules]
+
+[turtle]
 angle = 90.0
 step = 1.0
 initial_heading = 90.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
 "#,
         )
         .expect("valid test config");
 
-        let segments: Vec<[Vec3; 2]> = crate::generate_3d(&cfg).collect();
+        let segments: Vec<[Vec3; 2]> = crate::generate_3d(&cfg.generation).collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!(a.distance(Vec3::ZERO) < 1e-5);

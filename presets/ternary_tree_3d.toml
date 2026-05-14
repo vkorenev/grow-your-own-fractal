@@ -1,15 +1,24 @@
+[metadata]
 name = "3D Ternary Tree"
+
+[l-system]
 dimensions = 3
 axiom = "FA"
 iterations = 8
+
+[l-system.rules]
+A = '[&FA]///[&FA]///[&FA]'
+F = 'FF'
+
+[turtle]
 angle = 40.0
+step = 1.0
 initial_heading = 90.0
 
-[line_color]
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
 mode = "gradient"
 start = [0.55, 0.25, 0.05]
 end = [0.10, 0.95, 0.45]
-
-[rules]
-A = '[&FA]///[&FA]///[&FA]'
-F = 'FF'

@@ -65,21 +65,30 @@ Any other character is a validation error.
 Each L-System is defined in a TOML file:
 
 ```toml
+[metadata]
 name = "Koch Snowflake"
-dimensions = 2          # 2 (default) or 3
+
+[l-system]
+dimensions = 2          # 2 or 3
 axiom = "F++F++F"
 iterations = 4          # number of times the rules are applied
+
+[l-system.rules]
+F = "F-F++F-F"          # each F is replaced by this string each iteration
+
+[turtle]
 angle = 60.0            # degrees; used by + - and |
 step = 1.0              # length of each F / f move
 initial_heading = 0.0   # starting direction in degrees (0 = east,
                         # counter-clockwise positive)
 
-background_color = [0.0, 0.0, 0.0]   # RGB 0–1; optional, default black
+[colors]
+background = [0.0, 0.0, 0.0]   # RGB 0-1
 
-[line_color]
-# mode = "solid"          # (default) single color; set with `color`
+[colors.line]
+# mode = "solid"          # single color; set with `color`
 # mode = "gradient"       # linear RGB from `start` to `end` across all segments
-# mode = "hue_cycle"      # full HSV hue rotation across all segments
+# mode = "hue_cycle"      # full hue rotation starting from `initial`
 mode = "solid"
 color = [0.0, 0.9, 0.5]  # used by solid mode
 
@@ -89,16 +98,21 @@ color = [0.0, 0.9, 0.5]  # used by solid mode
 # end   = [0.6, 0.0, 1.0]
 
 # hue_cycle example:
-# mode       = "hue_cycle"
-# start_hue  = 0.0    # degrees, default 0
-# saturation = 1.0    # default 1.0
-# value      = 0.9    # default 0.9
-
-[rules]
-F = "F-F++F-F"          # each F is replaced by this string each iteration
+# mode    = "hue_cycle"
+# initial = [0.9, 0.0, 0.0]
 ```
 
-Color fields are optional — omitting `background_color` or `[line_color]` keeps the defaults (black background, solid teal lines).
+Configuration uses the nested v2 schema only, with explicit `[metadata]`,
+`[l-system]`, `[l-system.rules]`, `[turtle]`, `[colors]`, and `[colors.line]`
+tables. Older flat TOML with top-level `name`, `axiom`, `[rules]`,
+`background_color`, or `[line_color]` is rejected. All colors are RGB arrays
+with finite components in the 0-1 range, including `hue_cycle`'s RGB
+`initial` color.
+
+Config parsing is format-preserving: parsing and serializing an unchanged TOML
+document keeps comments, spacing, and string quoting intact. Newly generated
+TOML writes axiom/rule text as literal strings when possible and keeps color
+arrays inline.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.
@@ -218,7 +232,7 @@ mise.toml                   pins trunk version (read by CI and local dev)
 crates/
   lsystem-core/             pure Rust, no rendering deps
     src/
-      config.rs             TOML parsing + Config struct
+      config.rs             format-preserving TOML docs + Config/GenerationConfig structs
       alphabet.rs           reserved-symbol sets, validation
       grammar.rs            axiom + rule expansion (N iterations); OwnedExpandIter for lifetime-free streaming
       turtle/

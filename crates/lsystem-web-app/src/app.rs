@@ -29,10 +29,15 @@ pub(crate) fn App() -> impl IntoView {
     let (toml_text, set_toml_text) = signal(first_toml);
     let (base_config, set_base_config) = signal(Some(initial.config.clone()));
     let (error, set_error) = signal(None::<String>);
-    let (iterations, set_iterations) =
-        signal(initial.config.iterations.min(initial.max_iterations));
+    let (iterations, set_iterations) = signal(
+        initial
+            .config
+            .generation
+            .iterations
+            .min(initial.max_iterations),
+    );
     let (max_iterations, set_max_iterations) = signal(initial.max_iterations);
-    let (angle, set_angle) = signal(initial.config.angle);
+    let (angle, set_angle) = signal(initial.config.generation.angle);
     let (png_width, set_png_width) = signal(2048u32);
     let (gpu_error, set_gpu_error) = signal(None::<String>);
     let (auto_rotate, set_auto_rotate) = signal(false);
@@ -163,8 +168,8 @@ pub(crate) fn App() -> impl IntoView {
                 let max = applied.max_iterations;
                 let new_is_3d = applied.config.dimensions == 3;
                 set_max_iterations.set(max);
-                set_iterations.set(applied.config.iterations.min(max));
-                set_angle.set(applied.config.angle);
+                set_iterations.set(applied.config.generation.iterations.min(max));
+                set_angle.set(applied.config.generation.angle);
                 set_base_config.set(Some(applied.config));
                 set_error.set(None);
                 if !new_is_3d && auto_rotate.get_untracked() {
