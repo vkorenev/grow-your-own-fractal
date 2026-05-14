@@ -34,11 +34,13 @@ cargo test -p lsystem-core config::tests::test_name
 cargo test -p lsystem-core --features svg svg_export
 ```
 
-`trunk` is managed by mise; run `mise install` to get the pinned version from `mise.toml`.
+`trunk` is managed by mise; run `mise install` to get the pinned version from `mise.toml`. `trunk` may fail to launch when `NO_COLOR=1` is present in the environment; use `NO_COLOR=true` or `NO_COLOR=false` as a workaround.
 
 ## Supplemental Rules
 
 Before running Git or GitHub CLI commands, read `.agents/rules/git-and-github.md`.
+
+When making code changes, check whether `README.md` and/or `AGENTS.md` need updates for the changed behavior, commands, architecture, or workflow. Update them in the same change when applicable.
 
 Successful CI runs on `main` trigger `.github/workflows/deploy.yml`, which deploys the Leptos browser app from `crates/lsystem-web-app/dist/` to GitHub Pages.
 
