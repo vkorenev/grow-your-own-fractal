@@ -11,13 +11,13 @@ pub(crate) struct Segments3D<I: Iterator<Item = char>> {
 }
 
 impl<I: Iterator<Item = char>> Segments3D<I> {
-    pub(crate) fn new(chars: I, angle_deg: f32, step: f32) -> Self {
+    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         Self {
             chars,
             angle_rad: angle_deg.to_radians(),
             step,
             position: Vec3::ZERO,
-            orientation: Quat::IDENTITY,
+            orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
             stack: Vec::new(),
         }
     }
@@ -79,9 +79,14 @@ impl<I: Iterator<Item = char>> Iterator for Segments3D<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Config;
 
     fn make(axiom: &str, angle_deg: f32) -> Vec<[Vec3; 2]> {
-        Segments3D::new(axiom.chars(), angle_deg, 1.0).collect()
+        make_with_heading(axiom, angle_deg, 0.0)
+    }
+
+    fn make_with_heading(axiom: &str, angle_deg: f32, initial_heading_deg: f32) -> Vec<[Vec3; 2]> {
+        Segments3D::new(axiom.chars(), angle_deg, 1.0, initial_heading_deg).collect()
     }
 
     #[test]
@@ -91,6 +96,37 @@ mod tests {
         let [a, b] = segs[0];
         assert!(a.distance(Vec3::ZERO) < 1e-5);
         assert!(b.distance(Vec3::X) < 1e-5);
+    }
+
+    #[test]
+    fn initial_heading_turns_initial_direction() {
+        let segs = make_with_heading("F", 90.0, 90.0);
+        assert_eq!(segs.len(), 1);
+        let [a, b] = segs[0];
+        assert!(a.distance(Vec3::ZERO) < 1e-5);
+        assert!(b.distance(Vec3::Y) < 1e-5, "end: {b}");
+    }
+
+    #[test]
+    fn generate_3d_uses_config_initial_heading() {
+        let cfg = Config::parse(
+            r#"
+name = "t"
+dimensions = 3
+axiom = "F"
+iterations = 0
+angle = 90.0
+step = 1.0
+initial_heading = 90.0
+"#,
+        )
+        .expect("valid test config");
+
+        let segments: Vec<[Vec3; 2]> = crate::generate_3d(&cfg).collect();
+        assert_eq!(segments.len(), 1);
+        let [a, b] = segments[0];
+        assert!(a.distance(Vec3::ZERO) < 1e-5);
+        assert!(b.distance(Vec3::Y) < 1e-5, "end: {b}");
     }
 
     #[test]

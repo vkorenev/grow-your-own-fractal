@@ -88,7 +88,8 @@ pub struct Config {
     pub angle: f32,
     /// Length of each forward step.
     pub step: f32,
-    /// Turtle heading at the start, in degrees (0 = +X, counter-clockwise positive). 2D only.
+    /// Turtle heading at the start, in degrees (0 = +X, counter-clockwise positive).
+    /// In 3D this is the initial yaw in the XY plane.
     pub initial_heading: f32,
     /// Production rules: single ASCII letter → replacement string.
     pub rules: HashMap<char, String>,

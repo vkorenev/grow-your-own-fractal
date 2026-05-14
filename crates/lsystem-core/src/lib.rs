@@ -29,5 +29,5 @@ pub fn generate_3d(config: &Config) -> impl Iterator<Item = [Vec3; 2]> {
         config.rules.clone(),
         config.iterations,
     );
-    turtle::turtle3d::Segments3D::new(chars, config.angle, config.step)
+    turtle::turtle3d::Segments3D::new(chars, config.angle, config.step, config.initial_heading)
 }
