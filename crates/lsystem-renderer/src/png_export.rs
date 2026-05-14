@@ -4,8 +4,11 @@ use std::fmt::{Display, Formatter};
 use futures_channel::oneshot;
 use lsystem_core::Config;
 
-use crate::line_renderer::LinePipeline;
-use crate::lsystem_bridge::{color_params_from_config, geometry_to_vertices, viewport_transform};
+use crate::camera::Camera;
+use crate::line_renderer::{LinePipeline2D, LinePipeline3D};
+use crate::lsystem_bridge::{
+    color_params_from_config, geometry_to_vertices, geometry_to_vertices_3d, viewport_transform,
+};
 use crate::wgpu_util;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -61,6 +64,7 @@ impl Error for PngExportError {}
 pub async fn render_png_standalone(
     config: &Config,
     width: u32,
+    camera: &Camera,
 ) -> Result<PngExport, PngExportError> {
     let instance = wgpu_util::new_instance().await;
     let adapter = instance
@@ -83,7 +87,7 @@ pub async fn render_png_standalone(
         .map_err(PngExportError::RequestDevice)?;
     wgpu_util::install_uncaptured_error_handler(&device, "PNG export");
 
-    render_png(&device, &queue, config, width).await
+    render_png(&device, &queue, config, width, camera).await
 }
 
 pub async fn render_png(
@@ -91,17 +95,77 @@ pub async fn render_png(
     queue: &wgpu::Queue,
     config: &Config,
     width: u32,
+    camera: &Camera,
 ) -> Result<PngExport, PngExportError> {
     validate_width(width)?;
 
-    let data = geometry_to_vertices(lsystem_core::generate(config));
-    let height = derive_height(width, data.bounds_min, data.bounds_max)?;
+    if config.dimensions == 3 {
+        let data = geometry_to_vertices_3d(lsystem_core::generate_3d(config));
+        let height = width; // square viewport for perspective
+        let total_segments = (data.vertices.len() / 2) as u32;
+        let color_params = color_params_from_config(&config.colors.line, total_segments);
+        let mut pipeline = LinePipeline3D::new(device, FORMAT);
+        pipeline.upload(device, queue, &data.vertices, color_params);
+        pipeline.write_mvp(
+            queue,
+            camera.compute_mvp_3d(data.bounds_min, data.bounds_max, width, height),
+        );
+        finish_render(
+            device,
+            queue,
+            width,
+            height,
+            config.colors.background,
+            |pass| {
+                pipeline.draw(pass);
+            },
+        )
+        .await
+    } else {
+        let data = geometry_to_vertices(lsystem_core::generate(config));
+        let height = derive_height(width, data.bounds_min, data.bounds_max)?;
+        let total_segments = (data.vertices.len() / 2) as u32;
+        let color_params = color_params_from_config(&config.colors.line, total_segments);
+        let mut pipeline = LinePipeline2D::new(device, FORMAT);
+        pipeline.upload(device, queue, &data.vertices, color_params);
+        pipeline.write_transform(
+            queue,
+            viewport_transform(
+                data.bounds_min,
+                data.bounds_max,
+                width,
+                height,
+                [0.0, 0.0],
+                1.0,
+            ),
+        );
+        finish_render(
+            device,
+            queue,
+            width,
+            height,
+            config.colors.background,
+            |pass| {
+                pipeline.draw(pass);
+            },
+        )
+        .await
+    }
+}
+
+async fn finish_render(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    background: [f32; 3],
+    draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+) -> Result<PngExport, PngExportError> {
     let extent = wgpu::Extent3d {
         width,
         height,
         depth_or_array_layers: 1,
     };
-
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("png_export_texture"),
         size: extent,
@@ -117,22 +181,6 @@ pub async fn render_png(
         ..Default::default()
     });
 
-    let total_segments = (data.vertices.len() / 2) as u32;
-    let color_params = color_params_from_config(&config.colors.line, total_segments);
-    let mut pipeline = LinePipeline::new(device, FORMAT);
-    pipeline.upload(device, queue, &data.vertices, color_params);
-    pipeline.write_transform(
-        queue,
-        viewport_transform(
-            data.bounds_min,
-            data.bounds_max,
-            width,
-            height,
-            [0.0, 0.0],
-            1.0,
-        ),
-    );
-
     let readback_layout = ReadbackLayout::new(width, height);
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("png_export_readback"),
@@ -145,7 +193,7 @@ pub async fn render_png(
         label: Some("png_export_encoder"),
     });
     {
-        let [r, g, b] = config.colors.background;
+        let [r, g, b] = background;
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("png_export_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -167,7 +215,7 @@ pub async fn render_png(
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pipeline.draw(&mut pass);
+        draw(&mut pass);
     }
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),

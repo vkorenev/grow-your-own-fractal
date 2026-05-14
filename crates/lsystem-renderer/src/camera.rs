@@ -1,10 +1,18 @@
-use crate::line_renderer::Transform;
+use glam::{Mat4, Quat, Vec3};
+
+use crate::line_renderer::{Mvp, Transform};
 use crate::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
+
+const ORBIT_DEG_PER_PIXEL: f32 = 0.3;
+const FOV_Y_RAD: f32 = std::f32::consts::FRAC_PI_4; // 45°
 
 #[derive(Clone, Debug)]
 pub struct Camera {
     pan: [f32; 2],
     zoom: f32,
+    pub azimuth: f32,
+    pub elevation: f32,
+    pub roll: f32,
 }
 
 impl Camera {
@@ -12,10 +20,22 @@ impl Camera {
         Self {
             pan: [0.0, 0.0],
             zoom: 1.0,
+            azimuth: 0.0,
+            elevation: 20.0,
+            roll: 0.0,
         }
     }
 
     pub fn reset(&mut self) {
+        self.pan = [0.0, 0.0];
+        self.zoom = 1.0;
+        self.azimuth = 0.0;
+        self.elevation = 20.0;
+        self.roll = 0.0;
+    }
+
+    /// Preserves azimuth/elevation/roll; only resets pan and zoom.
+    pub fn reset_position(&mut self) {
         self.pan = [0.0, 0.0];
         self.zoom = 1.0;
     }
@@ -80,6 +100,74 @@ impl Camera {
         self.pan[0] -= ndc_x / sx * (1.0 - 1.0 / actual);
         self.pan[1] -= ndc_y / sy * (1.0 - 1.0 / actual);
         self.zoom = clamped;
+    }
+
+    pub fn orbit_by_pixels(&mut self, dx: f32, dy: f32) {
+        self.orbit_by(dx * ORBIT_DEG_PER_PIXEL, -dy * ORBIT_DEG_PER_PIXEL);
+    }
+
+    pub fn orbit_by(&mut self, d_azimuth: f32, d_elevation: f32) {
+        self.azimuth += d_azimuth;
+        self.elevation = (self.elevation + d_elevation).clamp(-89.0, 89.0);
+    }
+
+    /// Roll the camera view by degrees (positive = counter-clockwise).
+    pub fn roll_by(&mut self, degrees: f32) {
+        self.roll += degrees;
+    }
+
+    pub fn auto_rotate_by(&mut self, degrees: f32) {
+        self.azimuth += degrees;
+    }
+
+    /// Zoom in/out for 3D (same zoom field, affects view distance).
+    pub fn zoom_3d(&mut self, factor: f32) {
+        if factor > 0.0 {
+            self.zoom = (self.zoom * factor).clamp(1e-4, 1e4);
+        }
+    }
+
+    pub fn compute_mvp_3d(
+        &self,
+        bounds_min: [f32; 3],
+        bounds_max: [f32; 3],
+        width: u32,
+        height: u32,
+    ) -> Mvp {
+        let min = Vec3::from(bounds_min);
+        let max = Vec3::from(bounds_max);
+        let center = (min + max) * 0.5;
+        let extent = max - min;
+        let radius = (extent.length() * 0.5).max(1.0);
+
+        // Base distance to frame the geometry at 45° FOV, then apply zoom.
+        let base_distance = radius / (FOV_Y_RAD * 0.5).tan();
+        let distance = (base_distance / self.zoom).max(radius * 0.01);
+
+        let az = self.azimuth.to_radians();
+        let el = self.elevation.to_radians();
+        let eye_dir = Vec3::new(el.cos() * az.sin(), el.sin(), el.cos() * az.cos());
+        let eye = center + eye_dir * distance;
+
+        // Up vector: world Y unless camera is near zenith/nadir.
+        let world_up = if (self.elevation.abs() - 89.0).abs() < 1.0 {
+            // Near pole: use a stable fallback derived from azimuth.
+            Vec3::new(-az.sin(), 0.0, -az.cos())
+        } else {
+            Vec3::Y
+        };
+        let roll_quat = Quat::from_axis_angle(eye_dir, self.roll.to_radians());
+        let up = roll_quat * world_up;
+
+        let view = Mat4::look_at_rh(eye, center, up);
+        let aspect = (width as f32 / height as f32).max(0.001);
+        let z_near = distance * 0.001;
+        let z_far = distance * 10.0;
+        let proj = Mat4::perspective_rh(FOV_Y_RAD, aspect, z_near, z_far);
+
+        Mvp {
+            matrix: (proj * view).to_cols_array_2d(),
+        }
     }
 }
 
@@ -193,5 +281,25 @@ mod tests {
         let t = cam.compute_transform(bounds_min, bounds_max, w, h);
         let ndc_center = t.offset[0];
         assert!(ndc_center > 0.0, "ndc center x = {ndc_center}");
+    }
+
+    #[test]
+    fn mvp_3d_produces_finite_matrix() {
+        let cam = Camera::new();
+        let mvp = cam.compute_mvp_3d([-5.0, -5.0, -5.0], [5.0, 5.0, 5.0], 800, 600);
+        for row in &mvp.matrix {
+            for &v in row {
+                assert!(v.is_finite(), "MVP contains non-finite value: {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn orbit_clamps_elevation() {
+        let mut cam = Camera::new();
+        cam.orbit_by(0.0, 999.0);
+        assert!(cam.elevation <= 89.0, "elevation={}", cam.elevation);
+        cam.orbit_by(0.0, -999.0);
+        assert!(cam.elevation >= -89.0, "elevation={}", cam.elevation);
     }
 }

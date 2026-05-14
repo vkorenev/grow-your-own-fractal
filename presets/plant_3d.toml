@@ -1,0 +1,14 @@
+name = "3D Plant"
+dimensions = 3
+axiom = "X"
+iterations = 5
+angle = 25.7
+
+[line_color]
+mode = "gradient"
+start = [0.05, 0.25, 0.05]
+end = [0.2, 0.75, 0.15]
+
+[rules]
+X = "F[+X][-X][&X][^X]"
+F = "FF"

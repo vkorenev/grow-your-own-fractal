@@ -29,6 +29,8 @@ impl FractalApp {
         ]
         .spacing(10);
 
+        let is_3d = self.scene.is_3d();
+
         if self.base_config.is_some() {
             controls = controls
                 .push(text("Overrides").size(13))
@@ -45,14 +47,32 @@ impl FractalApp {
                     text_input("2048", &self.png_width_text)
                         .on_input(Message::PngWidthChanged)
                         .width(Length::Fill),
-                )
-                .push(
-                    row![
-                        button("Export SVG").on_press(Message::ExportSvg),
-                        button("Export PNG").on_press(Message::ExportPng),
-                    ]
-                    .spacing(8),
                 );
+
+            let mut export_row = row![button("Export PNG").on_press(Message::ExportPng)].spacing(8);
+            if !is_3d {
+                export_row = export_row.push(button("Export SVG").on_press(Message::ExportSvg));
+            }
+            controls = controls.push(export_row);
+
+            if is_3d {
+                let auto_rotate_label = if self.auto_rotate {
+                    "Auto-rotate: On"
+                } else {
+                    "Auto-rotate: Off"
+                };
+                controls = controls
+                    .push(button(auto_rotate_label).on_press(Message::ToggleAutoRotate))
+                    .push(text(format!("Speed: {:.0} °/s", self.auto_rotate_speed)).size(13))
+                    .push(
+                        slider(
+                            10.0..=360.0,
+                            self.auto_rotate_speed,
+                            Message::SetAutoRotateSpeed,
+                        )
+                        .step(10.0),
+                    );
+            }
         }
 
         if let Some(status) = &self.export_status {
@@ -63,7 +83,12 @@ impl FractalApp {
             controls = controls.push(text("Rendering...").size(13));
         }
 
-        controls = controls.push(text("Drag to pan · Scroll to zoom · F to fit").size(12));
+        let hint = if is_3d {
+            "Drag to orbit · Scroll to zoom · F to fit\nArrows to rotate · Q/E to roll"
+        } else {
+            "Drag to pan · Scroll to zoom · F to fit"
+        };
+        controls = controls.push(text(hint).size(12));
 
         container(scrollable(controls.padding(16).spacing(12)))
             .width(CONTROL_WIDTH)

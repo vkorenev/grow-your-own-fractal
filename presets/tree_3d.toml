@@ -1,0 +1,12 @@
+name = "3D Spiral Tree"
+dimensions = 3
+axiom = "A"
+iterations = 6
+angle = 22.5
+
+[line_color]
+mode = "hue_cycle"
+
+[rules]
+A = "F[&+A][&-A][&/A][&\\A]"
+F = "FF"

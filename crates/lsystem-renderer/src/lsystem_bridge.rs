@@ -1,10 +1,10 @@
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use lsystem_core::LineColorConfig;
 
-use crate::line_renderer::{ColorParams, Transform, Vertex};
+use crate::line_renderer::{ColorParams, Transform, Vertex2D, Vertex3D};
 
 pub struct VertexData {
-    pub vertices: Vec<Vertex>,
+    pub vertices: Vec<Vertex2D>,
     pub bounds_min: [f32; 2],
     pub bounds_max: [f32; 2],
 }
@@ -14,7 +14,7 @@ pub struct VertexDataBuilder {
     min_y: f32,
     max_x: f32,
     max_y: f32,
-    vertices: Vec<Vertex>,
+    vertices: Vec<Vertex2D>,
 }
 
 impl VertexDataBuilder {
@@ -33,10 +33,10 @@ impl VertexDataBuilder {
         self.min_y = self.min_y.min(a.y).min(b.y);
         self.max_x = self.max_x.max(a.x).max(b.x);
         self.max_y = self.max_y.max(a.y).max(b.y);
-        self.vertices.push(Vertex {
+        self.vertices.push(Vertex2D {
             position: [a.x, a.y],
         });
-        self.vertices.push(Vertex {
+        self.vertices.push(Vertex2D {
             position: [b.x, b.y],
         });
     }
@@ -64,6 +64,82 @@ impl Default for VertexDataBuilder {
 
 pub fn geometry_to_vertices(segments: impl Iterator<Item = [Vec2; 2]>) -> VertexData {
     let mut builder = VertexDataBuilder::new();
+    for segment in segments {
+        builder.push_segment(segment);
+    }
+    builder.finish()
+}
+
+pub struct VertexData3D {
+    pub vertices: Vec<Vertex3D>,
+    pub bounds_min: [f32; 3],
+    pub bounds_max: [f32; 3],
+}
+
+pub struct VertexDataBuilder3D {
+    min_x: f32,
+    min_y: f32,
+    min_z: f32,
+    max_x: f32,
+    max_y: f32,
+    max_z: f32,
+    vertices: Vec<Vertex3D>,
+}
+
+impl VertexDataBuilder3D {
+    pub fn new() -> Self {
+        Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            min_z: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+            max_z: f32::NEG_INFINITY,
+            vertices: Vec::new(),
+        }
+    }
+
+    pub fn push_segment(&mut self, [a, b]: [Vec3; 2]) {
+        self.min_x = self.min_x.min(a.x).min(b.x);
+        self.min_y = self.min_y.min(a.y).min(b.y);
+        self.min_z = self.min_z.min(a.z).min(b.z);
+        self.max_x = self.max_x.max(a.x).max(b.x);
+        self.max_y = self.max_y.max(a.y).max(b.y);
+        self.max_z = self.max_z.max(a.z).max(b.z);
+        self.vertices.push(Vertex3D {
+            position: [a.x, a.y, a.z],
+        });
+        self.vertices.push(Vertex3D {
+            position: [b.x, b.y, b.z],
+        });
+    }
+
+    pub fn finish(self) -> VertexData3D {
+        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
+            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
+        } else {
+            (
+                [self.min_x, self.min_y, self.min_z],
+                [self.max_x, self.max_y, self.max_z],
+            )
+        };
+
+        VertexData3D {
+            vertices: self.vertices,
+            bounds_min,
+            bounds_max,
+        }
+    }
+}
+
+impl Default for VertexDataBuilder3D {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn geometry_to_vertices_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> VertexData3D {
+    let mut builder = VertexDataBuilder3D::new();
     for segment in segments {
         builder.push_segment(segment);
     }

@@ -1,4 +1,5 @@
 use lsystem_core::Config;
+use lsystem_renderer::camera::Camera;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
@@ -43,11 +44,16 @@ pub(crate) enum ExportRequest {
         config: Config,
         width: u32,
         path: PathBuf,
+        camera: Camera,
     },
     #[cfg(target_arch = "wasm32")]
     Svg(Config),
     #[cfg(target_arch = "wasm32")]
-    Png { config: Config, width: u32 },
+    Png {
+        config: Config,
+        width: u32,
+        camera: Camera,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +76,8 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
             config,
             width,
             path,
-        } => save_png(config, width, path).await,
+            camera,
+        } => save_png(config, width, path, camera).await,
         #[cfg(target_arch = "wasm32")]
         ExportRequest::Svg(config) => {
             let filename = suggested_filename(&config, ExportKind::Svg);
@@ -78,9 +85,13 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
             save_svg(svg, filename)
         }
         #[cfg(target_arch = "wasm32")]
-        ExportRequest::Png { config, width } => {
+        ExportRequest::Png {
+            config,
+            width,
+            camera,
+        } => {
             let filename = suggested_filename(&config, ExportKind::Png);
-            save_png(config, width, filename).await
+            save_png(config, width, camera, filename).await
         }
     }
 }
@@ -120,8 +131,8 @@ fn save_svg(svg: String, path: PathBuf) -> ExportOutcome {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn save_png(cfg: Config, width: u32, path: PathBuf) -> ExportOutcome {
-    match lsystem_renderer::png_export::render_png_standalone(&cfg, width).await {
+async fn save_png(cfg: Config, width: u32, path: PathBuf, camera: Camera) -> ExportOutcome {
+    match lsystem_renderer::png_export::render_png_standalone(&cfg, width, &camera).await {
         Ok(png) => match std::fs::write(&path, png.bytes) {
             Ok(()) => ExportOutcome::Saved(ExportKind::Png.label()),
             Err(e) => ExportOutcome::Failed(e.to_string()),
@@ -147,8 +158,13 @@ fn save_svg(svg: String, suggested_name: String) -> ExportOutcome {
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn save_png(cfg: Config, width: u32, suggested_name: String) -> ExportOutcome {
-    match lsystem_renderer::png_export::render_png_standalone(&cfg, width).await {
+async fn save_png(
+    cfg: Config,
+    width: u32,
+    camera: Camera,
+    suggested_name: String,
+) -> ExportOutcome {
+    match lsystem_renderer::png_export::render_png_standalone(&cfg, width, &camera).await {
         Ok(png) => {
             let array = js_sys::Array::new();
             let bytes = js_sys::Uint8Array::from(png.bytes.as_slice());

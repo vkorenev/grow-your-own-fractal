@@ -36,6 +36,8 @@ Each `F` is replaced; `+` has no rule, so it passes through unchanged.
 Every character in the axiom and in rule right-hand sides must be one of the
 following:
 
+**2D and 3D symbols** (valid for any `dimensions` value):
+
 | Symbol | Name | Effect |
 |--------|------|--------|
 | `F` | Forward (draw) | Move one step forward and draw a line segment. |
@@ -47,6 +49,15 @@ following:
 | `]` | Pop state | Restore the most recently saved position and heading. |
 | `A`–`Z`, `a`–`z` | Non-terminal | Rewritten by rules during expansion. Any letter that has no rule and is not a reserved symbol above is silently skipped by the turtle. |
 
+**3D-only symbols** (only valid when `dimensions = 3`):
+
+| Symbol | Name | Effect |
+|--------|------|--------|
+| `&` | Pitch down | Rotate the heading downward by `angle` (around the left axis). |
+| `^` | Pitch up | Rotate the heading upward by `angle`. |
+| `/` | Roll right | Roll clockwise by `angle` (around the heading axis). |
+| `\` | Roll left | Roll counter-clockwise by `angle`. |
+
 Any other character is a validation error.
 
 ### Config format
@@ -55,7 +66,7 @@ Each L-System is defined in a TOML file:
 
 ```toml
 name = "Koch Snowflake"
-dimensions = 2          # must be 2
+dimensions = 2          # 2 (default) or 3
 axiom = "F++F++F"
 iterations = 4          # number of times the rules are applied
 angle = 60.0            # degrees; used by + - and |
@@ -94,18 +105,31 @@ you can break long rules across lines for readability.
 
 ### Controls
 
+**2D**
+
 | Input | Action |
 |-------|--------|
 | Drag (left button) | Pan |
 | Scroll wheel | Zoom in / out toward the cursor |
 | `F` | Reset view to fit the fractal |
 
+**3D** (when `dimensions = 3`)
+
+| Input | Action |
+|-------|--------|
+| Drag (left button) | Orbit (rotate azimuth / elevation) |
+| Scroll wheel | Zoom in / out |
+| Arrow keys | Rotate azimuth (left / right) or elevation (up / down) by 5° |
+| `Q` / `E` | Roll counter-clockwise / clockwise by 5° |
+| `F` | Reset camera to fit the fractal |
+| Auto-rotate toggle | Continuously orbit around the Y axis at the configured speed |
+
 ### Exporting
 
-The **Export SVG** button saves the current fractal, including the active
-iteration and angle overrides, as a resolution-independent SVG file.
-The **Export PNG** button renders the same effective config to a raster PNG
-using the selected PNG width.
+The **Export SVG** button saves the current fractal as a resolution-independent
+SVG file. SVG export is only available for 2D fractals.
+The **Export PNG** button renders the fractal to a raster PNG using the selected
+PNG width. For 3D fractals, PNG captures the current camera orientation.
 
 ### Bundled presets
 
@@ -120,6 +144,8 @@ using the selected PNG width.
 | `presets/sierpinski_curve.toml` | Sierpinski Curve | Space-filling curve traced along the boundary of a Sierpinski triangle. |
 | `presets/sierpinski_triangle.toml` | Sierpinski Triangle | Self-similar triangle subdivided into progressively smaller triangular holes. |
 | `presets/snowflake.toml` | Snowflake | Branching snowflake pattern with six-fold symmetry and recursive side branches. |
+| `presets/plant_3d.toml` | 3D Plant | Branching 3D plant using pitch symbols to spread branches in all directions. |
+| `presets/tree_3d.toml` | 3D Spiral Tree | Spiral tree using pitch and roll symbols to wind branches around the trunk. |
 
 ---
 
@@ -195,15 +221,17 @@ crates/
       grammar.rs            axiom + rule expansion (N iterations); OwnedExpandIter for lifetime-free streaming
       turtle/
         turtle2d.rs         Segments2D<I>: pull iterator yielding [Vec2; 2] segments lazily
+        turtle3d.rs         Segments3D<I>: pull iterator yielding [Vec3; 2] segments using Quat orientation
       svg_export.rs         SVG export — export_svg(config) -> String (enabled by the `svg` Cargo feature)
   lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
     src/
-      camera.rs             shared pan/zoom state and view transform
-      line_renderer.rs      Transform/Vertex/ColorParams types, LinePipeline, GpuContext, surface errors/status
-      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices (accepts segment iterator), color_params_from_config
+      camera.rs             shared pan/zoom/orbit state and view transform (2D and 3D)
+      line_renderer.rs      Vertex2D/Vertex3D, LinePipeline2D/LinePipeline3D, GrowableVertexBuffer, GpuContext
+      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices, geometry_to_vertices_3d, color_params_from_config
       png_export.rs         offscreen wgpu PNG renderer (enabled by the `png` Cargo feature)
       wgpu_util.rs          shared wgpu instance/device/error-handler helpers
-      shader.wgsl           vertex + fragment shaders
+      shader.wgsl           2D vertex + fragment shaders
+      shader3d.wgsl         3D vertex + fragment shaders with MVP matrix uniform
   lsystem-app/              Iced native app, plus retained Iced web entry point
     src/
       main.rs               native entry point

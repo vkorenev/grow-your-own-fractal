@@ -51,14 +51,16 @@ Four-crate workspace under `crates/`:
 | Module | Role |
 |--------|------|
 | `config.rs` | Parses TOML `Config` struct (including `ColorConfig`/`LineColorConfig` for background and line colors); validates axiom, rules, step/angle finiteness, bracket balance |
-| `alphabet.rs` | Reserved symbols (`F f + - \| [ ]`), character set validation |
+| `alphabet.rs` | Reserved symbols (`F f + - \| [ ]` for 2D; additionally `& ^ / \` for 3D), character set validation per `dimensions` |
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
-| `turtle/mod.rs` | Declares `turtle2d` submodule; documents the 3D extension path (add `Segments3D<I>`, dispatch in `generate()` on `cfg.dimensions`) |
+| `turtle/mod.rs` | Declares `turtle2d` and `turtle3d` submodules |
 | `turtle/turtle2d.rs` | `Segments2D<I>` — pull iterator over `[Vec2; 2]` segments; owns position, heading, and bracket stack; yields one segment per `'F'` without collecting |
+| `turtle/turtle3d.rs` | `Segments3D<I>` — pull iterator over `[Vec3; 2]` segments; uses `glam::Quat` orientation (heading = `orientation * Vec3::X`); dispatches `& ^ / \` pitch/roll symbols in addition to the 2D set |
 | `svg_export.rs` | `export_svg(config) -> String` — generates an SVG string; gated behind the `svg` Cargo feature |
-| `lib.rs` | Public API: `generate(config) -> impl Iterator<Item = [Vec2; 2]>`; exposes `svg_export` as a public module when the `svg` feature is enabled |
+| `lib.rs` | Public API: `generate(config) -> impl Iterator<Item = [Vec2; 2]>` and `generate_3d(config) -> impl Iterator<Item = [Vec3; 2]>`; exposes `svg_export` when the `svg` feature is enabled |
 
-Data flow: `Config` → `OwnedExpandIter` (owned lazy char rewriting) → `Segments2D` → streaming `[Vec2; 2]` segments.
+Data flow (2D): `Config` → `OwnedExpandIter` → `Segments2D` → streaming `[Vec2; 2]` segments.
+Data flow (3D): `Config` → `OwnedExpandIter` → `Segments3D` → streaming `[Vec3; 2]` segments.
 
 ### `lsystem-renderer` — toolkit-independent wgpu renderer
 
@@ -66,12 +68,13 @@ Depends on `lsystem-core` and `wgpu`.
 
 | File | Role |
 |------|------|
-| `camera.rs` | Shared `Camera` pan/zoom state and view transform helpers used by both app crates |
-| `line_renderer.rs` | `Transform` — scale + offset GPU uniform type. `GpuContext` — owns the wgpu surface for non-Iced canvas users; `begin_frame` returns explicit `FrameOutcome` values and `end_frame` submits + presents. `GpuInitError` preserves surface/adapter/device initialization failures. `LinePipeline` (pipeline, bind group, reusable vertex buffer, transform uniform, color-params uniform) — `upload()` grows/reuses the vertex buffer and writes `ColorParams`; `write_transform()` writes the camera transform every frame; `draw()` issues the line-list draw. |
-| `lsystem_bridge.rs` | L-system→GPU adapters. `geometry_to_vertices()` accepts `impl Iterator<Item = [Vec2; 2]>` and produces a flat `Vertex` array with bounding box (`VertexData`). `color_params_from_config()` maps `LineColorConfig` to the `ColorParams` GPU uniform. |
+| `camera.rs` | Shared `Camera` — 2D pan/zoom state and 3D orbit (azimuth, elevation, roll, zoom) state; `compute_transform` for 2D, `compute_mvp_3d` for perspective 3D; `reset()` resets all state, `reset_position()` preserves rotation for scene rebuilds |
+| `line_renderer.rs` | `Vertex2D`/`Vertex3D` GPU vertex types. `GrowableVertexBuffer` — grows to next power-of-two capacity on demand. `LinePipeline2D` — 2D `Transform` uniform + `LinePipeline3D` — `Mvp` (64-byte MVP matrix) uniform; both share `GrowableVertexBuffer` and a private `draw_line_list()` helper. `GpuContext`, `GpuInitError`, `FrameOutcome`, `SurfaceFrame`. `MAX_SEGMENTS` / `MAX_SEGMENTS_3D` caps for segment-count safety. |
+| `lsystem_bridge.rs` | L-system→GPU adapters. `geometry_to_vertices()` for 2D (`VertexData`), `geometry_to_vertices_3d()` for 3D (`VertexData3D`). `color_params_from_config()` maps `LineColorConfig` to the `ColorParams` GPU uniform. |
 | `png_export.rs` | Offscreen wgpu PNG renderer; gated behind the `png` Cargo feature |
 | `wgpu_util.rs` | Shared wgpu instance/device descriptor and uncaptured-error logging helpers; browser wasm creates an instance with a web display handle so wgpu can use WebGPU or fall back to WebGL2, while native and Emscripten use the normal non-web instance path |
-| `shader.wgsl` | Vertex shader applies a `Transform` uniform (scale + offset) and computes per-segment color from a `ColorParams` uniform using `vertex_index / 2`; supports solid, gradient, and HSV hue-cycle modes; fragment shader passes the interpolated color through; topology is `LineList` |
+| `shader.wgsl` | 2D vertex shader: applies `Transform` (scale + offset), computes per-segment color from `ColorParams`; topology `LineList` |
+| `shader3d.wgsl` | 3D vertex shader: applies `Mvp` matrix for perspective projection, same per-segment color logic as `shader.wgsl` |
 
 ### `lsystem-app` — entry points and Iced UI
 
@@ -83,8 +86,8 @@ Depends on `lsystem-core`, `lsystem-renderer`, `iced`, and browser/native export
 | `lib.rs` | Module declarations; `run_native()` starts the Iced app on desktop; `#[wasm_bindgen(start)] start()` starts the same Iced app on web |
 | `ui.rs` | Iced UI module shell and shared UI constants |
 | `ui/app_state.rs` | `FractalApp` state/update/view, preset/config controls, async geometry generation, stale-generation cancellation, exports, and pan/zoom messages |
-| `ui/controls.rs` | Iced control panel widgets |
-| `ui/fractal_canvas.rs` | `iced::widget::shader` integration, `Scene` camera/geometry state, viewport input handling, and GPU upload-by-scene-revision |
+| `ui/controls.rs` | Iced control panel widgets; hides SVG export and shows auto-rotate controls for 3D scenes |
+| `ui/fractal_canvas.rs` | `iced::widget::shader` integration; `Scene` holds either 2D or 3D geometry plus camera; mouse drag orbits in 3D, pans in 2D; GPU upload-by-scene-revision |
 | `export.rs` | Native/browser SVG and PNG export helpers; PNG export creates an offscreen wgpu device instead of borrowing Iced's renderer device |
 
 ### `lsystem-web-app` — browser-first Leptos UI
@@ -97,7 +100,7 @@ Depends on `lsystem-core`, `lsystem-renderer`, `leptos`, and browser `web-sys`/`
 | `app.rs` | DOM controls for presets, TOML, overrides, viewport input, export buttons, and GPU rendering error display |
 | `presets.rs` | Embedded preset loading and effective-config helpers |
 | `export.rs` | Browser SVG/PNG download helpers |
-| `renderer.rs` | `CanvasRenderer` — owns the canvas `GpuContext`, `LinePipeline`, shared `Camera`, current vertices, color params, and background; handles canvas resize, pan, zoom, reset, event-driven rendering, and web surface-loss recovery |
+| `renderer.rs` | `CanvasRenderer` — owns `GpuContext`, `LinePipeline2D`, `LinePipeline3D`, `Camera`, and an `ActiveScene` enum (2D or 3D); dispatches drag to pan (2D) or orbit (3D); handles canvas resize, zoom, orbit, roll, auto-rotate, reset, and surface-loss recovery |
 | `index.html` | Trunk entry that mounts the Leptos app |
 | `Trunk.toml` | Browser app build config, served locally on `127.0.0.1:8081` |
 
@@ -111,13 +114,14 @@ Bundled TOML L-System definitions. New fractals are added here; they are embedde
 - **Lazy expansion**: `ExpandIter` / `OwnedExpandIter` avoid materializing the full rewritten string, keeping memory bounded for high-iteration fractals.
 - **Dual target from day one**: `lsystem-core` has no platform-specific deps so it compiles for both native and `wasm32-unknown-unknown` without feature flags.
 - **Iced/wgpu version coupling**: the workspace `wgpu` dependency is pinned to version 29 and Iced is pinned to a specific upstream git revision that uses the same wgpu major version. Do not independently bump `wgpu` or the Iced git revision; update them in lockstep and verify native + wasm builds.
-- **3D forward-compat seam**: the `dimensions` TOML field (currently validated to `2` only) is the extension point. To add 3D: add `turtle/turtle3d.rs` with a `Segments3D<I>` iterator analogous to `Segments2D`, then dispatch in `lib.rs::generate()` based on `cfg.dimensions`. No other registration is needed.
+- **3D turtle uses quaternion orientation**: `Segments3D<I>` stores a `glam::Quat` orientation instead of a scalar heading angle. Heading = `orientation * Vec3::X`; left = `* Vec3::Y`; up = `* Vec3::Z`. Each rotation symbol applies `orientation *= Quat::from_rotation_*(angle)` in local space, so rotations compose correctly regardless of prior orientation.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
 - **Fractal lives in an Iced shader widget**: `lsystem-app` renders the fractal through `iced::widget::shader`. Iced owns the window, surface, event loop, and render pass; the custom primitive owns only the fractal GPU pipeline state.
 - **Async scene generation**: `FractalApp` schedules geometry generation with `Task::perform` when presets, TOML, iterations, or angle change. Each request gets a monotonic generation token; stale results are ignored, so rapid slider changes do not block the UI with outdated work.
 - **Scene-revision uploads**: `FractalApp::schedule_scene_generation()` increments a monotonic generation token whenever geometry is requested. Completed scene builds store that token as `Scene::revision`; the Iced shader pipeline uploads vertices and color params only when the observed revision changes, while camera transforms are written during prepare.
-- **Reusable vertex buffer**: `LinePipeline::upload` grows the GPU vertex buffer to the next power-of-two capacity when needed and otherwise updates it with `Queue::write_buffer`, avoiding a new buffer allocation on every geometry upload.
+- **Reusable vertex buffer**: `GrowableVertexBuffer` grows the GPU vertex buffer to the next power-of-two capacity when needed and otherwise updates it with `Queue::write_buffer`. Both `LinePipeline2D` and `LinePipeline3D` use it via a generic `upload<V: Pod>` method.
+- **2D/3D pipeline split**: `LinePipeline2D` and `LinePipeline3D` are separate structs with different uniform types (`Transform` vs `Mvp`) and different shaders, but share `GrowableVertexBuffer` and a private `draw_line_list()` helper to avoid duplication. `lsystem-web-app`'s `CanvasRenderer` owns both pipelines and keeps both always-initialized; `lsystem-app`'s `Scene` holds an enum that selects the active pipeline at draw time.
 - **DOM browser UI with GPU canvas**: `lsystem-web-app` owns browser UI state in Leptos signals and renders the fractal into a dedicated `<canvas>`. It creates a wgpu surface from `web_sys::HtmlCanvasElement`, reuses `LinePipeline`, and drives rendering from explicit DOM events instead of a continuous repaint loop. On browser wasm targets, `wgpu_util` creates the instance with a web display handle and WebGPU detection so wgpu can use WebGPU when available and fall back to WebGL2 otherwise.
 - **Surface acquisition recovery**: `GpuContext::begin_frame` retries `CurrentSurfaceTexture::Outdated` once after reconfiguring the surface. Timeout and occlusion are quiet skip reasons, validation/repeated-outdated are explicit skip reasons, and true surface loss is reported to callers. The Leptos web renderer rebuilds `GpuContext` and `LinePipeline` after surface loss while preserving CPU-side scene/camera/color state and marking geometry for reupload.
-- **SVG export is a `lsystem-core` Cargo feature**: The `svg` feature adds `svg_export::export_svg(config) -> String`. It collects segments into a `Vec` (the only allocation — acceptable for export), computes a padded bounding box, and builds SVG XML. The Y-axis flip (turtle is Y-up, SVG is Y-down) is handled by a `<g transform="matrix(1 0 0 -1 0 0)">` group so turtle coordinates are written as-is; the viewBox compensates. `stroke-width`, `stroke-linecap`, and `fill` are set on the `<g>` and inherited by children. Solid mode emits a single `<path>`; gradient and hue-cycle modes emit per-segment `<line>` elements to match the shader's segment-index-based coloring exactly. On native, `rfd::FileDialog` handles the save dialog; on WASM, a programmatic Blob download is triggered via `web-sys`.
+- **SVG export is 2D-only**: SVG export is a `lsystem-core` Cargo feature (`svg`). `export_svg(config) -> String` collects 2D segments, computes a padded bounding box, and builds SVG XML. The Y-axis flip is handled by a `<g transform="matrix(1 0 0 -1 0 0)">` group. Both apps hide the SVG export button when `config.dimensions == 3`.
 - **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass. CI tests the workspace with all features/all targets, checks and lints native default/all-features builds, checks and lints `wasm32-unknown-unknown` default/all-features builds, and builds both Trunk web apps. GitHub Pages deploys the Leptos browser app.

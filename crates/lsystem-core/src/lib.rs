@@ -9,7 +9,7 @@ pub(crate) mod turtle;
 pub use config::{ColorConfig, Config, ConfigError, LineColorConfig};
 pub use grammar::max_safe_iterations;
 
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 
 /// Expand the grammar and run the 2D turtle, returning a lazy iterator of
 /// line segments. The iterator owns all its state and does not borrow from `config`.
@@ -20,4 +20,14 @@ pub fn generate(config: &Config) -> impl Iterator<Item = [Vec2; 2]> {
         config.iterations,
     );
     turtle::turtle2d::Segments2D::new(chars, config.angle, config.step, config.initial_heading)
+}
+
+/// Like `generate` but runs the 3D turtle; the iterator owns all its state.
+pub fn generate_3d(config: &Config) -> impl Iterator<Item = [Vec3; 2]> {
+    let chars = grammar::expand_owned(
+        config.axiom.clone(),
+        config.rules.clone(),
+        config.iterations,
+    );
+    turtle::turtle3d::Segments3D::new(chars, config.angle, config.step)
 }
