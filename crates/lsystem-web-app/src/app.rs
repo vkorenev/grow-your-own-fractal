@@ -44,6 +44,12 @@ pub(crate) fn App() -> impl IntoView {
             .map(|c| c.dimensions == 3)
             .unwrap_or(false)
     };
+    let is_3d_untracked = move || {
+        base_config
+            .get_untracked()
+            .map(|c| c.dimensions == 3)
+            .unwrap_or(false)
+    };
 
     let canvas_ref = NodeRef::<Canvas>::new();
     let renderer = Rc::new(RefCell::new(None::<CanvasRenderer>));
@@ -103,11 +109,14 @@ pub(crate) fn App() -> impl IntoView {
         let renderer = Rc::clone(&renderer);
         let recover_after_render = Rc::clone(&recover_after_render);
         move || {
-            let Some(canvas) = canvas_ref.get() else {
+            let Some(canvas) = canvas_ref.get_untracked() else {
                 return;
             };
-            let Some(config) = effective_config(base_config.get(), iterations.get(), angle.get())
-            else {
+            let Some(config) = effective_config(
+                base_config.get_untracked(),
+                iterations.get_untracked(),
+                angle.get_untracked(),
+            ) else {
                 return;
             };
             with_renderer(
@@ -158,7 +167,7 @@ pub(crate) fn App() -> impl IntoView {
                 set_angle.set(applied.config.angle);
                 set_base_config.set(Some(applied.config));
                 set_error.set(None);
-                if !new_is_3d && auto_rotate.get() {
+                if !new_is_3d && auto_rotate.get_untracked() {
                     if let Some(id) = interval_id.take()
                         && let Some(window) = web_sys::window()
                     {
@@ -180,7 +189,7 @@ pub(crate) fn App() -> impl IntoView {
         let recover_after_render = Rc::clone(&recover_after_render);
         let interval_id = Rc::clone(&interval_id);
         move |_: web_sys::MouseEvent| {
-            if auto_rotate.get() {
+            if auto_rotate.get_untracked() {
                 if let Some(id) = interval_id.take()
                     && let Some(window) = web_sys::window()
                 {
@@ -194,14 +203,14 @@ pub(crate) fn App() -> impl IntoView {
                 let interval_id_store = Rc::clone(&interval_id);
                 let interval_id_cancel = Rc::clone(&interval_id);
                 let closure = Closure::<dyn FnMut()>::new(move || {
-                    let degrees = auto_rotate_speed.get() * (AUTO_ROTATE_DT_MS / 1000.0);
-                    if let Some(canvas) = canvas_ref.get() {
+                    let degrees = auto_rotate_speed.get_untracked() * (AUTO_ROTATE_DT_MS / 1000.0);
+                    if let Some(canvas) = canvas_ref.get_untracked() {
                         with_renderer(canvas, &renderer, &recover_after_render, |r, c| {
                             r.auto_rotate_and_render(c, degrees)
                         });
                     }
                     // Stop if auto_rotate signal was turned off from outside.
-                    if !auto_rotate.get()
+                    if !auto_rotate.get_untracked()
                         && let Some(id) = interval_id_cancel.take()
                         && let Some(window) = web_sys::window()
                     {
@@ -268,7 +277,7 @@ pub(crate) fn App() -> impl IntoView {
                     type="button"
                     on:click={
                         let apply_text = Rc::clone(&apply_text);
-                        move |_| apply_text(toml_text.get())
+                        move |_| apply_text(toml_text.get_untracked())
                     }
                 >
                     "Apply"
@@ -291,7 +300,7 @@ pub(crate) fn App() -> impl IntoView {
                                 let render_current = Rc::clone(&render_current);
                                 move |ev| {
                                     let next = input_value(ev).parse::<u32>().unwrap_or(0);
-                                    set_iterations.set(next.clamp(0, max_iterations.get()));
+                                    set_iterations.set(next.clamp(0, max_iterations.get_untracked()));
                                     render_current();
                                 }
                             }
@@ -338,7 +347,13 @@ pub(crate) fn App() -> impl IntoView {
                         <button
                             type="button"
                             class:hidden=move || is_3d()
-                            on:click=move |_| export_svg(base_config.get(), iterations.get(), angle.get())
+                            on:click=move |_| {
+                                export_svg(
+                                    base_config.get_untracked(),
+                                    iterations.get_untracked(),
+                                    angle.get_untracked(),
+                                )
+                            }
                         >
                             "Export SVG"
                         </button>
@@ -349,10 +364,10 @@ pub(crate) fn App() -> impl IntoView {
                                 move |_| {
                                     export_png(
                                         Rc::clone(&renderer),
-                                        base_config.get(),
-                                        iterations.get(),
-                                        angle.get(),
-                                        png_width.get(),
+                                        base_config.get_untracked(),
+                                        iterations.get_untracked(),
+                                        angle.get_untracked(),
+                                        png_width.get_untracked(),
                                     );
                                 }
                             }
@@ -396,7 +411,7 @@ pub(crate) fn App() -> impl IntoView {
                     on:pointerdown={
                         let last_pointer = Rc::clone(&last_pointer);
                         move |ev: web_sys::PointerEvent| {
-                            if let Some(canvas) = canvas_ref.get() {
+                            if let Some(canvas) = canvas_ref.get_untracked() {
                                 let _ = canvas.focus();
                                 let _ = canvas.set_pointer_capture(ev.pointer_id());
                             }
@@ -424,7 +439,7 @@ pub(crate) fn App() -> impl IntoView {
                             let dx = x - last_x;
                             let dy = y - last_y;
                             *last = Some((id, x, y));
-                            if let Some(canvas) = canvas_ref.get() {
+                            if let Some(canvas) = canvas_ref.get_untracked() {
                                 with_renderer(
                                     canvas,
                                     &renderer,
@@ -439,7 +454,7 @@ pub(crate) fn App() -> impl IntoView {
                     on:pointerup={
                         let last_pointer = Rc::clone(&last_pointer);
                         move |ev: web_sys::PointerEvent| {
-                            if let Some(canvas) = canvas_ref.get() {
+                            if let Some(canvas) = canvas_ref.get_untracked() {
                                 let _ = canvas.release_pointer_capture(ev.pointer_id());
                             }
                             *last_pointer.borrow_mut() = None;
@@ -454,7 +469,7 @@ pub(crate) fn App() -> impl IntoView {
                         let recover_after_render = Rc::clone(&recover_after_render);
                         move |ev: web_sys::WheelEvent| {
                             ev.prevent_default();
-                            if let Some(canvas) = canvas_ref.get() {
+                            if let Some(canvas) = canvas_ref.get_untracked() {
                                 with_renderer(
                                     canvas,
                                     &renderer,
@@ -476,7 +491,9 @@ pub(crate) fn App() -> impl IntoView {
                         let renderer = Rc::clone(&renderer);
                         let recover_after_render = Rc::clone(&recover_after_render);
                         move |ev: web_sys::KeyboardEvent| {
-                            let Some(canvas) = canvas_ref.get() else { return };
+                            let Some(canvas) = canvas_ref.get_untracked() else {
+                                return;
+                            };
                             let key = ev.key();
                             if key.eq_ignore_ascii_case("f") {
                                 with_renderer(
@@ -485,7 +502,7 @@ pub(crate) fn App() -> impl IntoView {
                                     &recover_after_render,
                                     |renderer, canvas| renderer.reset_and_render(canvas),
                                 );
-                            } else if is_3d() {
+                            } else if is_3d_untracked() {
                                 let handled = match key.as_str() {
                                     "ArrowLeft" => {
                                         with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, -ROTATION_STEP_DEG, 0.0));
@@ -581,7 +598,7 @@ fn install_resize_listener<H>(
         return;
     };
     let closure = Closure::<dyn FnMut()>::new(move || {
-        if let Some(canvas) = canvas_ref.get() {
+        if let Some(canvas) = canvas_ref.get_untracked() {
             with_renderer(
                 canvas,
                 &renderer,
