@@ -1,7 +1,7 @@
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
-use lsystem_core::Config;
+use lsystem_core::{ColorConfig, Config};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Vertex2D, Vertex3D,
@@ -44,7 +44,7 @@ pub(super) struct Scene {
 
 impl Scene {
     fn from_vertex_data_2d(
-        config: &Config,
+        colors: &ColorConfig,
         data: VertexData,
         camera: Camera,
         revision: u64,
@@ -56,15 +56,15 @@ impl Scene {
                 bounds_min: data.bounds_min,
                 bounds_max: data.bounds_max,
             },
-            color_params: color_params_from_config(&config.colors.line, total_segments),
-            background: config.colors.background,
+            color_params: color_params_from_config(&colors.line, total_segments),
+            background: colors.background,
             camera,
             revision,
         }
     }
 
     fn from_vertex_data_3d(
-        config: &Config,
+        colors: &ColorConfig,
         data: VertexData3D,
         camera: Camera,
         revision: u64,
@@ -76,8 +76,8 @@ impl Scene {
                 bounds_min: data.bounds_min,
                 bounds_max: data.bounds_max,
             },
-            color_params: color_params_from_config(&config.colors.line, total_segments),
-            background: config.colors.background,
+            color_params: color_params_from_config(&colors.line, total_segments),
+            background: colors.background,
             camera,
             revision,
         }
@@ -215,7 +215,7 @@ pub(super) async fn build_scene(
 
         SceneBuildResult::Ready {
             generation,
-            scene: Scene::from_vertex_data_3d(&config, builder.finish(), camera, generation),
+            scene: Scene::from_vertex_data_3d(&config.colors, builder.finish(), camera, generation),
         }
     } else {
         let mut builder = VertexDataBuilder::new();
@@ -241,7 +241,7 @@ pub(super) async fn build_scene(
 
         SceneBuildResult::Ready {
             generation,
-            scene: Scene::from_vertex_data_2d(&config, builder.finish(), camera, generation),
+            scene: Scene::from_vertex_data_2d(&config.colors, builder.finish(), camera, generation),
         }
     }
 }

@@ -27,7 +27,8 @@ pub(crate) fn App() -> impl IntoView {
     .expect("bundled presets should parse");
     let first_toml = initial_workspace.selected_draft_text().to_string();
     let initial_config = initial_workspace.selected_applied_config().clone();
-    let initial_max_iterations = max_iterations_for_config(&initial_config);
+    let initial_max_iterations =
+        max_iterations_for_config(initial_config.dimensions, &initial_config.generation);
 
     let (preset_idx, set_preset_idx) = signal(0usize);
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
@@ -166,7 +167,7 @@ pub(crate) fn App() -> impl IntoView {
     );
 
     let install_config = Rc::new(move |config: Config| {
-        let max = max_iterations_for_config(&config);
+        let max = max_iterations_for_config(config.dimensions, &config.generation);
         set_max_iterations.set(max);
         set_iterations.set(config.generation.iterations.min(max));
         set_angle.set(config.generation.angle);

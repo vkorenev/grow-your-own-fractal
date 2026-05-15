@@ -387,7 +387,7 @@ impl FractalApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         let request = {
-            let Some(path) = choose_export_path(&config, kind) else {
+            let Some(path) = choose_export_path(&config.name, kind) else {
                 return Task::done(Message::ExportFinished(ExportOutcome::Cancelled));
             };
 
