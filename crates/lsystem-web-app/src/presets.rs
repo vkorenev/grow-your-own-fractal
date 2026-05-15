@@ -1,5 +1,5 @@
 use include_dir::{Dir, include_dir};
-use lsystem_core::Config;
+use lsystem_core::{Config, GenerationConfig};
 
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
@@ -25,13 +25,13 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
         .collect()
 }
 
-pub(crate) fn max_iterations_for_config(config: &Config) -> u32 {
-    let max_seg = if config.dimensions == 3 {
+pub(crate) fn max_iterations_for_config(dimensions: u8, generation: &GenerationConfig) -> u32 {
+    let max_seg = if dimensions == 3 {
         lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
     } else {
         lsystem_renderer::line_renderer::MAX_SEGMENTS
     };
-    lsystem_core::max_safe_iterations(&config.generation.axiom, &config.generation.rules, max_seg)
+    lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg)
 }
 
 pub(crate) fn effective_config(

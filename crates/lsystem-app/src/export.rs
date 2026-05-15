@@ -80,7 +80,7 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
         } => save_png(config, width, path, camera).await,
         #[cfg(target_arch = "wasm32")]
         ExportRequest::Svg(config) => {
-            let filename = suggested_filename(&config, ExportKind::Svg);
+            let filename = suggested_filename(&config.name, ExportKind::Svg);
             let svg = lsystem_core::svg_export::export_svg(&config);
             save_svg(svg, filename)
         }
@@ -90,22 +90,22 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
             width,
             camera,
         } => {
-            let filename = suggested_filename(&config, ExportKind::Png);
+            let filename = suggested_filename(&config.name, ExportKind::Png);
             save_png(config, width, camera, filename).await
         }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn choose_export_path(config: &Config, kind: ExportKind) -> Option<PathBuf> {
+pub(crate) fn choose_export_path(name: &str, kind: ExportKind) -> Option<PathBuf> {
     rfd::FileDialog::new()
-        .set_file_name(suggested_filename(config, kind))
+        .set_file_name(suggested_filename(name, kind))
         .add_filter(kind.filter_name(), &[kind.extension()])
         .save_file()
 }
 
-fn suggested_filename(config: &Config, kind: ExportKind) -> String {
-    sanitize_filename(&config.name, kind.extension())
+fn suggested_filename(name: &str, kind: ExportKind) -> String {
+    sanitize_filename(name, kind.extension())
 }
 
 fn sanitize_filename(name: &str, extension: &str) -> String {
