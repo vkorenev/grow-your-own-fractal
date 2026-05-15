@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub(crate) struct ExpandIter<'a> {
     stack: Vec<(std::str::Chars<'a>, u32)>,
-    rules: &'a HashMap<char, String>,
+    rules: &'a BTreeMap<char, String>,
 }
 
 impl<'a> Iterator for ExpandIter<'a> {
@@ -32,7 +32,7 @@ impl<'a> Iterator for ExpandIter<'a> {
 
 pub fn expand<'a>(
     axiom: &'a str,
-    rules: &'a HashMap<char, String>,
+    rules: &'a BTreeMap<char, String>,
     iterations: u32,
 ) -> impl Iterator<Item = char> + 'a {
     ExpandIter {
@@ -43,7 +43,7 @@ pub fn expand<'a>(
 
 pub(crate) struct OwnedExpandIter {
     stack: Vec<(std::vec::IntoIter<char>, u32)>,
-    rules: HashMap<char, Vec<char>>,
+    rules: BTreeMap<char, Vec<char>>,
 }
 
 impl Iterator for OwnedExpandIter {
@@ -73,10 +73,10 @@ impl Iterator for OwnedExpandIter {
 
 pub(crate) fn expand_owned(
     axiom: String,
-    rules: HashMap<char, String>,
+    rules: BTreeMap<char, String>,
     iterations: u32,
 ) -> OwnedExpandIter {
-    let char_rules: HashMap<char, Vec<char>> = rules
+    let char_rules: BTreeMap<char, Vec<char>> = rules
         .into_iter()
         .map(|(k, v)| (k, v.chars().collect()))
         .collect();
@@ -93,22 +93,22 @@ pub(crate) fn expand_owned(
 /// Uses symbolic growth tracking: iterates the per-character segment yield one step at
 /// a time without materialising any strings. Saturating arithmetic prevents overflow for
 /// fast-growing systems. Hard-capped at 30 so the loop always terminates.
-pub fn max_safe_iterations(axiom: &str, rules: &HashMap<char, String>, max_segments: u64) -> u32 {
+pub fn max_safe_iterations(axiom: &str, rules: &BTreeMap<char, String>, max_segments: u64) -> u32 {
     const HARD_MAX: u32 = 30;
 
-    let axiom_counts: HashMap<char, u64> = axiom.chars().fold(HashMap::new(), |mut m, c| {
+    let axiom_counts: BTreeMap<char, u64> = axiom.chars().fold(BTreeMap::new(), |mut m, c| {
         *m.entry(c).or_insert(0) += 1;
         m
     });
 
-    let total = |yields: &HashMap<char, u64>| -> u64 {
+    let total = |yields: &BTreeMap<char, u64>| -> u64 {
         axiom_counts
             .iter()
             .map(|(c, n)| n.saturating_mul(*yields.get(c).unwrap_or(&0)))
             .fold(0u64, |a, x| a.saturating_add(x))
     };
 
-    let mut yields: HashMap<char, u64> = [('F', 1u64)].into();
+    let mut yields: BTreeMap<char, u64> = [('F', 1u64)].into();
 
     for n in 0..=HARD_MAX {
         if total(&yields) > max_segments {
@@ -131,7 +131,7 @@ pub fn max_safe_iterations(axiom: &str, rules: &HashMap<char, String>, max_segme
 mod tests {
     use super::*;
 
-    fn koch_rules() -> HashMap<char, String> {
+    fn koch_rules() -> BTreeMap<char, String> {
         [('F', "F-F++F-F".to_string())].into()
     }
 
@@ -160,7 +160,7 @@ mod tests {
         }
     }
 
-    fn sierpinski_rules() -> HashMap<char, String> {
+    fn sierpinski_rules() -> BTreeMap<char, String> {
         [('F', "F-F+F+F-F".to_string())].into()
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn max_safe_no_drawing_symbols_returns_hard_max() {
         // Axiom "A" with no F → always 0 segments, should return HARD_MAX (30).
-        let rules: HashMap<char, String> = [('A', "AA".to_string())].into();
+        let rules: BTreeMap<char, String> = [('A', "AA".to_string())].into();
         assert_eq!(max_safe_iterations("A", &rules, 16_777_216), 30);
     }
 
@@ -192,7 +192,7 @@ mod tests {
         // X has no rule; F maps to FX.
         // iter 1: "F" → "FX"
         // iter 2: F→FX, X→X → "FXX"
-        let rules: HashMap<char, String> = [('F', "FX".to_string())].into();
+        let rules: BTreeMap<char, String> = [('F', "FX".to_string())].into();
         let result: String = expand("F", &rules, 2).collect();
         assert_eq!(result, "FXX");
     }
@@ -203,7 +203,7 @@ mod tests {
         // iter 0: "AB"
         // iter 1: A→aA, B→Bb  →  "aABb"
         // iter 2: a→a, A→aA, B→Bb, b→b  →  "aaABbb"
-        let rules: HashMap<char, String> =
+        let rules: BTreeMap<char, String> =
             [('A', "aA".to_string()), ('B', "Bb".to_string())].into();
         let result: String = expand("AB", &rules, 2).collect();
         assert_eq!(result, "aaABbb");

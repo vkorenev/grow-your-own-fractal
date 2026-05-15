@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Table, Value, value};
@@ -33,7 +33,7 @@ pub enum ConfigError {
     },
 
     #[error("unsupported dimensions value {0} (must be 2 or 3)")]
-    InvalidDimensions(u8),
+    InvalidDimensions(i64),
 
     #[error("unmatched `]` at position {position} in `{field}`")]
     UnmatchedClose { field: String, position: usize },
@@ -63,14 +63,16 @@ pub enum ConfigError {
 /// Color mode for the fractal lines.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineColorConfig {
-    Solid([f32; 3]),
+    Solid { color: [f32; 3] },
     Gradient { start: [f32; 3], end: [f32; 3] },
     HueCycle { initial: [f32; 3] },
 }
 
 impl Default for LineColorConfig {
     fn default() -> Self {
-        Self::Solid([0.0, 0.9, 0.5])
+        Self::Solid {
+            color: [0.0, 0.9, 0.5],
+        }
     }
 }
 
@@ -113,7 +115,7 @@ pub struct GenerationConfig {
     /// In 3D this is the initial yaw in the XY plane.
     pub initial_heading: f32,
     /// Production rules: single ASCII letter → replacement string.
-    pub rules: HashMap<char, String>,
+    pub rules: BTreeMap<char, String>,
 }
 
 impl Config {
@@ -149,11 +151,7 @@ impl ConfigDocument {
         let colors_table = required_table(&self.document, "colors")?;
         let line_table = required_table(colors_table, "line")?;
 
-        let dimensions = required_u8(l_system, "l-system.dimensions")?;
-
-        if dimensions != 2 && dimensions != 3 {
-            return Err(ConfigError::InvalidDimensions(dimensions));
-        }
+        let dimensions = required_dimensions(l_system, "l-system.dimensions")?;
         let step = required_f32(turtle, "turtle.step")?;
         let angle = required_f32(turtle, "turtle.angle")?;
         let initial_heading = required_f32(turtle, "turtle.initial_heading")?;
@@ -173,7 +171,7 @@ impl ConfigDocument {
         validate_symbols(&axiom, "axiom", dimensions)?;
         validate_bracket_balance(&axiom, "axiom")?;
 
-        let mut rules = HashMap::with_capacity(rules_table.len());
+        let mut rules = BTreeMap::new();
         for (key_str, item) in rules_table.iter() {
             let mut key_chars = key_str.chars();
             let key = key_chars
@@ -207,7 +205,7 @@ impl ConfigDocument {
                 validate_keys(line_table, "colors.line", &["mode", "color"])?;
                 let color = required_color(line_table, "colors.line.color")?;
                 validate_color(color, "colors.line.color")?;
-                LineColorConfig::Solid(color)
+                LineColorConfig::Solid { color }
             }
             "gradient" => {
                 validate_keys(line_table, "colors.line", &["mode", "start", "end"])?;
@@ -280,7 +278,7 @@ impl ConfigDocument {
 
         document["colors"]["line"] = Item::Table(Table::new());
         match &config.colors.line {
-            LineColorConfig::Solid(color) => {
+            LineColorConfig::Solid { color } => {
                 document["colors"]["line"]["mode"] = value("solid");
                 document["colors"]["line"]["color"] = color_item(*color);
             }
@@ -295,11 +293,7 @@ impl ConfigDocument {
             }
         }
 
-        let result = Self { document };
-        result
-            .to_config()
-            .expect("generated config TOML must be valid");
-        result
+        Self { document }
     }
 }
 
@@ -402,7 +396,7 @@ fn required_str<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a str, C
         })
 }
 
-fn required_u8(table: &impl TableLike, field: &str) -> Result<u8, ConfigError> {
+fn required_dimensions(table: &impl TableLike, field: &str) -> Result<u8, ConfigError> {
     let value =
         required_item(table, field)?
             .as_integer()
@@ -410,10 +404,11 @@ fn required_u8(table: &impl TableLike, field: &str) -> Result<u8, ConfigError> {
                 field: field.to_string(),
                 expected: "integer",
             })?;
-    u8::try_from(value).map_err(|_| ConfigError::InvalidField {
-        field: field.to_string(),
-        expected: "integer in 0..=255",
-    })
+    match value {
+        2 => Ok(2),
+        3 => Ok(3),
+        other => Err(ConfigError::InvalidDimensions(other)),
+    }
 }
 
 fn required_u32(table: &impl TableLike, field: &str) -> Result<u32, ConfigError> {
@@ -557,7 +552,7 @@ initial = [0.25, 0.5, 0.5]
 "#;
 
     fn test_toml(
-        dimensions: u8,
+        dimensions: i64,
         axiom: &str,
         iterations: u32,
         angle: &str,
@@ -811,7 +806,9 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn serializes_solid_line_color_and_round_trips() {
         let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        cfg.colors.line = LineColorConfig::Solid([0.1, 0.2, 0.3]);
+        cfg.colors.line = LineColorConfig::Solid {
+            color: [0.1, 0.2, 0.3],
+        };
 
         let serialized = cfg.to_toml_string();
 
@@ -819,7 +816,7 @@ color = [0.0, 0.9, 0.5]
         assert!(serialized.contains("color = [0.1, 0.2, 0.3]"));
         let round_tripped = Config::parse(&serialized).unwrap();
         match round_tripped.colors.line {
-            LineColorConfig::Solid(color) => assert_eq!(color, [0.1, 0.2, 0.3]),
+            LineColorConfig::Solid { color } => assert_eq!(color, [0.1, 0.2, 0.3]),
             other => panic!("expected solid line color, got {other:?}"),
         }
         assert_eq!(round_tripped.to_toml_string(), serialized);
@@ -858,6 +855,16 @@ color = [0.0, 0.9, 0.5]
         let round_tripped = Config::parse(&serialized).unwrap();
         assert!(round_tripped.generation.rules.is_empty());
         assert_eq!(round_tripped.to_toml_string(), serialized);
+    }
+
+    #[test]
+    fn serializing_mutated_invalid_config_does_not_revalidate_and_panic() {
+        let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
+        cfg.generation.axiom = "F1".to_string();
+
+        let result = std::panic::catch_unwind(|| cfg.to_toml_string());
+
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -960,6 +967,85 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
+    fn rejects_unknown_line_color_mode() {
+        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
+        let toml = toml.replace("mode = \"solid\"", "mode = \"rainbow\"");
+        let err = Config::parse(&toml).unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidField { ref field, .. } if field == "colors.line.mode"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_extra_keys_for_line_color_modes() {
+        let cases = [
+            (
+                "solid",
+                r#"mode = "solid"
+color = [0.0, 0.9, 0.5]
+start = [0.0, 0.0, 0.0]"#,
+                "colors.line.start",
+            ),
+            (
+                "gradient",
+                r#"mode = "gradient"
+start = [0.0, 0.0, 0.0]
+end = [1.0, 1.0, 1.0]
+color = [0.0, 0.9, 0.5]"#,
+                "colors.line.color",
+            ),
+            (
+                "hue_cycle",
+                r#"mode = "hue_cycle"
+initial = [0.0, 0.9, 0.5]
+end = [1.0, 1.0, 1.0]"#,
+                "colors.line.end",
+            ),
+        ];
+
+        for (mode, replacement, expected_field) in cases {
+            let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
+            let toml = toml.replace("mode = \"solid\"\ncolor = [0.0, 0.9, 0.5]", replacement);
+            let err = Config::parse(&toml).unwrap_err();
+
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::UnknownField(ref field) if field == expected_field
+                ),
+                "mode={mode}: unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_schema_fields() {
+        let toml = format!("{}\n[experimental]\nfoo = true\n", NESTED_KOCH_TOML);
+        let err = Config::parse(&toml).unwrap_err();
+
+        assert!(
+            matches!(err, ConfigError::UnknownField(ref field) if field == "experimental"),
+            "unexpected error: {err}"
+        );
+
+        let toml = NESTED_KOCH_TOML.replace(
+            "initial_heading = 0.0",
+            "initial_heading = 0.0\nfriction = 0.5",
+        );
+        let err = Config::parse(&toml).unwrap_err();
+
+        assert!(
+            matches!(err, ConfigError::UnknownField(ref field) if field == "turtle.friction"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn bundled_presets_are_parseable() {
         let presets_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../presets");
         let mut preset_paths: Vec<_> = std::fs::read_dir(&presets_dir)
@@ -1008,7 +1094,7 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn rejects_invalid_dimensions() {
-        for bad_dim in [1u8, 4] {
+        for bad_dim in [1, 4, 300] {
             let toml = test_toml(bad_dim, "F", 1, "90.0", "1.0", "0.0", "");
             let err = Config::parse(&toml).unwrap_err();
             assert!(
@@ -1016,6 +1102,17 @@ color = [0.0, 0.9, 0.5]
                 "dim={bad_dim}: unexpected error: {err}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_non_finite_initial_heading() {
+        let toml = test_toml(2, "F", 1, "90.0", "1.0", "nan", "");
+        let err = Config::parse(&toml).unwrap_err();
+
+        assert!(
+            matches!(err, ConfigError::InvalidInitialHeading(_)),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

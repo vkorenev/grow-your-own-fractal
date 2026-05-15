@@ -18,7 +18,13 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
         .into_iter()
         .filter_map(|f| {
             let content = f.contents_utf8()?;
-            let name = Config::parse(content).ok()?.name;
+            let name = match Config::parse(content) {
+                Ok(config) => config.name,
+                Err(err) => {
+                    log::error!("Bundled preset {:?} failed to parse: {err}", f.path());
+                    return None;
+                }
+            };
             Some((name, content))
         })
         .collect()

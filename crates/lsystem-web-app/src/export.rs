@@ -17,8 +17,9 @@ pub(crate) fn export_svg(config: Option<Config>, iterations: u32, angle: f32) {
     array.push(&wasm_bindgen::JsValue::from_str(&svg));
     let props = web_sys::BlobPropertyBag::new();
     props.set_type("image/svg+xml");
-    if let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&array, &props) {
-        download_blob(blob, filename);
+    match web_sys::Blob::new_with_str_sequence_and_options(&array, &props) {
+        Ok(blob) => download_blob(blob, filename),
+        Err(err) => log::error!("Failed to create SVG export blob: {err:?}"),
     }
 }
 
@@ -28,6 +29,7 @@ pub(crate) fn export_png(
     iterations: u32,
     angle: f32,
     width: u32,
+    on_error: impl Fn(String) + 'static,
 ) {
     let Some(config) = effective_config(config, iterations, angle) else {
         return;
@@ -49,13 +51,16 @@ pub(crate) fn export_png(
                 array.push(&bytes);
                 let props = web_sys::BlobPropertyBag::new();
                 props.set_type("image/png");
-                if let Ok(blob) =
-                    web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props)
-                {
-                    download_blob(blob, filename);
+                match web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props) {
+                    Ok(blob) => download_blob(blob, filename),
+                    Err(err) => log::error!("Failed to create PNG export blob: {err:?}"),
                 }
             }
-            Err(err) => log::error!("Failed to export PNG: {err}"),
+            Err(err) => {
+                let error = format!("Failed to export PNG: {err}");
+                log::error!("{error}");
+                on_error(error);
+            }
         }
     });
 }
@@ -76,19 +81,35 @@ fn sanitize_filename(name: &str, extension: &str) -> String {
 
 fn download_blob(blob: web_sys::Blob, suggested_name: String) {
     let Some(window) = web_sys::window() else {
+        log::error!("Cannot download export: window is unavailable");
         return;
     };
     let Some(document) = window.document() else {
+        log::error!("Cannot download export: document is unavailable");
         return;
     };
-    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
-        return;
+    let url = match web_sys::Url::create_object_url_with_blob(&blob) {
+        Ok(url) => url,
+        Err(err) => {
+            log::error!("Failed to create export object URL: {err:?}");
+            return;
+        }
     };
-    let Ok(el) = document.create_element("a") else {
-        return;
+    let el = match document.create_element("a") {
+        Ok(el) => el,
+        Err(err) => {
+            log::error!("Failed to create export download link: {err:?}");
+            let _ = web_sys::Url::revoke_object_url(&url);
+            return;
+        }
     };
-    let Ok(anchor) = el.dyn_into::<web_sys::HtmlAnchorElement>() else {
-        return;
+    let anchor = match el.dyn_into::<web_sys::HtmlAnchorElement>() {
+        Ok(anchor) => anchor,
+        Err(err) => {
+            log::error!("Export download link was not an anchor element: {err:?}");
+            let _ = web_sys::Url::revoke_object_url(&url);
+            return;
+        }
     };
     anchor.set_href(&url);
     anchor.set_download(&suggested_name);

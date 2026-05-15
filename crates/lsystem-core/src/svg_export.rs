@@ -75,7 +75,7 @@ pub fn export_svg(config: &Config) -> String {
 
 fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
     match line {
-        LineColorConfig::Solid(c) => {
+        LineColorConfig::Solid { color: c } => {
             let color = to_hex(*c);
             let mut d = String::new();
             for [a, b] in segments {

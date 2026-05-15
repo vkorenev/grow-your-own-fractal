@@ -148,7 +148,7 @@ pub fn geometry_to_vertices_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> Ver
 
 pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
     match *line {
-        LineColorConfig::Solid(c) => ColorParams {
+        LineColorConfig::Solid { color: c } => ColorParams {
             mode: 0,
             total_segments,
             color_start: [c[0], c[1], c[2], 1.0],

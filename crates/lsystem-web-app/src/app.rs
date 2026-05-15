@@ -222,15 +222,24 @@ pub(crate) fn App() -> impl IntoView {
                         window.clear_interval_with_handle(id);
                     }
                 });
-                if let Some(window) = web_sys::window()
-                    && let Ok(id) = window.set_interval_with_callback_and_timeout_and_arguments_0(
+                if let Some(window) = web_sys::window() {
+                    match window.set_interval_with_callback_and_timeout_and_arguments_0(
                         closure.as_ref().unchecked_ref(),
                         AUTO_ROTATE_DT_MS as i32,
-                    )
-                {
-                    interval_id_store.set(Some(id));
+                    ) {
+                        Ok(id) => {
+                            interval_id_store.set(Some(id));
+                            closure.forget();
+                        }
+                        Err(err) => {
+                            log::error!("Failed to start auto-rotate interval: {err:?}");
+                            set_auto_rotate.set(false);
+                        }
+                    }
+                } else {
+                    log::error!("Failed to start auto-rotate interval: window is unavailable");
+                    set_auto_rotate.set(false);
                 }
-                closure.forget();
             }
         }
     };
@@ -373,6 +382,7 @@ pub(crate) fn App() -> impl IntoView {
                                         iterations.get_untracked(),
                                         angle.get_untracked(),
                                         png_width.get_untracked(),
+                                        move |error| set_gpu_error.set(Some(error)),
                                     );
                                 }
                             }
@@ -612,10 +622,8 @@ fn install_resize_listener<H>(
             );
         }
     });
-    if window
-        .add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())
-        .is_ok()
-    {
-        closure.forget();
+    match window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref()) {
+        Ok(()) => closure.forget(),
+        Err(err) => log::error!("Failed to install resize listener: {err:?}"),
     }
 }

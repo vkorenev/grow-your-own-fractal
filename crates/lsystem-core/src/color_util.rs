@@ -1,3 +1,5 @@
+/// Converts an RGB color with components in `0.0..=1.0` to
+/// `(hue_degrees, saturation, value)`.
 pub fn rgb_to_hsv([r, g, b]: [f32; 3]) -> (f32, f32, f32) {
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
@@ -43,5 +45,32 @@ mod tests {
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
         assert!(close(value, 0.4));
+    }
+
+    #[test]
+    fn pure_blue_maps_to_blue_hue() {
+        let (hue, saturation, value) = rgb_to_hsv([0.0, 0.0, 1.0]);
+
+        assert!(close(hue, 240.0));
+        assert!(close(saturation, 1.0));
+        assert!(close(value, 1.0));
+    }
+
+    #[test]
+    fn black_has_zero_saturation_and_value() {
+        let (hue, saturation, value) = rgb_to_hsv([0.0, 0.0, 0.0]);
+
+        assert!(close(hue, 0.0));
+        assert!(close(saturation, 0.0));
+        assert!(close(value, 0.0));
+    }
+
+    #[test]
+    fn red_dominant_negative_hue_wraps() {
+        let (hue, saturation, value) = rgb_to_hsv([1.0, 0.0, 0.5]);
+
+        assert!(close(hue, 330.0));
+        assert!(close(saturation, 1.0));
+        assert!(close(value, 1.0));
     }
 }
