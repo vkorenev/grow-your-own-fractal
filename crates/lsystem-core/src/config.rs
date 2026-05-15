@@ -256,6 +256,19 @@ impl ConfigDocument {
         self.document.to_string()
     }
 
+    pub fn set_name(&mut self, name: &str) -> Result<(), ConfigError> {
+        let metadata = self
+            .document
+            .get_mut("metadata")
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| ConfigError::InvalidField {
+                field: "metadata".to_string(),
+                expected: "table",
+            })?;
+        metadata["name"] = value(name);
+        Ok(())
+    }
+
     pub fn from_config(config: &Config) -> Self {
         let mut document = DocumentMut::new();
 

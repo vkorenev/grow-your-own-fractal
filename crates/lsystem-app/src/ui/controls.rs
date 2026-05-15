@@ -15,10 +15,11 @@ impl FractalApp {
 
         let mut controls = column![
             text(TITLE).size(24),
-            text("Preset").size(13),
+            text("Config").size(13),
             pick_list(selected_preset, preset_names, String::clone)
                 .on_select(Message::PresetSelected)
                 .width(Length::Fill),
+            button("Copy").on_press(Message::CopyConfig),
             text("Config (TOML)").size(13),
             text_editor(&self.toml)
                 .height(260)
