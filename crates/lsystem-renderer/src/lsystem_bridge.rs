@@ -1,5 +1,5 @@
 use glam::{Vec2, Vec3};
-use lsystem_core::LineColorConfig;
+use lsystem_core::{LineColorConfig, color_util::rgb_to_hsv};
 
 use crate::line_renderer::{ColorParams, Transform, Vertex2D, Vertex3D};
 
@@ -148,7 +148,7 @@ pub fn geometry_to_vertices_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> Ver
 
 pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
     match *line {
-        LineColorConfig::Solid(c) => ColorParams {
+        LineColorConfig::Solid { color: c } => ColorParams {
             mode: 0,
             total_segments,
             color_start: [c[0], c[1], c[2], 1.0],
@@ -161,18 +161,17 @@ pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> 
             color_end: [end[0], end[1], end[2], 1.0],
             ..Default::default()
         },
-        LineColorConfig::HueCycle {
-            start_hue,
-            saturation,
-            value,
-        } => ColorParams {
-            mode: 2,
-            total_segments,
-            hue_start: start_hue,
-            saturation,
-            value,
-            ..Default::default()
-        },
+        LineColorConfig::HueCycle { initial } => {
+            let (hue_start, saturation, value) = rgb_to_hsv(initial);
+            ColorParams {
+                mode: 2,
+                total_segments,
+                hue_start,
+                saturation,
+                value,
+                ..Default::default()
+            }
+        }
     }
 }
 
@@ -218,8 +217,48 @@ mod tests {
         (a - b).abs() < EPS
     }
 
-    fn cfg(toml: &str) -> Config {
-        Config::parse(toml).unwrap()
+    #[test]
+    fn hue_cycle_initial_rgb_maps_to_hsv_uniforms() {
+        let params = color_params_from_config(
+            &LineColorConfig::HueCycle {
+                initial: [0.25, 0.5, 0.5],
+            },
+            9,
+        );
+
+        assert_eq!(params.mode, 2);
+        assert_eq!(params.total_segments, 9);
+        assert!(close(params.hue_start, 180.0));
+        assert!(close(params.saturation, 0.5));
+        assert!(close(params.value, 0.5));
+    }
+
+    fn cfg(axiom: &str) -> Config {
+        let toml = format!(
+            r#"[metadata]
+name = "t"
+
+[l-system]
+dimensions = 2
+axiom = "{axiom}"
+iterations = 0
+
+[l-system.rules]
+
+[turtle]
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
+"#
+        );
+        Config::parse(&toml).unwrap()
     }
 
     #[test]
@@ -228,9 +267,7 @@ mod tests {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg(
-            "name=\"t\"\naxiom=\"A\"\niterations=0\nangle=90.0\nstep=1.0",
-        )));
+        } = geometry_to_vertices(generate(&cfg("A").generation));
         assert!(vertices.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
@@ -242,9 +279,7 @@ mod tests {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg(
-            "name=\"t\"\naxiom=\"F\"\niterations=0\nangle=90.0\nstep=1.0",
-        )));
+        } = geometry_to_vertices(generate(&cfg("F").generation));
         assert_eq!(vertices.len(), 2);
         assert!(close(vertices[0].position[0], 0.0) && close(vertices[0].position[1], 0.0));
         assert!(close(vertices[1].position[0], 1.0) && close(vertices[1].position[1], 0.0));
@@ -258,9 +293,7 @@ mod tests {
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg(
-            "name=\"t\"\naxiom=\"F+F-F\"\niterations=0\nangle=90.0\nstep=1.0",
-        )));
+        } = geometry_to_vertices(generate(&cfg("F+F-F").generation));
         assert_eq!(vertices.len(), 6);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));

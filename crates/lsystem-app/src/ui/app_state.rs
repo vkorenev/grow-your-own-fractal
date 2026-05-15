@@ -283,10 +283,13 @@ impl FractalApp {
                 } else {
                     lsystem_renderer::line_renderer::MAX_SEGMENTS
                 };
-                self.max_iterations =
-                    lsystem_core::max_safe_iterations(&config.axiom, &config.rules, max_seg) as u32;
-                self.iterations = config.iterations.min(self.max_iterations);
-                self.angle = config.angle;
+                self.max_iterations = lsystem_core::max_safe_iterations(
+                    &config.generation.axiom,
+                    &config.generation.rules,
+                    max_seg,
+                ) as u32;
+                self.iterations = config.generation.iterations.min(self.max_iterations);
+                self.angle = config.generation.angle;
                 self.base_config = Some(config);
                 self.error = None;
                 self.export_status = None;
@@ -303,8 +306,8 @@ impl FractalApp {
 
     fn effective_config(&self) -> Option<Config> {
         self.base_config.clone().map(|mut config| {
-            config.iterations = self.iterations;
-            config.angle = self.angle;
+            config.generation.iterations = self.iterations;
+            config.generation.angle = self.angle;
             config
         })
     }

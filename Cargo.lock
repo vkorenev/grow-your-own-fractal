@@ -2317,9 +2317,8 @@ name = "lsystem-core"
 version = "0.1.0"
 dependencies = [
  "glam 0.32.1",
- "serde",
  "thiserror 2.0.18",
- "toml",
+ "toml_edit",
 ]
 
 [[package]]
@@ -4140,12 +4139,10 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
 dependencies = [
- "indexmap",
  "serde_core",
  "serde_spanned",
  "toml_datetime",
  "toml_parser",
- "toml_writer",
  "winnow",
 ]
 
@@ -4167,6 +4164,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

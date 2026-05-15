@@ -29,10 +29,15 @@ pub(crate) fn App() -> impl IntoView {
     let (toml_text, set_toml_text) = signal(first_toml);
     let (base_config, set_base_config) = signal(Some(initial.config.clone()));
     let (error, set_error) = signal(None::<String>);
-    let (iterations, set_iterations) =
-        signal(initial.config.iterations.min(initial.max_iterations));
+    let (iterations, set_iterations) = signal(
+        initial
+            .config
+            .generation
+            .iterations
+            .min(initial.max_iterations),
+    );
     let (max_iterations, set_max_iterations) = signal(initial.max_iterations);
-    let (angle, set_angle) = signal(initial.config.angle);
+    let (angle, set_angle) = signal(initial.config.generation.angle);
     let (png_width, set_png_width) = signal(2048u32);
     let (gpu_error, set_gpu_error) = signal(None::<String>);
     let (auto_rotate, set_auto_rotate) = signal(false);
@@ -163,8 +168,8 @@ pub(crate) fn App() -> impl IntoView {
                 let max = applied.max_iterations;
                 let new_is_3d = applied.config.dimensions == 3;
                 set_max_iterations.set(max);
-                set_iterations.set(applied.config.iterations.min(max));
-                set_angle.set(applied.config.angle);
+                set_iterations.set(applied.config.generation.iterations.min(max));
+                set_angle.set(applied.config.generation.angle);
                 set_base_config.set(Some(applied.config));
                 set_error.set(None);
                 if !new_is_3d && auto_rotate.get_untracked() {
@@ -217,15 +222,24 @@ pub(crate) fn App() -> impl IntoView {
                         window.clear_interval_with_handle(id);
                     }
                 });
-                if let Some(window) = web_sys::window()
-                    && let Ok(id) = window.set_interval_with_callback_and_timeout_and_arguments_0(
+                if let Some(window) = web_sys::window() {
+                    match window.set_interval_with_callback_and_timeout_and_arguments_0(
                         closure.as_ref().unchecked_ref(),
                         AUTO_ROTATE_DT_MS as i32,
-                    )
-                {
-                    interval_id_store.set(Some(id));
+                    ) {
+                        Ok(id) => {
+                            interval_id_store.set(Some(id));
+                            closure.forget();
+                        }
+                        Err(err) => {
+                            log::error!("Failed to start auto-rotate interval: {err:?}");
+                            set_auto_rotate.set(false);
+                        }
+                    }
+                } else {
+                    log::error!("Failed to start auto-rotate interval: window is unavailable");
+                    set_auto_rotate.set(false);
                 }
-                closure.forget();
             }
         }
     };
@@ -368,6 +382,7 @@ pub(crate) fn App() -> impl IntoView {
                                         iterations.get_untracked(),
                                         angle.get_untracked(),
                                         png_width.get_untracked(),
+                                        move |error| set_gpu_error.set(Some(error)),
                                     );
                                 }
                             }
@@ -607,10 +622,8 @@ fn install_resize_listener<H>(
             );
         }
     });
-    if window
-        .add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())
-        .is_ok()
-    {
-        closure.forget();
+    match window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref()) {
+        Ok(()) => closure.forget(),
+        Err(err) => log::error!("Failed to install resize listener: {err:?}"),
     }
 }

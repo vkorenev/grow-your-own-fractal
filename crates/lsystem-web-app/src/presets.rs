@@ -18,7 +18,13 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
         .into_iter()
         .filter_map(|f| {
             let content = f.contents_utf8()?;
-            let name = Config::parse(content).ok()?.name;
+            let name = match Config::parse(content) {
+                Ok(config) => config.name,
+                Err(err) => {
+                    log::error!("Bundled preset {:?} failed to parse: {err}", f.path());
+                    return None;
+                }
+            };
             Some((name, content))
         })
         .collect()
@@ -31,7 +37,11 @@ pub(crate) fn apply_toml(text: &str) -> Result<AppliedConfig, lsystem_core::Conf
     } else {
         lsystem_renderer::line_renderer::MAX_SEGMENTS
     };
-    let max_iterations = lsystem_core::max_safe_iterations(&config.axiom, &config.rules, max_seg);
+    let max_iterations = lsystem_core::max_safe_iterations(
+        &config.generation.axiom,
+        &config.generation.rules,
+        max_seg,
+    );
     Ok(AppliedConfig {
         config,
         max_iterations,
@@ -44,8 +54,8 @@ pub(crate) fn effective_config(
     angle: f32,
 ) -> Option<Config> {
     config.map(|mut config| {
-        config.iterations = iterations;
-        config.angle = angle;
+        config.generation.iterations = iterations;
+        config.generation.angle = angle;
         config
     })
 }

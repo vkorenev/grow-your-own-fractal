@@ -100,7 +100,7 @@ pub async fn render_png(
     validate_width(width)?;
 
     if config.dimensions == 3 {
-        let data = geometry_to_vertices_3d(lsystem_core::generate_3d(config));
+        let data = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
         let height = width; // square viewport for perspective
         let total_segments = (data.vertices.len() / 2) as u32;
         let color_params = color_params_from_config(&config.colors.line, total_segments);
@@ -122,7 +122,7 @@ pub async fn render_png(
         )
         .await
     } else {
-        let data = geometry_to_vertices(lsystem_core::generate(config));
+        let data = geometry_to_vertices(lsystem_core::generate(&config.generation));
         let height = derive_height(width, data.bounds_min, data.bounds_max)?;
         let total_segments = (data.vertices.len() / 2) as u32;
         let color_params = color_params_from_config(&config.colors.line, total_segments);

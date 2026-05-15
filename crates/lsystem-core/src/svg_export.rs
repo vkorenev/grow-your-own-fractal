@@ -1,13 +1,13 @@
 use glam::Vec2;
 
-use crate::{Config, LineColorConfig, generate};
+use crate::{Config, LineColorConfig, color_util::rgb_to_hsv, generate};
 
 /// Generate an SVG string for the given config.
 ///
 /// The SVG uses the natural turtle coordinate system, scaled to fit the fractal.
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> String {
-    let segments: Vec<[Vec2; 2]> = generate(config).collect();
+    let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
 
     if segments.is_empty() {
         let bg = to_hex(config.colors.background);
@@ -32,7 +32,7 @@ pub fn export_svg(config: &Config) -> String {
     }
 
     // Pad degenerate (zero-width or zero-height) bounding boxes.
-    let pad = config.step * 0.5;
+    let pad = config.generation.step * 0.5;
     if max_x == min_x {
         min_x -= pad;
         max_x += pad;
@@ -75,7 +75,7 @@ pub fn export_svg(config: &Config) -> String {
 
 fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
     match line {
-        LineColorConfig::Solid(c) => {
+        LineColorConfig::Solid { color: c } => {
             let color = to_hex(*c);
             let mut d = String::new();
             for [a, b] in segments {
@@ -102,18 +102,15 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             }
             out
         }
-        LineColorConfig::HueCycle {
-            start_hue,
-            saturation,
-            value,
-        } => {
+        LineColorConfig::HueCycle { initial } => {
+            let (start_hue, saturation, value) = rgb_to_hsv(*initial);
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
             for (i, [a, b]) in segments.iter().enumerate() {
                 let t = i as f32 / denom;
                 let hue = start_hue + t * 360.0;
-                let rgb = hsv_to_rgb(hue, *saturation, *value);
+                let rgb = hsv_to_rgb(hue, saturation, value);
                 let color = to_hex(rgb);
                 out.push_str(&format!(
                     "<line x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\" stroke=\"{color}\"/>\n",
@@ -156,19 +153,62 @@ mod tests {
 
     fn make_config(extra_toml: &str) -> Config {
         let toml = format!(
-            "name = \"Test\"\naxiom = \"F+F\"\niterations = 1\nangle = 90.0\nstep = 1.0\n{extra_toml}"
+            r#"[metadata]
+name = "Test"
+
+[l-system]
+dimensions = 2
+axiom = "F+F"
+iterations = 1
+
+[l-system.rules]
+
+[turtle]
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+{extra_toml}
+"#
         );
         Config::parse(&toml).unwrap()
     }
 
     fn make_empty_config() -> Config {
-        Config::parse("name = \"Empty\"\naxiom = \"+\"\niterations = 1\nangle = 90.0\nstep = 1.0")
-            .unwrap()
+        Config::parse(
+            r#"[metadata]
+name = "Empty"
+
+[l-system]
+dimensions = 2
+axiom = "+"
+iterations = 1
+
+[l-system.rules]
+
+[turtle]
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
+"#,
+        )
+        .unwrap()
     }
 
     #[test]
     fn solid_contains_svg_and_color() {
-        let cfg = make_config("[line_color]\nmode = \"solid\"\ncolor = [1.0, 0.0, 0.0]");
+        let cfg = make_config("mode = \"solid\"\ncolor = [1.0, 0.0, 0.0]");
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -181,9 +221,8 @@ mod tests {
 
     #[test]
     fn gradient_first_and_last_segment_colors() {
-        let cfg = make_config(
-            "[line_color]\nmode = \"gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
-        );
+        let cfg =
+            make_config("mode = \"gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]");
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -197,10 +236,7 @@ mod tests {
 
     #[test]
     fn hue_cycle_start_color() {
-        // start_hue=0, s=1, v=1 → hue=0 → pure red for first segment
-        let cfg = make_config(
-            "[line_color]\nmode = \"hue_cycle\"\nstart_hue = 0.0\nsaturation = 1.0\nvalue = 1.0",
-        );
+        let cfg = make_config("mode = \"hue_cycle\"\ninitial = [1.0, 0.0, 0.0]");
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(

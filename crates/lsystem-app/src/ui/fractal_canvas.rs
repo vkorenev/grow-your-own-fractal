@@ -195,7 +195,7 @@ pub(super) async fn build_scene(
         let mut builder = VertexDataBuilder3D::new();
         let mut segments_seen = 0usize;
 
-        for segment in lsystem_core::generate_3d(&config) {
+        for segment in lsystem_core::generate_3d(&config.generation) {
             if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;
@@ -221,7 +221,7 @@ pub(super) async fn build_scene(
         let mut builder = VertexDataBuilder::new();
         let mut segments_seen = 0usize;
 
-        for segment in lsystem_core::generate(&config) {
+        for segment in lsystem_core::generate(&config.generation) {
             if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;

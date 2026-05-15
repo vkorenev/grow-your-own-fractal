@@ -75,7 +75,7 @@ impl CanvasRenderer {
                 vertices,
                 bounds_min,
                 bounds_max,
-            } = geometry_to_vertices_3d(lsystem_core::generate_3d(config));
+            } = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
             total_segments = (vertices.len() / 2) as u32;
             self.scene = ActiveScene::ThreeD {
                 vertices,
@@ -87,7 +87,7 @@ impl CanvasRenderer {
                 vertices,
                 bounds_min,
                 bounds_max,
-            } = geometry_to_vertices(lsystem_core::generate(config));
+            } = geometry_to_vertices(lsystem_core::generate(&config.generation));
             total_segments = (vertices.len() / 2) as u32;
             self.scene = ActiveScene::TwoD {
                 vertices,
