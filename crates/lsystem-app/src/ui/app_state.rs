@@ -324,11 +324,8 @@ impl FractalApp {
         let Some(config) = &self.base_config else {
             return;
         };
-        let max_seg = if config.dimensions == 3 {
-            lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
-        } else {
-            lsystem_renderer::line_renderer::MAX_SEGMENTS
-        };
+        let max_seg =
+            lsystem_renderer::line_renderer::max_segments_for(config.generation.dimensions);
         self.max_iterations = lsystem_core::max_safe_iterations(
             &config.generation.axiom,
             &config.generation.rules,

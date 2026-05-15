@@ -25,12 +25,8 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
         .collect()
 }
 
-pub(crate) fn max_iterations_for_config(dimensions: u8, generation: &GenerationConfig) -> u32 {
-    let max_seg = if dimensions == 3 {
-        lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
-    } else {
-        lsystem_renderer::line_renderer::MAX_SEGMENTS
-    };
+pub(crate) fn max_iterations_for_config(generation: &GenerationConfig) -> u32 {
+    let max_seg = lsystem_renderer::line_renderer::max_segments_for(generation.dimensions);
     lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg)
 }
 

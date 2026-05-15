@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use lsystem_core::Dimensions;
 use wgpu::util::DeviceExt;
 
 use crate::wgpu_util;
@@ -48,11 +49,19 @@ impl Default for Mvp {
 
 /// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
 /// Each 2D segment occupies 2 vertices × `size_of::<Vertex2D>()` bytes.
-pub const MAX_SEGMENTS: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex2D>() as u64);
+const MAX_SEGMENTS_2D: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex2D>() as u64);
 
 /// Maximum number of 3D line segments that fit in a 256 MiB vertex buffer.
 /// Each 3D segment occupies 2 vertices × `size_of::<Vertex3D>()` bytes.
-pub const MAX_SEGMENTS_3D: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex3D>() as u64);
+const MAX_SEGMENTS_3D: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex3D>() as u64);
+
+/// Returns the segment cap appropriate for the given dimensions.
+pub fn max_segments_for(dimensions: Dimensions) -> u64 {
+    match dimensions {
+        Dimensions::ThreeD => MAX_SEGMENTS_3D,
+        Dimensions::TwoD => MAX_SEGMENTS_2D,
+    }
+}
 
 /// Per-frame color parameters written to the GPU as a uniform.
 /// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
