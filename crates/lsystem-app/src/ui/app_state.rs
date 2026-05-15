@@ -137,10 +137,10 @@ impl FractalApp {
                 self.sync_controls_from_base_config();
                 self.error = None;
                 self.export_status = None;
-                Task::none()
+                self.schedule_scene_generation()
             }
             Message::ResetConfig => match self.config_workspace.reset_selected() {
-                Ok(Some(config)) => {
+                Some(config) => {
                     self.base_config = Some(config.clone());
                     let text = self.config_workspace.selected_draft_text().to_string();
                     self.toml = iced::widget::text_editor::Content::with_text(&text);
@@ -149,11 +149,7 @@ impl FractalApp {
                     self.export_status = None;
                     self.schedule_scene_generation()
                 }
-                Ok(None) => Task::none(),
-                Err(error) => {
-                    self.error = Some(error.to_string());
-                    Task::none()
-                }
+                None => Task::none(),
             },
             Message::IterationsChanged(iterations) => {
                 if self.config_workspace.selected_is_dirty() {
@@ -450,7 +446,13 @@ fn load_presets() -> Vec<(String, String)> {
         .into_iter()
         .filter_map(|file| {
             let toml = file.contents_utf8()?;
-            let name = Config::parse(toml).ok()?.name;
+            let name = match Config::parse(toml) {
+                Ok(config) => config.name,
+                Err(err) => {
+                    log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
+                    return None;
+                }
+            };
             Some((name, toml.to_string()))
         })
         .collect()

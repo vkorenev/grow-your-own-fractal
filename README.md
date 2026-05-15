@@ -117,9 +117,10 @@ arrays inline.
 Each preset keeps separate draft and last-applied config text while the app is
 open. Switching presets preserves unapplied edits, **Apply** validates and
 renders the current draft, **Revert** restores the last-applied draft, and
-**Reset** restores the bundled preset default. While a draft differs from the
-last-applied config, iteration/angle/export controls are hidden until the draft
-is applied or reverted.
+**Reset** restores the bundled preset default after an applied preset has
+diverged from that default. While a draft differs from the last-applied config,
+iteration/angle/export controls are hidden until the draft is applied or
+reverted.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.

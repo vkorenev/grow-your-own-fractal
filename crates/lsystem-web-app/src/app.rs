@@ -196,7 +196,10 @@ pub(crate) fn App() -> impl IntoView {
                 Some(Err(err)) => {
                     set_error.set(Some(err.to_string()));
                 }
-                None => {}
+                None => {
+                    log::error!("apply_selected: config_workspace signal was unavailable");
+                    set_error.set(Some("Internal error: could not apply config.".to_string()));
+                }
             }
         }
     };
@@ -340,21 +343,32 @@ pub(crate) fn App() -> impl IntoView {
                     <button
                         type="button"
                         disabled=move || !is_dirty()
-                        on:click=move |_| {
-                            let text = set_config_workspace.try_update(|workspace| {
-                                workspace.revert_selected().to_string()
-                            });
-                            if let Some(text) = text {
-                                set_toml_text.set(text);
-                                let config = config_workspace.with_untracked(|workspace| {
-                                    workspace.selected_applied_config().clone()
+                        on:click={
+                            let render_current = Rc::clone(&render_current);
+                            move |_| {
+                                let text = set_config_workspace.try_update(|workspace| {
+                                    workspace.revert_selected().to_string()
                                 });
-                                let max = max_iterations_for_config(&config);
-                                set_max_iterations.set(max);
-                                set_iterations.set(config.generation.iterations.min(max));
-                                set_angle.set(config.generation.angle);
-                                set_base_config.set(Some(config));
-                                set_error.set(None);
+                                if let Some(text) = text {
+                                    set_toml_text.set(text);
+                                    let config = config_workspace.with_untracked(|workspace| {
+                                        workspace.selected_applied_config().clone()
+                                    });
+                                    let max = max_iterations_for_config(&config);
+                                    set_max_iterations.set(max);
+                                    set_iterations.set(config.generation.iterations.min(max));
+                                    set_angle.set(config.generation.angle);
+                                    set_base_config.set(Some(config));
+                                    set_error.set(None);
+                                    render_current();
+                                } else {
+                                    log::error!(
+                                        "revert_selected: config_workspace signal was unavailable"
+                                    );
+                                    set_error.set(Some(
+                                        "Internal error: could not revert config.".to_string(),
+                                    ));
+                                }
                             }
                         }
                     >
@@ -369,10 +383,10 @@ pub(crate) fn App() -> impl IntoView {
                             let render_current = Rc::clone(&render_current);
                             move |_| {
                                 let reset = set_config_workspace.try_update(|workspace| {
-                                    workspace.reset_selected().map(|config| config.cloned())
+                                    workspace.reset_selected().cloned()
                                 });
                                 match reset {
-                                    Some(Ok(Some(config))) => {
+                                    Some(Some(config)) => {
                                         let text = config_workspace.with_untracked(|workspace| {
                                             workspace.selected_draft_text().to_string()
                                         });
@@ -385,9 +399,15 @@ pub(crate) fn App() -> impl IntoView {
                                         set_error.set(None);
                                         render_current();
                                     }
-                                    Some(Ok(None)) => {}
-                                    Some(Err(err)) => set_error.set(Some(err.to_string())),
-                                    None => {}
+                                    Some(None) => {}
+                                    None => {
+                                        log::error!(
+                                            "reset_selected: config_workspace signal was unavailable"
+                                        );
+                                        set_error.set(Some(
+                                            "Internal error: could not reset config.".to_string(),
+                                        ));
+                                    }
                                 }
                             }
                         }

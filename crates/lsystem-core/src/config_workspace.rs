@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use thiserror::Error;
 
 use crate::{Config, ConfigDocument, ConfigError};
@@ -6,6 +8,9 @@ use crate::{Config, ConfigDocument, ConfigError};
 pub enum ConfigWorkspaceError {
     #[error("at least one config entry is required")]
     Empty,
+
+    #[error("duplicate config entry name `{0}`")]
+    DuplicateName(String),
 
     #[error(transparent)]
     Config(#[from] ConfigError),
@@ -45,13 +50,19 @@ impl ConfigWorkspaceEntry {
 #[derive(Debug, Clone)]
 struct ConfigEntry {
     name: String,
-    default_text: Option<String>,
-    default_document: Option<ConfigDocument>,
+    default: Option<DefaultEntry>,
     draft_text: String,
     draft_document: Option<ConfigDocument>,
     last_applied_text: String,
     last_applied_document: ConfigDocument,
     last_applied_config: Config,
+}
+
+#[derive(Debug, Clone)]
+struct DefaultEntry {
+    text: String,
+    document: ConfigDocument,
+    config: Config,
 }
 
 impl ConfigWorkspace {
@@ -68,33 +79,44 @@ impl ConfigWorkspace {
     pub fn from_entries(
         entries: impl IntoIterator<Item = ConfigWorkspaceEntry>,
     ) -> Result<Self, ConfigWorkspaceError> {
-        let entries: Result<Vec<_>, ConfigWorkspaceError> = entries
-            .into_iter()
-            .map(|entry| {
-                let ConfigWorkspaceEntry {
-                    name,
-                    text,
-                    default_text,
-                } = entry;
-                let document = ConfigDocument::parse(&text)?;
-                let config = document.to_config()?;
-                let default_document = default_text
-                    .as_deref()
-                    .map(ConfigDocument::parse)
-                    .transpose()?;
-                Ok(ConfigEntry {
-                    name,
-                    default_text,
-                    default_document,
-                    draft_text: text.clone(),
-                    draft_document: Some(document.clone()),
-                    last_applied_text: text,
-                    last_applied_document: document,
-                    last_applied_config: config,
+        let mut names = BTreeSet::new();
+        let mut entries_out = Vec::new();
+
+        for entry in entries {
+            let ConfigWorkspaceEntry {
+                name,
+                text,
+                default_text,
+            } = entry;
+            if !names.insert(name.clone()) {
+                return Err(ConfigWorkspaceError::DuplicateName(name));
+            }
+
+            let document = ConfigDocument::parse(&text)?;
+            let config = document.to_config()?;
+            let default = default_text
+                .map(|text| {
+                    let document = ConfigDocument::parse(&text)?;
+                    let config = document.to_config()?;
+                    Ok::<_, ConfigError>(DefaultEntry {
+                        text,
+                        document,
+                        config,
+                    })
                 })
-            })
-            .collect();
-        let entries = entries?;
+                .transpose()?;
+            entries_out.push(ConfigEntry {
+                name,
+                default,
+                draft_text: text.clone(),
+                draft_document: Some(document.clone()),
+                last_applied_text: text,
+                last_applied_document: document,
+                last_applied_config: config,
+            });
+        }
+
+        let entries = entries_out;
         if entries.is_empty() {
             return Err(ConfigWorkspaceError::Empty);
         }
@@ -142,7 +164,11 @@ impl ConfigWorkspace {
     }
 
     pub fn selected_can_reset(&self) -> bool {
-        self.entries[self.selected].default_text.is_some()
+        let entry = &self.entries[self.selected];
+        entry
+            .default
+            .as_ref()
+            .is_some_and(|default| entry.last_applied_text != default.text)
     }
 
     pub fn select_index(&mut self, index: usize) -> bool {
@@ -163,6 +189,8 @@ impl ConfigWorkspace {
 
     pub fn set_selected_draft_text(&mut self, text: String) {
         let entry = &mut self.entries[self.selected];
+        // Parse failure is intentional here: a draft may be mid-edit, and
+        // apply_selected re-parses and returns the error when submitted.
         entry.draft_document = ConfigDocument::parse(&text).ok();
         entry.draft_text = text;
     }
@@ -188,21 +216,15 @@ impl ConfigWorkspace {
         &entry.draft_text
     }
 
-    pub fn reset_selected(&mut self) -> Result<Option<&Config>, ConfigError> {
+    pub fn reset_selected(&mut self) -> Option<&Config> {
         let entry = &mut self.entries[self.selected];
-        let Some(default_text) = entry.default_text.clone() else {
-            return Ok(None);
-        };
-        let document = entry.default_document.clone().unwrap_or_else(|| {
-            ConfigDocument::parse(&default_text).expect("stored default parses")
-        });
-        let config = document.to_config()?;
-        entry.draft_text = default_text.clone();
-        entry.draft_document = Some(document.clone());
-        entry.last_applied_text = default_text;
-        entry.last_applied_document = document;
-        entry.last_applied_config = config;
-        Ok(Some(&entry.last_applied_config))
+        let default = entry.default.clone()?;
+        entry.draft_text = default.text.clone();
+        entry.draft_document = Some(default.document.clone());
+        entry.last_applied_text = default.text;
+        entry.last_applied_document = default.document;
+        entry.last_applied_config = default.config;
+        Some(&entry.last_applied_config)
     }
 }
 
@@ -268,13 +290,27 @@ color = [0.0, 0.9, 0.5]
         let previous_config = workspace.selected_applied_config().clone();
 
         workspace.set_selected_draft_text("not valid toml".to_string());
-        assert!(workspace.apply_selected().is_err());
+        let error = workspace.apply_selected().unwrap_err();
+        assert!(matches!(error, ConfigError::TomlParse(_)));
 
         assert_eq!(workspace.selected_applied_config(), &previous_config);
         assert_eq!(
             workspace.selected_applied_document().to_config().unwrap(),
             previous_config
         );
+        assert!(workspace.selected_is_dirty());
+    }
+
+    #[test]
+    fn apply_rejects_parseable_toml_with_invalid_config() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First".to_string(), first.clone())]).unwrap();
+
+        workspace.set_selected_draft_text(first.replace("axiom = \"F\"", "axiom = \"[\""));
+        let error = workspace.apply_selected().unwrap_err();
+
+        assert!(matches!(error, ConfigError::UnmatchedOpen { .. }));
         assert!(workspace.selected_is_dirty());
     }
 
@@ -304,17 +340,21 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("First".to_string(), first.clone())]).unwrap();
+        assert!(!workspace.selected_can_reset());
+
         workspace.set_selected_draft_text(first.replace("angle = 60", "angle = 45"));
         workspace.apply_selected().unwrap();
         assert_eq!(workspace.selected_applied_config().generation.angle, 45.0);
+        assert!(workspace.selected_can_reset());
 
-        let reset_config = workspace.reset_selected().unwrap().unwrap();
+        let reset_config = workspace.reset_selected().unwrap();
 
         assert_eq!(reset_config.generation.angle, 60.0);
         assert_eq!(workspace.selected_draft_text(), first);
         assert_eq!(workspace.selected_applied_text(), first);
         assert_eq!(workspace.selected_applied_document().to_string(), first);
         assert!(!workspace.selected_is_dirty());
+        assert!(!workspace.selected_can_reset());
     }
 
     #[test]
@@ -330,7 +370,72 @@ color = [0.0, 0.9, 0.5]
         workspace.set_selected_draft_text(first.replace("angle = 60", "angle = 45"));
         workspace.apply_selected().unwrap();
 
-        assert!(workspace.reset_selected().unwrap().is_none());
+        assert!(workspace.reset_selected().is_none());
         assert_eq!(workspace.selected_applied_config().generation.angle, 45.0);
+    }
+
+    #[test]
+    fn from_entries_rejects_empty_iterator() {
+        let error = ConfigWorkspace::from_entries(Vec::<ConfigWorkspaceEntry>::new()).unwrap_err();
+
+        assert!(matches!(error, ConfigWorkspaceError::Empty));
+    }
+
+    #[test]
+    fn from_entries_rejects_duplicate_names() {
+        let first = config_text("Duplicate", "F", 60.0);
+        let second = config_text("Duplicate", "F+F", 90.0);
+        let error = ConfigWorkspace::from_presets(vec![
+            ("Duplicate".to_string(), first),
+            ("Duplicate".to_string(), second),
+        ])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigWorkspaceError::DuplicateName(ref name) if name == "Duplicate"
+        ));
+    }
+
+    #[test]
+    fn from_entries_propagates_invalid_initial_text() {
+        let error = ConfigWorkspace::from_entries(vec![ConfigWorkspaceEntry::custom(
+            "Broken".to_string(),
+            "not valid toml".to_string(),
+        )])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
+        ));
+    }
+
+    #[test]
+    fn fresh_workspace_is_not_dirty() {
+        let first = config_text("First", "F", 60.0);
+        let workspace = ConfigWorkspace::from_presets(vec![("First".to_string(), first)]).unwrap();
+
+        assert!(!workspace.selected_is_dirty());
+    }
+
+    #[test]
+    fn select_index_returns_false_for_out_of_bounds() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First".to_string(), first)]).unwrap();
+
+        assert!(!workspace.select_index(1));
+        assert_eq!(workspace.selected_index(), 0);
+    }
+
+    #[test]
+    fn select_by_name_returns_false_for_unknown_name() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First".to_string(), first)]).unwrap();
+
+        assert!(!workspace.select_by_name("Missing"));
+        assert_eq!(workspace.selected_name(), "First");
     }
 }
