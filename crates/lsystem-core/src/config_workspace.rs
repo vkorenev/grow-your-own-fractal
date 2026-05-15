@@ -94,17 +94,18 @@ impl ConfigWorkspace {
 
             let document = ConfigDocument::parse(&text)?;
             let config = document.to_config()?;
-            let default = default_text
-                .map(|text| {
+            let default = match default_text {
+                Some(text) => {
                     let document = ConfigDocument::parse(&text)?;
                     let config = document.to_config()?;
-                    Ok::<_, ConfigError>(DefaultEntry {
+                    Some(DefaultEntry {
                         text,
                         document,
                         config,
                     })
-                })
-                .transpose()?;
+                }
+                None => None,
+            };
             entries_out.push(ConfigEntry {
                 name,
                 default,

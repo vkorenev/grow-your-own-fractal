@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
-use lsystem_core::ConfigWorkspace;
+use lsystem_core::{Config, ConfigWorkspace};
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -165,9 +165,19 @@ pub(crate) fn App() -> impl IntoView {
         Rc::clone(&recover_after_render),
     );
 
+    let install_config = Rc::new(move |config: Config| {
+        let max = max_iterations_for_config(&config);
+        set_max_iterations.set(max);
+        set_iterations.set(config.generation.iterations.min(max));
+        set_angle.set(config.generation.angle);
+        set_base_config.set(Some(config));
+        set_error.set(None);
+    });
+
     let apply_current = {
         let render_current = Rc::clone(&render_current);
         let interval_id = Rc::clone(&interval_id);
+        let install_config = Rc::clone(&install_config);
         move || {
             set_config_workspace.update(|workspace| {
                 workspace.set_selected_draft_text(toml_text.get_untracked());
@@ -176,13 +186,8 @@ pub(crate) fn App() -> impl IntoView {
                 set_config_workspace.try_update(|workspace| workspace.apply_selected().cloned());
             match applied {
                 Some(Ok(config)) => {
-                    let max = max_iterations_for_config(&config);
                     let new_is_3d = config.dimensions == 3;
-                    set_max_iterations.set(max);
-                    set_iterations.set(config.generation.iterations.min(max));
-                    set_angle.set(config.generation.angle);
-                    set_base_config.set(Some(config));
-                    set_error.set(None);
+                    install_config(config);
                     if !new_is_3d && auto_rotate.get_untracked() {
                         if let Some(id) = interval_id.take()
                             && let Some(window) = web_sys::window()
@@ -207,15 +212,11 @@ pub(crate) fn App() -> impl IntoView {
 
     let select_current_config = {
         let render_current = Rc::clone(&render_current);
+        let install_config = Rc::clone(&install_config);
         move || {
             let config = config_workspace
                 .with_untracked(|workspace| workspace.selected_applied_config().clone());
-            let max = max_iterations_for_config(&config);
-            set_max_iterations.set(max);
-            set_iterations.set(config.generation.iterations.min(max));
-            set_angle.set(config.generation.angle);
-            set_base_config.set(Some(config));
-            set_error.set(None);
+            install_config(config);
             render_current();
         }
     };
@@ -345,6 +346,7 @@ pub(crate) fn App() -> impl IntoView {
                         disabled=move || !is_dirty()
                         on:click={
                             let render_current = Rc::clone(&render_current);
+                            let install_config = Rc::clone(&install_config);
                             move |_| {
                                 let text = set_config_workspace.try_update(|workspace| {
                                     workspace.revert_selected().to_string()
@@ -354,12 +356,7 @@ pub(crate) fn App() -> impl IntoView {
                                     let config = config_workspace.with_untracked(|workspace| {
                                         workspace.selected_applied_config().clone()
                                     });
-                                    let max = max_iterations_for_config(&config);
-                                    set_max_iterations.set(max);
-                                    set_iterations.set(config.generation.iterations.min(max));
-                                    set_angle.set(config.generation.angle);
-                                    set_base_config.set(Some(config));
-                                    set_error.set(None);
+                                    install_config(config);
                                     render_current();
                                 } else {
                                     log::error!(
@@ -381,6 +378,7 @@ pub(crate) fn App() -> impl IntoView {
                         }
                         on:click={
                             let render_current = Rc::clone(&render_current);
+                            let install_config = Rc::clone(&install_config);
                             move |_| {
                                 let reset = set_config_workspace.try_update(|workspace| {
                                     workspace.reset_selected().cloned()
@@ -391,12 +389,7 @@ pub(crate) fn App() -> impl IntoView {
                                             workspace.selected_draft_text().to_string()
                                         });
                                         set_toml_text.set(text);
-                                        let max = max_iterations_for_config(&config);
-                                        set_max_iterations.set(max);
-                                        set_iterations.set(config.generation.iterations.min(max));
-                                        set_angle.set(config.generation.angle);
-                                        set_base_config.set(Some(config));
-                                        set_error.set(None);
+                                        install_config(config);
                                         render_current();
                                     }
                                     Some(None) => {}

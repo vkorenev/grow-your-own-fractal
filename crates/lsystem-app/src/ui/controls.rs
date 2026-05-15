@@ -11,6 +11,7 @@ impl FractalApp {
         let preset_names: Vec<String> = self.config_workspace.names().map(str::to_string).collect();
         let selected_preset = Some(self.config_workspace.selected_name().to_string());
         let is_dirty = self.config_workspace.selected_is_dirty();
+        let can_reset = self.config_workspace.selected_can_reset();
 
         let mut controls = column![
             text(TITLE).size(24),
@@ -25,11 +26,7 @@ impl FractalApp {
             row![
                 button("Apply").on_press(Message::ApplyConfig),
                 button("Revert").on_press_maybe(is_dirty.then_some(Message::RevertConfig)),
-                button("Reset").on_press_maybe(
-                    self.config_workspace
-                        .selected_can_reset()
-                        .then_some(Message::ResetConfig)
-                ),
+                button("Reset").on_press_maybe(can_reset.then_some(Message::ResetConfig)),
             ]
             .spacing(8),
             self.status_text(),

@@ -110,15 +110,7 @@ impl FractalApp {
         match message {
             Message::PresetSelected(name) => {
                 if self.config_workspace.select_by_name(&name) {
-                    self.toml = iced::widget::text_editor::Content::with_text(
-                        self.config_workspace.selected_draft_text(),
-                    );
-                    self.base_config =
-                        Some(self.config_workspace.selected_applied_config().clone());
-                    self.sync_controls_from_base_config();
-                    self.error = None;
-                    self.export_status = None;
-                    return self.schedule_scene_generation();
+                    return self.refresh_from_workspace();
                 }
                 Task::none()
             }
@@ -131,26 +123,16 @@ impl FractalApp {
             }
             Message::ApplyConfig => self.apply_config(),
             Message::RevertConfig => {
-                let text = self.config_workspace.revert_selected().to_string();
-                self.toml = iced::widget::text_editor::Content::with_text(&text);
-                self.base_config = Some(self.config_workspace.selected_applied_config().clone());
-                self.sync_controls_from_base_config();
-                self.error = None;
-                self.export_status = None;
-                self.schedule_scene_generation()
+                self.config_workspace.revert_selected();
+                self.refresh_from_workspace()
             }
-            Message::ResetConfig => match self.config_workspace.reset_selected() {
-                Some(config) => {
-                    self.base_config = Some(config.clone());
-                    let text = self.config_workspace.selected_draft_text().to_string();
-                    self.toml = iced::widget::text_editor::Content::with_text(&text);
-                    self.sync_controls_from_base_config();
-                    self.error = None;
-                    self.export_status = None;
-                    self.schedule_scene_generation()
+            Message::ResetConfig => {
+                if self.config_workspace.reset_selected().is_some() {
+                    self.refresh_from_workspace()
+                } else {
+                    Task::none()
                 }
-                None => Task::none(),
-            },
+            }
             Message::IterationsChanged(iterations) => {
                 if self.config_workspace.selected_is_dirty() {
                     return Task::none();
@@ -325,6 +307,17 @@ impl FractalApp {
                 Task::none()
             }
         }
+    }
+
+    fn refresh_from_workspace(&mut self) -> Task<Message> {
+        self.toml = iced::widget::text_editor::Content::with_text(
+            self.config_workspace.selected_draft_text(),
+        );
+        self.base_config = Some(self.config_workspace.selected_applied_config().clone());
+        self.sync_controls_from_base_config();
+        self.error = None;
+        self.export_status = None;
+        self.schedule_scene_generation()
     }
 
     fn sync_controls_from_base_config(&mut self) {
