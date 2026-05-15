@@ -262,9 +262,7 @@ impl ConfigDocument {
         document["l-system"]["iterations"] = value(i64::from(config.generation.iterations));
 
         document["l-system"]["rules"] = Item::Table(Table::new());
-        let mut rules: Vec<_> = config.generation.rules.iter().collect();
-        rules.sort_by_key(|(key, _)| **key);
-        for (key, rhs) in rules {
+        for (key, rhs) in &config.generation.rules {
             document["l-system"]["rules"][&key.to_string()] = literal_string_item(rhs);
         }
 
