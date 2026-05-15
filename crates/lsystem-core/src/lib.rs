@@ -9,7 +9,7 @@ pub mod grammar;
 pub(crate) mod turtle;
 
 pub use config::{
-    ColorConfig, Config, ConfigDocument, ConfigError, GenerationConfig, LineColorConfig,
+    ColorConfig, Config, ConfigDocument, ConfigError, Dimensions, GenerationConfig, LineColorConfig,
 };
 pub use config_workspace::{ConfigWorkspace, ConfigWorkspaceEntry, ConfigWorkspaceError};
 pub use grammar::max_safe_iterations;

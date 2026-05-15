@@ -60,6 +60,13 @@ pub enum ConfigError {
     },
 }
 
+/// Spatial dimensions of an L-system: 2D or 3D.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Dimensions {
+    TwoD,
+    ThreeD,
+}
+
 /// Color mode for the fractal lines.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineColorConfig {
@@ -96,8 +103,6 @@ impl Default for ColorConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub name: String,
-    /// Number of spatial dimensions: 2 or 3.
-    pub dimensions: u8,
     pub generation: GenerationConfig,
     pub colors: ColorConfig,
 }
@@ -105,6 +110,7 @@ pub struct Config {
 /// Validated inputs needed to expand an L-system and run the turtle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationConfig {
+    pub dimensions: Dimensions,
     pub axiom: String,
     pub iterations: u32,
     /// Turn angle in degrees.
@@ -233,8 +239,8 @@ impl ConfigDocument {
 
         Ok(Config {
             name: required_str(metadata, "metadata.name")?.to_string(),
-            dimensions,
             generation: GenerationConfig {
+                dimensions,
                 axiom,
                 iterations: required_u32(l_system, "l-system.iterations")?,
                 angle,
@@ -257,7 +263,10 @@ impl ConfigDocument {
         document["metadata"]["name"] = value(config.name.clone());
 
         document["l-system"] = Item::Table(Table::new());
-        document["l-system"]["dimensions"] = value(i64::from(config.dimensions));
+        document["l-system"]["dimensions"] = value(match config.generation.dimensions {
+            Dimensions::TwoD => 2i64,
+            Dimensions::ThreeD => 3i64,
+        });
         document["l-system"]["axiom"] = literal_string_item(&config.generation.axiom);
         document["l-system"]["iterations"] = value(i64::from(config.generation.iterations));
 
@@ -394,7 +403,7 @@ fn required_str<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a str, C
         })
 }
 
-fn required_dimensions(table: &impl TableLike, field: &str) -> Result<u8, ConfigError> {
+fn required_dimensions(table: &impl TableLike, field: &str) -> Result<Dimensions, ConfigError> {
     let value =
         required_item(table, field)?
             .as_integer()
@@ -403,8 +412,8 @@ fn required_dimensions(table: &impl TableLike, field: &str) -> Result<u8, Config
                 expected: "integer",
             })?;
     match value {
-        2 => Ok(2),
-        3 => Ok(3),
+        2 => Ok(Dimensions::TwoD),
+        3 => Ok(Dimensions::ThreeD),
         other => Err(ConfigError::InvalidDimensions(other)),
     }
 }
@@ -626,7 +635,7 @@ end = [ 0.7, 0.8, 0.9 ]
         let cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
 
         assert_eq!(cfg.name, "Koch Snowflake");
-        assert_eq!(cfg.dimensions, 2);
+        assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
         assert_eq!(cfg.generation.axiom, "F++F++F");
         assert_eq!(cfg.generation.angle, 60.0);
         assert_eq!(cfg.generation.step, 1.0);
@@ -638,7 +647,7 @@ end = [ 0.7, 0.8, 0.9 ]
     #[test]
     fn config_document_from_config_writes_canonical_nested_toml() {
         let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        cfg.dimensions = 3;
+        cfg.generation.dimensions = Dimensions::ThreeD;
         cfg.generation.axiom = "F\\F".to_string();
         cfg.generation.rules.insert('F', "F\\F".to_string());
         cfg.colors.line = LineColorConfig::Gradient {
@@ -672,7 +681,7 @@ end = [ 0.7, 0.8, 0.9 ]
     fn parses_nested_v2_config() {
         let cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
         assert_eq!(cfg.name, "Koch Snowflake");
-        assert_eq!(cfg.dimensions, 2);
+        assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
         assert_eq!(cfg.generation.axiom, "F++F++F");
         assert_eq!(cfg.generation.angle, 60.0);
         assert_eq!(cfg.generation.step, 1.0);
@@ -746,7 +755,10 @@ color = [0.1, 0.2, 0.3]
 
         let round_tripped = Config::parse(&serialized).unwrap();
         assert_eq!(round_tripped.name, cfg.name);
-        assert_eq!(round_tripped.dimensions, cfg.dimensions);
+        assert_eq!(
+            round_tripped.generation.dimensions,
+            cfg.generation.dimensions
+        );
         assert_eq!(round_tripped.generation.axiom, cfg.generation.axiom);
         assert_eq!(
             round_tripped.generation.iterations,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lsystem_core::Config;
+use lsystem_core::{Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
@@ -70,30 +70,33 @@ impl CanvasRenderer {
         config: &Config,
     ) -> RenderStatus {
         let total_segments;
-        if config.dimensions == 3 {
-            let VertexData3D {
-                vertices,
-                bounds_min,
-                bounds_max,
-            } = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
-            total_segments = (vertices.len() / 2) as u32;
-            self.scene = ActiveScene::ThreeD {
-                vertices,
-                bounds_min,
-                bounds_max,
-            };
-        } else {
-            let VertexData {
-                vertices,
-                bounds_min,
-                bounds_max,
-            } = geometry_to_vertices(lsystem_core::generate(&config.generation));
-            total_segments = (vertices.len() / 2) as u32;
-            self.scene = ActiveScene::TwoD {
-                vertices,
-                bounds_min,
-                bounds_max,
-            };
+        match config.generation.dimensions {
+            Dimensions::ThreeD => {
+                let VertexData3D {
+                    vertices,
+                    bounds_min,
+                    bounds_max,
+                } = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
+                total_segments = (vertices.len() / 2) as u32;
+                self.scene = ActiveScene::ThreeD {
+                    vertices,
+                    bounds_min,
+                    bounds_max,
+                };
+            }
+            Dimensions::TwoD => {
+                let VertexData {
+                    vertices,
+                    bounds_min,
+                    bounds_max,
+                } = geometry_to_vertices(lsystem_core::generate(&config.generation));
+                total_segments = (vertices.len() / 2) as u32;
+                self.scene = ActiveScene::TwoD {
+                    vertices,
+                    bounds_min,
+                    bounds_max,
+                };
+            }
         }
 
         self.color_params = color_params_from_config(&config.colors.line, total_segments);

@@ -1,9 +1,13 @@
-use crate::config::ConfigError;
+use crate::config::{ConfigError, Dimensions};
 
 const TERMINALS_UNIVERSAL: &str = "Ff+-|[]";
 const TERMINALS_3D: &str = "&^/\\";
 
-pub fn validate_symbols(chars: &str, field: &str, dimensions: u8) -> Result<(), ConfigError> {
+pub fn validate_symbols(
+    chars: &str,
+    field: &str,
+    dimensions: Dimensions,
+) -> Result<(), ConfigError> {
     for (position, ch) in chars.chars().enumerate() {
         if ch.is_ascii_alphabetic() {
             continue;
@@ -11,7 +15,7 @@ pub fn validate_symbols(chars: &str, field: &str, dimensions: u8) -> Result<(), 
         if TERMINALS_UNIVERSAL.contains(ch) {
             continue;
         }
-        if dimensions == 3 && TERMINALS_3D.contains(ch) {
+        if dimensions == Dimensions::ThreeD && TERMINALS_3D.contains(ch) {
             continue;
         }
         return Err(ConfigError::InvalidSymbol {

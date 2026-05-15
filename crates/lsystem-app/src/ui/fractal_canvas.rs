@@ -1,7 +1,7 @@
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
-use lsystem_core::{ColorConfig, Config};
+use lsystem_core::{ColorConfig, Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Vertex2D, Vertex3D,
@@ -191,57 +191,70 @@ pub(super) async fn build_scene(
     let mut camera = prev_camera;
     camera.reset_position();
 
-    if config.dimensions == 3 {
-        let mut builder = VertexDataBuilder3D::new();
-        let mut segments_seen = 0usize;
+    match config.generation.dimensions {
+        Dimensions::ThreeD => {
+            let mut builder = VertexDataBuilder3D::new();
+            let mut segments_seen = 0usize;
 
-        for segment in lsystem_core::generate_3d(&config.generation) {
-            if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                if is_cancelled(generation, &current_generation) {
-                    return SceneBuildResult::Cancelled;
+            for segment in lsystem_core::generate_3d(&config.generation) {
+                if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                    if is_cancelled(generation, &current_generation) {
+                        return SceneBuildResult::Cancelled;
+                    }
+                    yield_generation().await;
+                    if is_cancelled(generation, &current_generation) {
+                        return SceneBuildResult::Cancelled;
+                    }
                 }
-                yield_generation().await;
-                if is_cancelled(generation, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
+                builder.push_segment(segment);
+                segments_seen = segments_seen.wrapping_add(1);
             }
-            builder.push_segment(segment);
-            segments_seen = segments_seen.wrapping_add(1);
-        }
 
-        if is_cancelled(generation, &current_generation) {
-            return SceneBuildResult::Cancelled;
-        }
-
-        SceneBuildResult::Ready {
-            generation,
-            scene: Scene::from_vertex_data_3d(&config.colors, builder.finish(), camera, generation),
-        }
-    } else {
-        let mut builder = VertexDataBuilder::new();
-        let mut segments_seen = 0usize;
-
-        for segment in lsystem_core::generate(&config.generation) {
-            if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                if is_cancelled(generation, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
-                yield_generation().await;
-                if is_cancelled(generation, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
+            if is_cancelled(generation, &current_generation) {
+                return SceneBuildResult::Cancelled;
             }
-            builder.push_segment(segment);
-            segments_seen = segments_seen.wrapping_add(1);
-        }
 
-        if is_cancelled(generation, &current_generation) {
-            return SceneBuildResult::Cancelled;
+            SceneBuildResult::Ready {
+                generation,
+                scene: Scene::from_vertex_data_3d(
+                    &config.colors,
+                    builder.finish(),
+                    camera,
+                    generation,
+                ),
+            }
         }
+        Dimensions::TwoD => {
+            let mut builder = VertexDataBuilder::new();
+            let mut segments_seen = 0usize;
 
-        SceneBuildResult::Ready {
-            generation,
-            scene: Scene::from_vertex_data_2d(&config.colors, builder.finish(), camera, generation),
+            for segment in lsystem_core::generate(&config.generation) {
+                if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                    if is_cancelled(generation, &current_generation) {
+                        return SceneBuildResult::Cancelled;
+                    }
+                    yield_generation().await;
+                    if is_cancelled(generation, &current_generation) {
+                        return SceneBuildResult::Cancelled;
+                    }
+                }
+                builder.push_segment(segment);
+                segments_seen = segments_seen.wrapping_add(1);
+            }
+
+            if is_cancelled(generation, &current_generation) {
+                return SceneBuildResult::Cancelled;
+            }
+
+            SceneBuildResult::Ready {
+                generation,
+                scene: Scene::from_vertex_data_2d(
+                    &config.colors,
+                    builder.finish(),
+                    camera,
+                    generation,
+                ),
+            }
         }
     }
 }

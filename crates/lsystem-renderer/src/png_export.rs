@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use futures_channel::oneshot;
-use lsystem_core::Config;
+use lsystem_core::{Config, Dimensions};
 
 use crate::camera::Camera;
 use crate::line_renderer::{LinePipeline2D, LinePipeline3D};
@@ -99,57 +99,60 @@ pub async fn render_png(
 ) -> Result<PngExport, PngExportError> {
     validate_width(width)?;
 
-    if config.dimensions == 3 {
-        let data = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
-        let height = width; // square viewport for perspective
-        let total_segments = (data.vertices.len() / 2) as u32;
-        let color_params = color_params_from_config(&config.colors.line, total_segments);
-        let mut pipeline = LinePipeline3D::new(device, FORMAT);
-        pipeline.upload(device, queue, &data.vertices, color_params);
-        pipeline.write_mvp(
-            queue,
-            camera.compute_mvp_3d(data.bounds_min, data.bounds_max, width, height),
-        );
-        finish_render(
-            device,
-            queue,
-            width,
-            height,
-            config.colors.background,
-            |pass| {
-                pipeline.draw(pass);
-            },
-        )
-        .await
-    } else {
-        let data = geometry_to_vertices(lsystem_core::generate(&config.generation));
-        let height = derive_height(width, data.bounds_min, data.bounds_max)?;
-        let total_segments = (data.vertices.len() / 2) as u32;
-        let color_params = color_params_from_config(&config.colors.line, total_segments);
-        let mut pipeline = LinePipeline2D::new(device, FORMAT);
-        pipeline.upload(device, queue, &data.vertices, color_params);
-        pipeline.write_transform(
-            queue,
-            viewport_transform(
-                data.bounds_min,
-                data.bounds_max,
+    match config.generation.dimensions {
+        Dimensions::ThreeD => {
+            let data = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
+            let height = width; // square viewport for perspective
+            let total_segments = (data.vertices.len() / 2) as u32;
+            let color_params = color_params_from_config(&config.colors.line, total_segments);
+            let mut pipeline = LinePipeline3D::new(device, FORMAT);
+            pipeline.upload(device, queue, &data.vertices, color_params);
+            pipeline.write_mvp(
+                queue,
+                camera.compute_mvp_3d(data.bounds_min, data.bounds_max, width, height),
+            );
+            finish_render(
+                device,
+                queue,
                 width,
                 height,
-                [0.0, 0.0],
-                1.0,
-            ),
-        );
-        finish_render(
-            device,
-            queue,
-            width,
-            height,
-            config.colors.background,
-            |pass| {
-                pipeline.draw(pass);
-            },
-        )
-        .await
+                config.colors.background,
+                |pass| {
+                    pipeline.draw(pass);
+                },
+            )
+            .await
+        }
+        Dimensions::TwoD => {
+            let data = geometry_to_vertices(lsystem_core::generate(&config.generation));
+            let height = derive_height(width, data.bounds_min, data.bounds_max)?;
+            let total_segments = (data.vertices.len() / 2) as u32;
+            let color_params = color_params_from_config(&config.colors.line, total_segments);
+            let mut pipeline = LinePipeline2D::new(device, FORMAT);
+            pipeline.upload(device, queue, &data.vertices, color_params);
+            pipeline.write_transform(
+                queue,
+                viewport_transform(
+                    data.bounds_min,
+                    data.bounds_max,
+                    width,
+                    height,
+                    [0.0, 0.0],
+                    1.0,
+                ),
+            );
+            finish_render(
+                device,
+                queue,
+                width,
+                height,
+                config.colors.background,
+                |pass| {
+                    pipeline.draw(pass);
+                },
+            )
+            .await
+        }
     }
 }
 

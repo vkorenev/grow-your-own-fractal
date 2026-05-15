@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
-use lsystem_core::{Config, ConfigWorkspace};
+use lsystem_core::{Config, ConfigWorkspace, Dimensions};
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -27,8 +27,7 @@ pub(crate) fn App() -> impl IntoView {
     .expect("bundled presets should parse");
     let first_toml = initial_workspace.selected_draft_text().to_string();
     let initial_config = initial_workspace.selected_applied_config().clone();
-    let initial_max_iterations =
-        max_iterations_for_config(initial_config.dimensions, &initial_config.generation);
+    let initial_max_iterations = max_iterations_for_config(&initial_config.generation);
 
     let (preset_idx, set_preset_idx) = signal(0usize);
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
@@ -51,13 +50,13 @@ pub(crate) fn App() -> impl IntoView {
     let is_3d = move || {
         base_config
             .get()
-            .map(|c| c.dimensions == 3)
+            .map(|c| matches!(c.generation.dimensions, Dimensions::ThreeD))
             .unwrap_or(false)
     };
     let is_3d_untracked = move || {
         base_config
             .get_untracked()
-            .map(|c| c.dimensions == 3)
+            .map(|c| matches!(c.generation.dimensions, Dimensions::ThreeD))
             .unwrap_or(false)
     };
     let is_dirty = move || config_workspace.with(|workspace| workspace.selected_is_dirty());
@@ -167,7 +166,7 @@ pub(crate) fn App() -> impl IntoView {
     );
 
     let install_config = Rc::new(move |config: Config| {
-        let max = max_iterations_for_config(config.dimensions, &config.generation);
+        let max = max_iterations_for_config(&config.generation);
         set_max_iterations.set(max);
         set_iterations.set(config.generation.iterations.min(max));
         set_angle.set(config.generation.angle);
@@ -187,7 +186,7 @@ pub(crate) fn App() -> impl IntoView {
                 set_config_workspace.try_update(|workspace| workspace.apply_selected().cloned());
             match applied {
                 Some(Ok(config)) => {
-                    let new_is_3d = config.dimensions == 3;
+                    let new_is_3d = matches!(config.generation.dimensions, Dimensions::ThreeD);
                     install_config(config);
                     if !new_is_3d && auto_rotate.get_untracked() {
                         if let Some(id) = interval_id.take()
