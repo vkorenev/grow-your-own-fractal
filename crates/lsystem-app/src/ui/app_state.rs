@@ -2,7 +2,7 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use include_dir::{Dir, include_dir};
-use lsystem_core::Config;
+use lsystem_core::{Config, ConfigWorkspace};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -25,6 +25,8 @@ pub(super) enum Message {
     PresetSelected(String),
     TomlEdited(iced::widget::text_editor::Action),
     ApplyConfig,
+    RevertConfig,
+    ResetConfig,
     IterationsChanged(u32),
     AngleChanged(f32),
     PngWidthChanged(String),
@@ -58,8 +60,7 @@ pub(super) enum Message {
 }
 
 pub(super) struct FractalApp {
-    pub(super) presets: Vec<Preset>,
-    pub(super) selected_preset: Option<String>,
+    pub(super) config_workspace: ConfigWorkspace,
     pub(super) toml: iced::widget::text_editor::Content,
     pub(super) base_config: Option<Config>,
     pub(super) iterations: u32,
@@ -78,19 +79,15 @@ pub(super) struct FractalApp {
 
 impl FractalApp {
     pub(super) fn new() -> (Self, Task<Message>) {
-        let presets = load_presets();
-        let selected_preset = presets.first().map(|preset| preset.name.clone());
-        let toml_text = presets
-            .first()
-            .map(|preset| preset.toml)
-            .unwrap_or_default()
-            .to_string();
+        let config_workspace = ConfigWorkspace::from_presets(load_presets())
+            .expect("at least one bundled preset should parse");
+        let toml_text = config_workspace.selected_draft_text().to_string();
+        let base_config = config_workspace.selected_applied_config().clone();
 
         let mut app = Self {
-            presets,
-            selected_preset,
+            config_workspace,
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
-            base_config: None,
+            base_config: Some(base_config),
             iterations: 1,
             max_iterations: 1,
             angle: 60.0,
@@ -104,31 +101,71 @@ impl FractalApp {
             auto_rotate_speed: 45.0,
             scene_generation: Arc::new(AtomicU64::new(0)),
         };
-        let task = app.apply_config();
+        app.sync_controls_from_base_config();
+        let task = app.schedule_scene_generation();
         (app, task)
     }
 
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::PresetSelected(name) => {
-                if let Some(preset) = self.presets.iter().find(|preset| preset.name == name) {
-                    self.selected_preset = Some(preset.name.clone());
-                    self.toml = iced::widget::text_editor::Content::with_text(preset.toml);
-                    return self.apply_config();
+                if self.config_workspace.select_by_name(&name) {
+                    self.toml = iced::widget::text_editor::Content::with_text(
+                        self.config_workspace.selected_draft_text(),
+                    );
+                    self.base_config =
+                        Some(self.config_workspace.selected_applied_config().clone());
+                    self.sync_controls_from_base_config();
+                    self.error = None;
+                    self.export_status = None;
+                    return self.schedule_scene_generation();
                 }
                 Task::none()
             }
             Message::TomlEdited(action) => {
                 self.toml.perform(action);
+                self.config_workspace
+                    .set_selected_draft_text(self.toml.text());
                 self.export_status = None;
                 Task::none()
             }
             Message::ApplyConfig => self.apply_config(),
+            Message::RevertConfig => {
+                let text = self.config_workspace.revert_selected().to_string();
+                self.toml = iced::widget::text_editor::Content::with_text(&text);
+                self.base_config = Some(self.config_workspace.selected_applied_config().clone());
+                self.sync_controls_from_base_config();
+                self.error = None;
+                self.export_status = None;
+                Task::none()
+            }
+            Message::ResetConfig => match self.config_workspace.reset_selected() {
+                Ok(Some(config)) => {
+                    self.base_config = Some(config.clone());
+                    let text = self.config_workspace.selected_draft_text().to_string();
+                    self.toml = iced::widget::text_editor::Content::with_text(&text);
+                    self.sync_controls_from_base_config();
+                    self.error = None;
+                    self.export_status = None;
+                    self.schedule_scene_generation()
+                }
+                Ok(None) => Task::none(),
+                Err(error) => {
+                    self.error = Some(error.to_string());
+                    Task::none()
+                }
+            },
             Message::IterationsChanged(iterations) => {
+                if self.config_workspace.selected_is_dirty() {
+                    return Task::none();
+                }
                 self.iterations = iterations.min(self.max_iterations);
                 self.schedule_scene_generation()
             }
             Message::AngleChanged(angle) => {
+                if self.config_workspace.selected_is_dirty() {
+                    return Task::none();
+                }
                 self.angle = angle;
                 self.schedule_scene_generation()
             }
@@ -276,32 +313,40 @@ impl FractalApp {
     }
 
     fn apply_config(&mut self) -> Task<Message> {
-        match Config::parse(&self.toml.text()) {
+        self.config_workspace
+            .set_selected_draft_text(self.toml.text());
+        match self.config_workspace.apply_selected() {
             Ok(config) => {
-                let max_seg = if config.dimensions == 3 {
-                    lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
-                } else {
-                    lsystem_renderer::line_renderer::MAX_SEGMENTS
-                };
-                self.max_iterations = lsystem_core::max_safe_iterations(
-                    &config.generation.axiom,
-                    &config.generation.rules,
-                    max_seg,
-                ) as u32;
-                self.iterations = config.generation.iterations.min(self.max_iterations);
-                self.angle = config.generation.angle;
+                let config = config.clone();
                 self.base_config = Some(config);
+                self.sync_controls_from_base_config();
                 self.error = None;
                 self.export_status = None;
                 self.schedule_scene_generation()
             }
             Err(error) => {
                 self.error = Some(error.to_string());
-                self.base_config = None;
-                self.cancel_scene_generation();
                 Task::none()
             }
         }
+    }
+
+    fn sync_controls_from_base_config(&mut self) {
+        let Some(config) = &self.base_config else {
+            return;
+        };
+        let max_seg = if config.dimensions == 3 {
+            lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
+        } else {
+            lsystem_renderer::line_renderer::MAX_SEGMENTS
+        };
+        self.max_iterations = lsystem_core::max_safe_iterations(
+            &config.generation.axiom,
+            &config.generation.rules,
+            max_seg,
+        ) as u32;
+        self.iterations = config.generation.iterations.min(self.max_iterations);
+        self.angle = config.generation.angle;
     }
 
     fn effective_config(&self) -> Option<Config> {
@@ -330,11 +375,6 @@ impl FractalApp {
             build_scene(config, generation, token, prev_camera),
             Message::SceneGenerated,
         )
-    }
-
-    fn cancel_scene_generation(&mut self) {
-        self.scene_generation.fetch_add(1, Ordering::AcqRel);
-        self.scene_pending = false;
     }
 
     fn is_current_generation(&self, generation: u64) -> bool {
@@ -400,13 +440,7 @@ impl FractalApp {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct Preset {
-    pub(super) name: String,
-    pub(super) toml: &'static str,
-}
-
-fn load_presets() -> Vec<Preset> {
+fn load_presets() -> Vec<(String, String)> {
     let mut files: Vec<_> = PRESETS_DIR
         .files()
         .filter(|file| file.path().extension().and_then(|ext| ext.to_str()) == Some("toml"))
@@ -417,7 +451,7 @@ fn load_presets() -> Vec<Preset> {
         .filter_map(|file| {
             let toml = file.contents_utf8()?;
             let name = Config::parse(toml).ok()?.name;
-            Some(Preset { name, toml })
+            Some((name, toml.to_string()))
         })
         .collect()
 }

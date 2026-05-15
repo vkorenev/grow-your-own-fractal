@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
+use lsystem_core::ConfigWorkspace;
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
 use crate::export::{export_png, export_svg};
-use crate::presets::{apply_toml, effective_config, load_presets};
+use crate::presets::{effective_config, load_presets, max_iterations_for_config};
 use crate::renderer::{CanvasRenderer, RenderStatus};
 
 const ROTATION_STEP_DEG: f32 = 5.0;
@@ -18,26 +19,29 @@ const AUTO_ROTATE_DT_MS: f32 = 16.0;
 #[component]
 pub(crate) fn App() -> impl IntoView {
     let presets = Arc::new(load_presets());
-    let first_toml = presets
-        .first()
-        .expect("no preset TOML files found")
-        .1
-        .to_string();
-    let initial = apply_toml(&first_toml).expect("bundled first preset should parse");
+    let initial_workspace = ConfigWorkspace::from_presets(
+        presets
+            .iter()
+            .map(|(name, text)| (name.clone(), (*text).to_string())),
+    )
+    .expect("bundled presets should parse");
+    let first_toml = initial_workspace.selected_draft_text().to_string();
+    let initial_config = initial_workspace.selected_applied_config().clone();
+    let initial_max_iterations = max_iterations_for_config(&initial_config);
 
     let (preset_idx, set_preset_idx) = signal(0usize);
+    let (config_workspace, set_config_workspace) = signal(initial_workspace);
     let (toml_text, set_toml_text) = signal(first_toml);
-    let (base_config, set_base_config) = signal(Some(initial.config.clone()));
+    let (base_config, set_base_config) = signal(Some(initial_config.clone()));
     let (error, set_error) = signal(None::<String>);
     let (iterations, set_iterations) = signal(
-        initial
-            .config
+        initial_config
             .generation
             .iterations
-            .min(initial.max_iterations),
+            .min(initial_max_iterations),
     );
-    let (max_iterations, set_max_iterations) = signal(initial.max_iterations);
-    let (angle, set_angle) = signal(initial.config.generation.angle);
+    let (max_iterations, set_max_iterations) = signal(initial_max_iterations);
+    let (angle, set_angle) = signal(initial_config.generation.angle);
     let (png_width, set_png_width) = signal(2048u32);
     let (gpu_error, set_gpu_error) = signal(None::<String>);
     let (auto_rotate, set_auto_rotate) = signal(false);
@@ -55,6 +59,7 @@ pub(crate) fn App() -> impl IntoView {
             .map(|c| c.dimensions == 3)
             .unwrap_or(false)
     };
+    let is_dirty = move || config_workspace.with(|workspace| workspace.selected_is_dirty());
 
     let canvas_ref = NodeRef::<Canvas>::new();
     let renderer = Rc::new(RefCell::new(None::<CanvasRenderer>));
@@ -160,34 +165,58 @@ pub(crate) fn App() -> impl IntoView {
         Rc::clone(&recover_after_render),
     );
 
-    let apply_text = {
+    let apply_current = {
         let render_current = Rc::clone(&render_current);
         let interval_id = Rc::clone(&interval_id);
-        move |text: String| match apply_toml(&text) {
-            Ok(applied) => {
-                let max = applied.max_iterations;
-                let new_is_3d = applied.config.dimensions == 3;
-                set_max_iterations.set(max);
-                set_iterations.set(applied.config.generation.iterations.min(max));
-                set_angle.set(applied.config.generation.angle);
-                set_base_config.set(Some(applied.config));
-                set_error.set(None);
-                if !new_is_3d && auto_rotate.get_untracked() {
-                    if let Some(id) = interval_id.take()
-                        && let Some(window) = web_sys::window()
-                    {
-                        window.clear_interval_with_handle(id);
+        move || {
+            set_config_workspace.update(|workspace| {
+                workspace.set_selected_draft_text(toml_text.get_untracked());
+            });
+            let applied =
+                set_config_workspace.try_update(|workspace| workspace.apply_selected().cloned());
+            match applied {
+                Some(Ok(config)) => {
+                    let max = max_iterations_for_config(&config);
+                    let new_is_3d = config.dimensions == 3;
+                    set_max_iterations.set(max);
+                    set_iterations.set(config.generation.iterations.min(max));
+                    set_angle.set(config.generation.angle);
+                    set_base_config.set(Some(config));
+                    set_error.set(None);
+                    if !new_is_3d && auto_rotate.get_untracked() {
+                        if let Some(id) = interval_id.take()
+                            && let Some(window) = web_sys::window()
+                        {
+                            window.clear_interval_with_handle(id);
+                        }
+                        set_auto_rotate.set(false);
                     }
-                    set_auto_rotate.set(false);
+                    render_current();
                 }
-                render_current();
-            }
-            Err(err) => {
-                set_error.set(Some(err.to_string()));
+                Some(Err(err)) => {
+                    set_error.set(Some(err.to_string()));
+                }
+                None => {}
             }
         }
     };
-    let apply_text = Rc::new(apply_text);
+    let apply_current = Rc::new(apply_current);
+
+    let select_current_config = {
+        let render_current = Rc::clone(&render_current);
+        move || {
+            let config = config_workspace
+                .with_untracked(|workspace| workspace.selected_applied_config().clone());
+            let max = max_iterations_for_config(&config);
+            set_max_iterations.set(max);
+            set_iterations.set(config.generation.iterations.min(max));
+            set_angle.set(config.generation.angle);
+            set_base_config.set(Some(config));
+            set_error.set(None);
+            render_current();
+        }
+    };
+    let select_current_config = Rc::new(select_current_config);
 
     let toggle_auto_rotate = {
         let renderer = Rc::clone(&renderer);
@@ -265,13 +294,18 @@ pub(crate) fn App() -> impl IntoView {
                     prop:value=move || preset_idx.get().to_string()
                     on:change={
                         let presets = Arc::clone(&presets);
-                        let apply_text = Rc::clone(&apply_text);
+                        let select_current_config = Rc::clone(&select_current_config);
                         move |ev| {
                             let idx = select_value(ev).parse::<usize>().unwrap_or(0);
-                            if let Some((_, text)) = presets.get(idx) {
+                            if presets.get(idx).is_some() {
                                 set_preset_idx.set(idx);
-                                set_toml_text.set((*text).to_string());
-                                apply_text((*text).to_string());
+                                set_config_workspace.update(|workspace| {
+                                    let _ = workspace.select_index(idx);
+                                });
+                                set_toml_text.set(config_workspace.with_untracked(|workspace| {
+                                    workspace.selected_draft_text().to_string()
+                                }));
+                                select_current_config();
                             }
                         }
                     }
@@ -284,24 +318,93 @@ pub(crate) fn App() -> impl IntoView {
                     id="config"
                     spellcheck="false"
                     prop:value=move || toml_text.get()
-                    on:input=move |ev| set_toml_text.set(textarea_value(ev))
+                    on:input=move |ev| {
+                        let text = textarea_value(ev);
+                        set_toml_text.set(text.clone());
+                        set_config_workspace.update(|workspace| {
+                            workspace.set_selected_draft_text(text);
+                        });
+                    }
                 />
 
-                <button
-                    type="button"
-                    on:click={
-                        let apply_text = Rc::clone(&apply_text);
-                        move |_| apply_text(toml_text.get_untracked())
-                    }
-                >
-                    "Apply"
-                </button>
+                <div class="row">
+                    <button
+                        type="button"
+                        on:click={
+                            let apply_current = Rc::clone(&apply_current);
+                            move |_| apply_current()
+                        }
+                    >
+                        "Apply"
+                    </button>
+                    <button
+                        type="button"
+                        disabled=move || !is_dirty()
+                        on:click=move |_| {
+                            let text = set_config_workspace.try_update(|workspace| {
+                                workspace.revert_selected().to_string()
+                            });
+                            if let Some(text) = text {
+                                set_toml_text.set(text);
+                                let config = config_workspace.with_untracked(|workspace| {
+                                    workspace.selected_applied_config().clone()
+                                });
+                                let max = max_iterations_for_config(&config);
+                                set_max_iterations.set(max);
+                                set_iterations.set(config.generation.iterations.min(max));
+                                set_angle.set(config.generation.angle);
+                                set_base_config.set(Some(config));
+                                set_error.set(None);
+                            }
+                        }
+                    >
+                        "Revert"
+                    </button>
+                    <button
+                        type="button"
+                        disabled=move || {
+                            config_workspace.with(|workspace| !workspace.selected_can_reset())
+                        }
+                        on:click={
+                            let render_current = Rc::clone(&render_current);
+                            move |_| {
+                                let reset = set_config_workspace.try_update(|workspace| {
+                                    workspace.reset_selected().map(|config| config.cloned())
+                                });
+                                match reset {
+                                    Some(Ok(Some(config))) => {
+                                        let text = config_workspace.with_untracked(|workspace| {
+                                            workspace.selected_draft_text().to_string()
+                                        });
+                                        set_toml_text.set(text);
+                                        let max = max_iterations_for_config(&config);
+                                        set_max_iterations.set(max);
+                                        set_iterations.set(config.generation.iterations.min(max));
+                                        set_angle.set(config.generation.angle);
+                                        set_base_config.set(Some(config));
+                                        set_error.set(None);
+                                        render_current();
+                                    }
+                                    Some(Ok(None)) => {}
+                                    Some(Err(err)) => set_error.set(Some(err.to_string())),
+                                    None => {}
+                                }
+                            }
+                        }
+                    >
+                        "Reset"
+                    </button>
+                </div>
 
                 <p class=move || if error.get().is_some() { "status error" } else { "status ok" }>
                     {move || error.get().unwrap_or_else(|| "OK".to_string())}
                 </p>
 
-                <div class="group" class:hidden=move || base_config.get().is_none()>
+                <p class:hidden=move || !is_dirty() class="status">
+                    "Apply or Revert the edited config before using controls."
+                </p>
+
+                <div class="group" class:hidden=move || base_config.get().is_none() || is_dirty()>
                     <label for="iterations">"Iterations"</label>
                     <div class="row">
                         <input

@@ -3,11 +3,6 @@ use lsystem_core::Config;
 
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
-pub(crate) struct AppliedConfig {
-    pub(crate) config: Config,
-    pub(crate) max_iterations: u32,
-}
-
 pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
     let mut files: Vec<_> = PRESETS_DIR
         .files()
@@ -30,22 +25,13 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
         .collect()
 }
 
-pub(crate) fn apply_toml(text: &str) -> Result<AppliedConfig, lsystem_core::ConfigError> {
-    let config = Config::parse(text)?;
+pub(crate) fn max_iterations_for_config(config: &Config) -> u32 {
     let max_seg = if config.dimensions == 3 {
         lsystem_renderer::line_renderer::MAX_SEGMENTS_3D
     } else {
         lsystem_renderer::line_renderer::MAX_SEGMENTS
     };
-    let max_iterations = lsystem_core::max_safe_iterations(
-        &config.generation.axiom,
-        &config.generation.rules,
-        max_seg,
-    );
-    Ok(AppliedConfig {
-        config,
-        max_iterations,
-    })
+    lsystem_core::max_safe_iterations(&config.generation.axiom, &config.generation.rules, max_seg)
 }
 
 pub(crate) fn effective_config(

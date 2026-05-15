@@ -8,30 +8,40 @@ use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
     pub(super) fn controls(&self) -> Element<'_, Message> {
-        let preset_names: Vec<String> = self
-            .presets
-            .iter()
-            .map(|preset| preset.name.clone())
-            .collect();
+        let preset_names: Vec<String> = self.config_workspace.names().map(str::to_string).collect();
+        let selected_preset = Some(self.config_workspace.selected_name().to_string());
+        let is_dirty = self.config_workspace.selected_is_dirty();
 
         let mut controls = column![
             text(TITLE).size(24),
             text("Preset").size(13),
-            pick_list(self.selected_preset.clone(), preset_names, String::clone)
+            pick_list(selected_preset, preset_names, String::clone)
                 .on_select(Message::PresetSelected)
                 .width(Length::Fill),
             text("Config (TOML)").size(13),
             text_editor(&self.toml)
                 .height(260)
                 .on_action(Message::TomlEdited),
-            button("Apply").on_press(Message::ApplyConfig),
+            row![
+                button("Apply").on_press(Message::ApplyConfig),
+                button("Revert").on_press_maybe(is_dirty.then_some(Message::RevertConfig)),
+                button("Reset").on_press_maybe(
+                    self.config_workspace
+                        .selected_can_reset()
+                        .then_some(Message::ResetConfig)
+                ),
+            ]
+            .spacing(8),
             self.status_text(),
         ]
         .spacing(10);
 
         let is_3d = self.scene.is_3d();
 
-        if self.base_config.is_some() {
+        if is_dirty {
+            controls = controls
+                .push(text("Apply or Revert the edited config before using controls.").size(13));
+        } else if self.base_config.is_some() {
             controls = controls
                 .push(text("Overrides").size(13))
                 .push(text(format!("Iterations: {}", self.iterations)))

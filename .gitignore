@@ -1,6 +1,7 @@
 /target
 dist/
 .DS_Store
+mise.local.toml
 
 # IDEs
 .vscode/
