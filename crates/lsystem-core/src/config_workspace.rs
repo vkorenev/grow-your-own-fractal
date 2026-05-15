@@ -116,12 +116,11 @@ impl ConfigWorkspace {
             });
         }
 
-        let entries = entries_out;
-        if entries.is_empty() {
+        if entries_out.is_empty() {
             return Err(ConfigWorkspaceError::Empty);
         }
         Ok(Self {
-            entries,
+            entries: entries_out,
             selected: 0,
         })
     }
@@ -311,6 +310,7 @@ color = [0.0, 0.9, 0.5]
         let error = workspace.apply_selected().unwrap_err();
 
         assert!(matches!(error, ConfigError::UnmatchedOpen { .. }));
+        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
         assert!(workspace.selected_is_dirty());
     }
 
@@ -403,6 +403,22 @@ color = [0.0, 0.9, 0.5]
             "Broken".to_string(),
             "not valid toml".to_string(),
         )])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
+        ));
+    }
+
+    #[test]
+    fn from_entries_propagates_invalid_default_text() {
+        let text = config_text("Default", "F", 60.0);
+        let error = ConfigWorkspace::from_entries(vec![ConfigWorkspaceEntry {
+            name: "Default".to_string(),
+            text,
+            default_text: Some("not valid toml".to_string()),
+        }])
         .unwrap_err();
 
         assert!(matches!(
