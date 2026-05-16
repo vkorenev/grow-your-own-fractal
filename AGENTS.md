@@ -52,7 +52,7 @@ Four-crate workspace under `crates/`:
 
 | Module | Role |
 |--------|------|
-| `config.rs` | Parses nested TOML field paths into a format-preserving `ConfigDocument` backed by `toml_edit::DocumentMut`, accepts explicit tables, dotted keys, and implicit parent tables, validates to `Config` (`GenerationConfig` plus `ColorConfig`/`LineColorConfig`), serializes unchanged documents byte-for-byte, and validates symbols, rules, step/angle finiteness, bracket balance, and per-component RGB color ranges |
+| `config.rs` | Parses nested TOML into a format-preserving `ConfigDocument` backed by `toml_edit::DocumentMut`, validates to `Config` (`GenerationConfig` plus `ColorConfig`/`LineColorConfig`), serializes unchanged documents byte-for-byte, and validates symbols, rules, step/angle finiteness, bracket balance, and per-component RGB color ranges |
 | `config_workspace.rs` | Shared session config workspace: tracks draft TOML, last-applied `ConfigDocument`/`Config`, and optional bundled default document per entry; supports selection retention, custom entry copying, apply, revert, reset, and dirty detection for both UIs |
 | `alphabet.rs` | Reserved symbols (`F f + - \| [ ]` for 2D; additionally `& ^ / \` for 3D), character set validation per `dimensions` |
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
