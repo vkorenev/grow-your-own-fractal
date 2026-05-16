@@ -256,6 +256,14 @@ impl ConfigDocument {
         self.document.to_string()
     }
 
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.document
+            .get("metadata")?
+            .as_table()?
+            .get("name")?
+            .as_str()
+    }
+
     pub(crate) fn set_name(&mut self, name: &str) {
         if self
             .document

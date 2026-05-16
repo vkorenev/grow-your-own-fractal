@@ -17,15 +17,10 @@ const AUTO_ROTATE_DT_MS: f32 = 16.0;
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
-    let presets = load_presets();
-    let initial_workspace = ConfigWorkspace::from_presets(
-        presets
-            .iter()
-            .map(|(name, text)| (name.clone(), (*text).to_string())),
-    )
-    .expect("bundled presets should parse");
-    let first_toml = initial_workspace.selected_draft_text().to_string();
-    let initial_config = initial_workspace.selected_applied_config().clone();
+    let initial_workspace =
+        ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
+    let first_toml = initial_workspace.selected_draft_text().into_owned();
+    let initial_config = initial_workspace.selected_applied_config();
     let initial_max_iterations = max_iterations_for_config(&initial_config.generation);
 
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
@@ -180,8 +175,7 @@ pub(crate) fn App() -> impl IntoView {
             set_config_workspace.update(|workspace| {
                 workspace.set_selected_draft_text(toml_text.get_untracked());
             });
-            let applied =
-                set_config_workspace.try_update(|workspace| workspace.apply_selected().cloned());
+            let applied = set_config_workspace.try_update(|workspace| workspace.apply_selected());
             match applied {
                 Some(Ok(config)) => {
                     let new_is_3d = matches!(config.generation.dimensions, Dimensions::ThreeD);
@@ -212,8 +206,8 @@ pub(crate) fn App() -> impl IntoView {
         let render_current = Rc::clone(&render_current);
         let install_config = Rc::clone(&install_config);
         move || {
-            let config = config_workspace
-                .with_untracked(|workspace| workspace.selected_applied_config().clone());
+            let config =
+                config_workspace.with_untracked(|workspace| workspace.selected_applied_config());
             install_config(config);
             render_current();
         }
@@ -297,7 +291,7 @@ pub(crate) fn App() -> impl IntoView {
                             match selected {
                                 Some(true) => {
                                     set_toml_text.set(config_workspace.with_untracked(|workspace| {
-                                        workspace.selected_draft_text().to_string()
+                                        workspace.selected_draft_text().into_owned()
                                     }));
                                     select_current_config();
                                 }
@@ -336,12 +330,12 @@ pub(crate) fn App() -> impl IntoView {
                         let install_config = Rc::clone(&install_config);
                         move |_| {
                             let copied = set_config_workspace.try_update(|workspace| {
-                                workspace.copy_selected().clone()
+                                workspace.copy_selected()
                             });
                             match copied {
                                 Some(config) => {
                                     set_toml_text.set(config_workspace.with_untracked(|workspace| {
-                                        workspace.selected_draft_text().to_string()
+                                        workspace.selected_draft_text().into_owned()
                                     }));
                                     install_config(config);
                                     render_current();
@@ -393,12 +387,12 @@ pub(crate) fn App() -> impl IntoView {
                             let install_config = Rc::clone(&install_config);
                             move |_| {
                                 let text = set_config_workspace.try_update(|workspace| {
-                                    workspace.revert_selected().to_string()
+                                    workspace.revert_selected()
                                 });
                                 if let Some(text) = text {
                                     set_toml_text.set(text);
                                     let config = config_workspace.with_untracked(|workspace| {
-                                        workspace.selected_applied_config().clone()
+                                        workspace.selected_applied_config()
                                     });
                                     install_config(config);
                                     render_current();
@@ -425,18 +419,21 @@ pub(crate) fn App() -> impl IntoView {
                             let install_config = Rc::clone(&install_config);
                             move |_| {
                                 let reset = set_config_workspace.try_update(|workspace| {
-                                    workspace.reset_selected().cloned()
+                                    workspace.reset_selected()
                                 });
                                 match reset {
-                                    Some(Some(config)) => {
+                                    Some(Ok(Some(config))) => {
                                         let text = config_workspace.with_untracked(|workspace| {
-                                            workspace.selected_draft_text().to_string()
+                                            workspace.selected_draft_text().into_owned()
                                         });
                                         set_toml_text.set(text);
                                         install_config(config);
                                         render_current();
                                     }
-                                    Some(None) => {}
+                                    Some(Ok(None)) => {}
+                                    Some(Err(err)) => {
+                                        set_error.set(Some(err.to_string()));
+                                    }
                                     None => {
                                         log::error!(
                                             "reset_selected: config_workspace signal was unavailable"

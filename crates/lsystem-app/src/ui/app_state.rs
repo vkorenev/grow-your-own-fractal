@@ -82,8 +82,8 @@ impl FractalApp {
     pub(super) fn new() -> (Self, Task<Message>) {
         let config_workspace = ConfigWorkspace::from_presets(load_presets())
             .expect("at least one bundled preset should parse");
-        let toml_text = config_workspace.selected_draft_text().to_string();
-        let base_config = config_workspace.selected_applied_config().clone();
+        let toml_text = config_workspace.selected_draft_text().into_owned();
+        let base_config = config_workspace.selected_applied_config();
 
         let mut app = Self {
             config_workspace,
@@ -131,13 +131,14 @@ impl FractalApp {
                 self.config_workspace.revert_selected();
                 self.refresh_from_workspace()
             }
-            Message::ResetConfig => {
-                if self.config_workspace.reset_selected().is_some() {
-                    self.refresh_from_workspace()
-                } else {
+            Message::ResetConfig => match self.config_workspace.reset_selected() {
+                Ok(Some(_)) => self.refresh_from_workspace(),
+                Ok(None) => Task::none(),
+                Err(error) => {
+                    self.error = Some(error.to_string());
                     Task::none()
                 }
-            }
+            },
             Message::IterationsChanged(iterations) => {
                 if self.config_workspace.selected_is_dirty() {
                     return Task::none();
@@ -300,7 +301,6 @@ impl FractalApp {
             .set_selected_draft_text(self.toml.text());
         match self.config_workspace.apply_selected() {
             Ok(config) => {
-                let config = config.clone();
                 self.base_config = Some(config);
                 self.sync_controls_from_base_config();
                 self.error = None;
@@ -315,10 +315,9 @@ impl FractalApp {
     }
 
     fn refresh_from_workspace(&mut self) -> Task<Message> {
-        self.toml = iced::widget::text_editor::Content::with_text(
-            self.config_workspace.selected_draft_text(),
-        );
-        self.base_config = Some(self.config_workspace.selected_applied_config().clone());
+        let toml_text = self.config_workspace.selected_draft_text();
+        self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
+        self.base_config = Some(self.config_workspace.selected_applied_config());
         self.sync_controls_from_base_config();
         self.error = None;
         self.export_status = None;
@@ -431,7 +430,7 @@ impl FractalApp {
     }
 }
 
-fn load_presets() -> Vec<(String, String)> {
+fn load_presets() -> Vec<String> {
     let mut files: Vec<_> = PRESETS_DIR
         .files()
         .filter(|file| file.path().extension().and_then(|ext| ext.to_str()) == Some("toml"))
@@ -441,14 +440,11 @@ fn load_presets() -> Vec<(String, String)> {
         .into_iter()
         .filter_map(|file| {
             let toml = file.contents_utf8()?;
-            let name = match Config::parse(toml) {
-                Ok(config) => config.name,
-                Err(err) => {
-                    log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
-                    return None;
-                }
-            };
-            Some((name, toml.to_string()))
+            if let Err(err) = Config::parse(toml) {
+                log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
+                return None;
+            }
+            Some(toml.to_string())
         })
         .collect()
 }
