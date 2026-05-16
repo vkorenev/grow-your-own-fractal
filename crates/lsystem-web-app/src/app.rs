@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
@@ -18,7 +17,7 @@ const AUTO_ROTATE_DT_MS: f32 = 16.0;
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
-    let presets = Arc::new(load_presets());
+    let presets = load_presets();
     let initial_workspace = ConfigWorkspace::from_presets(
         presets
             .iter()
@@ -29,7 +28,6 @@ pub(crate) fn App() -> impl IntoView {
     let initial_config = initial_workspace.selected_applied_config().clone();
     let initial_max_iterations = max_iterations_for_config(&initial_config.generation);
 
-    let (preset_idx, set_preset_idx) = signal(0usize);
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
     let (toml_text, set_toml_text) = signal(first_toml);
     let (base_config, set_base_config) = signal(Some(initial_config.clone()));
@@ -277,45 +275,91 @@ pub(crate) fn App() -> impl IntoView {
         }
     };
 
-    let preset_options = presets
-        .iter()
-        .enumerate()
-        .map(|(idx, (name, _))| {
-            view! {
-                <option value=idx.to_string()>{name.clone()}</option>
-            }
-        })
-        .collect_view();
-
     view! {
         <main class="app-shell">
             <aside class="controls">
                 <h1>"Grow Your Own Fractal"</h1>
 
-                <label for="preset">"Preset"</label>
+                <label for="preset">"Config"</label>
                 <select
                     id="preset"
-                    prop:value=move || preset_idx.get().to_string()
+                    prop:value=move || {
+                        config_workspace
+                            .with(|workspace| workspace.selected_index().to_string())
+                    }
                     on:change={
-                        let presets = Arc::clone(&presets);
                         let select_current_config = Rc::clone(&select_current_config);
                         move |ev| {
                             let idx = select_value(ev).parse::<usize>().unwrap_or(0);
-                            if presets.get(idx).is_some() {
-                                set_preset_idx.set(idx);
-                                set_config_workspace.update(|workspace| {
-                                    let _ = workspace.select_index(idx);
-                                });
-                                set_toml_text.set(config_workspace.with_untracked(|workspace| {
-                                    workspace.selected_draft_text().to_string()
-                                }));
-                                select_current_config();
+                            let selected = set_config_workspace.try_update(|workspace| {
+                                workspace.select_index(idx)
+                            });
+                            match selected {
+                                Some(true) => {
+                                    set_toml_text.set(config_workspace.with_untracked(|workspace| {
+                                        workspace.selected_draft_text().to_string()
+                                    }));
+                                    select_current_config();
+                                }
+                                Some(false) => {}
+                                None => {
+                                    log::error!(
+                                        "select_index: config_workspace signal was unavailable"
+                                    );
+                                    set_error.set(Some(
+                                        "Internal error: could not select config.".to_string(),
+                                    ));
+                                }
                             }
                         }
                     }
                 >
-                    {preset_options}
+                    {move || {
+                        config_workspace.with(|workspace| {
+                            workspace
+                                .names()
+                                .enumerate()
+                                .map(|(idx, name)| {
+                                    view! {
+                                        <option value=idx.to_string()>{name.to_string()}</option>
+                                    }
+                                })
+                                .collect_view()
+                        })
+                    }}
                 </select>
+
+                <button
+                    type="button"
+                    on:click={
+                        let render_current = Rc::clone(&render_current);
+                        let install_config = Rc::clone(&install_config);
+                        move |_| {
+                            let copied = set_config_workspace.try_update(|workspace| {
+                                workspace.copy_selected().clone()
+                            });
+                            match copied {
+                                Some(config) => {
+                                    set_toml_text.set(config_workspace.with_untracked(|workspace| {
+                                        workspace.selected_draft_text().to_string()
+                                    }));
+                                    install_config(config);
+                                    render_current();
+                                }
+                                None => {
+                                    log::error!(
+                                        "copy_selected: config_workspace signal was unavailable"
+                                    );
+                                    set_error.set(Some(
+                                        "Internal error: could not copy config.".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                >
+                    "Copy"
+                </button>
 
                 <label for="config">"Config (TOML)"</label>
                 <textarea

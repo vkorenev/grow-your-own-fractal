@@ -23,6 +23,7 @@ const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     PresetSelected(String),
+    CopyConfig,
     TomlEdited(iced::widget::text_editor::Action),
     ApplyConfig,
     RevertConfig,
@@ -113,6 +114,10 @@ impl FractalApp {
                     return self.refresh_from_workspace();
                 }
                 Task::none()
+            }
+            Message::CopyConfig => {
+                self.config_workspace.copy_selected();
+                self.refresh_from_workspace()
             }
             Message::TomlEdited(action) => {
                 self.toml.perform(action);

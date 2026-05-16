@@ -102,25 +102,28 @@ color = [0.0, 0.9, 0.5]  # used by solid mode
 # initial = [0.9, 0.0, 0.0]
 ```
 
-Configuration uses the nested v2 schema only, with explicit `[metadata]`,
-`[l-system]`, `[l-system.rules]`, `[turtle]`, `[colors]`, and `[colors.line]`
-tables. Older flat TOML with top-level `name`, `axiom`, `[rules]`,
-`background_color`, or `[line_color]` is rejected. All colors are RGB arrays
-with finite components in the 0-1 range, including `hue_cycle`'s RGB
-`initial` color.
+Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,
+`l-system.rules`, `turtle.*`, `colors.*`, and `colors.line.*`. Those paths may
+be written with explicit tables, dotted keys, or implicit parent tables. Older
+flat TOML with top-level `name`, `axiom`, `[rules]`, `background_color`, or
+`[line_color]` is rejected. All colors are RGB arrays with finite components in
+the 0-1 range, including `hue_cycle`'s RGB `initial` color.
 
 Config parsing is format-preserving: parsing and serializing an unchanged TOML
 document keeps comments, spacing, and string quoting intact. Newly generated
 TOML writes axiom/rule text as literal strings when possible and keeps color
 arrays inline.
 
-Each preset keeps separate draft and last-applied config text while the app is
-open. Switching presets preserves unapplied edits, **Apply** validates and
-renders the current draft, **Revert** restores the last-applied draft, and
-**Reset** restores the bundled preset default after an applied preset has
-diverged from that default. While a draft differs from the last-applied config,
-iteration/angle/export controls are hidden until the draft is applied or
-reverted.
+Each config entry keeps separate draft and last-applied config text while the
+app is open. Switching entries preserves unapplied edits, **Copy** creates a
+renamed custom copy of the selected entry, preserving the selected draft text
+separately from the last-applied config, **Apply** validates and renders the
+current draft, **Revert** restores the last-applied draft, and **Reset**
+restores the bundled preset default after an applied preset has diverged from
+that default. Custom entries exist only for the current session and do not have
+a bundled default to reset to. While a draft differs from the last-applied
+config, iteration/angle/export controls are hidden until the draft is applied
+or reverted.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.

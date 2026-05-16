@@ -256,6 +256,17 @@ impl ConfigDocument {
         self.document.to_string()
     }
 
+    pub(crate) fn set_name(&mut self, name: &str) {
+        if self
+            .document
+            .get("metadata")
+            .is_none_or(|item| !item.is_table())
+        {
+            self.document["metadata"] = Item::Table(Table::new());
+        }
+        self.document["metadata"]["name"] = value(name);
+    }
+
     pub fn from_config(config: &Config) -> Self {
         let mut document = DocumentMut::new();
 
@@ -385,12 +396,6 @@ fn required_table<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a Tabl
                 field: field.to_string(),
                 expected: "table",
             })?;
-    if table.is_implicit() || table.is_dotted() {
-        return Err(ConfigError::InvalidField {
-            field: field.to_string(),
-            expected: "explicit table",
-        });
-    }
     Ok(table)
 }
 
@@ -693,6 +698,62 @@ end = [ 0.7, 0.8, 0.9 ]
             LineColorConfig::HueCycle { initial } => assert_eq!(initial, [0.25, 0.5, 0.5]),
             other => panic!("expected hue cycle line color, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_dotted_v2_config() {
+        let toml = r#"
+metadata.name = "Dotted"
+l-system.dimensions = 3
+l-system.axiom = 'F\F'
+l-system.iterations = 2
+l-system.rules.F = 'F\F'
+turtle.angle = 45.0
+turtle.step = 1.0
+turtle.initial_heading = 0.0
+colors.background = [0.0, 0.0, 0.0]
+colors.line.mode = "solid"
+colors.line.color = [0.0, 0.9, 0.5]
+"#;
+
+        let cfg = Config::parse(toml).unwrap();
+
+        assert_eq!(cfg.name, "Dotted");
+        assert_eq!(cfg.generation.dimensions, Dimensions::ThreeD);
+        assert_eq!(cfg.generation.axiom, "F\\F");
+        assert_eq!(cfg.generation.rules[&'F'], "F\\F");
+    }
+
+    #[test]
+    fn parses_implicit_parent_tables() {
+        let toml = r#"
+colors.background = [0.0, 0.0, 0.0]
+
+[metadata]
+name = "Implicit Parents"
+
+[l-system]
+dimensions = 2
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "FF"
+
+[turtle]
+angle = 60.0
+step = 1.0
+initial_heading = 0.0
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
+"#;
+
+        let cfg = Config::parse(toml).unwrap();
+
+        assert_eq!(cfg.name, "Implicit Parents");
+        assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
     }
 
     #[test]
