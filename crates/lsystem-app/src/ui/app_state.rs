@@ -115,13 +115,10 @@ impl FractalApp {
                 }
                 Task::none()
             }
-            Message::CopyConfig => match self.config_workspace.copy_selected() {
-                Ok(_) => self.refresh_from_workspace(),
-                Err(error) => {
-                    self.error = Some(error.to_string());
-                    Task::none()
-                }
-            },
+            Message::CopyConfig => {
+                self.config_workspace.copy_selected();
+                self.refresh_from_workspace()
+            }
             Message::TomlEdited(action) => {
                 self.toml.perform(action);
                 self.config_workspace

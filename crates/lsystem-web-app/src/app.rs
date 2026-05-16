@@ -336,18 +336,15 @@ pub(crate) fn App() -> impl IntoView {
                         let install_config = Rc::clone(&install_config);
                         move |_| {
                             let copied = set_config_workspace.try_update(|workspace| {
-                                workspace.copy_selected().cloned()
+                                workspace.copy_selected().clone()
                             });
                             match copied {
-                                Some(Ok(config)) => {
+                                Some(config) => {
                                     set_toml_text.set(config_workspace.with_untracked(|workspace| {
                                         workspace.selected_draft_text().to_string()
                                     }));
                                     install_config(config);
                                     render_current();
-                                }
-                                Some(Err(err)) => {
-                                    set_error.set(Some(err.to_string()));
                                 }
                                 None => {
                                     log::error!(

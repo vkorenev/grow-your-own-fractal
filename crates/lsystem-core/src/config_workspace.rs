@@ -195,14 +195,36 @@ impl ConfigWorkspace {
         entry.draft_text = text;
     }
 
-    pub fn copy_selected(&mut self) -> Result<&Config, ConfigError> {
+    pub fn copy_selected(&mut self) -> &Config {
         let selected = &self.entries[self.selected];
-        let text = match selected.draft_document.as_ref() {
-            Some(document) if document.to_config().is_ok() => selected.draft_text.clone(),
-            _ => selected.last_applied_text.clone(),
-        };
         let name = self.unique_name(&format!("{} copy", selected.name));
-        self.push_custom(name, text)
+        let mut draft_text = selected.draft_text.clone();
+        let draft_document = match ConfigDocument::parse(&draft_text) {
+            Ok(mut document) => {
+                document.set_name(&name);
+                draft_text = document.to_toml_string();
+                Some(document)
+            }
+            Err(_) => None,
+        };
+
+        let mut last_applied_document = selected.last_applied_document.clone();
+        last_applied_document.set_name(&name);
+        let mut last_applied_config = selected.last_applied_config.clone();
+        last_applied_config.name.clone_from(&name);
+        let last_applied_text = last_applied_document.to_toml_string();
+
+        self.entries.push(ConfigEntry {
+            name,
+            default: None,
+            draft_text,
+            draft_document,
+            last_applied_text,
+            last_applied_document,
+            last_applied_config,
+        });
+        self.selected = self.entries.len() - 1;
+        &self.entries[self.selected].last_applied_config
     }
 
     pub fn apply_selected(&mut self) -> Result<&Config, ConfigError> {
@@ -237,39 +259,11 @@ impl ConfigWorkspace {
         Some(&entry.last_applied_config)
     }
 
-    fn push_custom(&mut self, name: String, text: String) -> Result<&Config, ConfigError> {
-        let mut document = ConfigDocument::parse(&text)?;
-        document.to_config()?;
-        document.set_name(&name)?;
-        let config = document.to_config()?;
-        let text = document.to_toml_string();
-        self.entries.push(ConfigEntry {
-            name,
-            default: None,
-            draft_text: text.clone(),
-            draft_document: Some(document.clone()),
-            last_applied_text: text,
-            last_applied_document: document,
-            last_applied_config: config,
-        });
-        self.selected = self.entries.len() - 1;
-        Ok(&self.entries[self.selected].last_applied_config)
-    }
-
     fn unique_name(&self, base: &str) -> String {
-        let existing: BTreeSet<_> = self
-            .entries
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect();
-        if !existing.contains(base) {
-            return base.to_string();
-        }
-
-        (2..)
-            .map(|suffix| format!("{base} {suffix}"))
-            .find(|candidate| !existing.contains(candidate.as_str()))
-            .expect("unbounded suffix search should find a unique name")
+        std::iter::once(base.to_string())
+            .chain((2usize..).map(|suffix| format!("{base} {suffix}")))
+            .find(|candidate| self.entries.iter().all(|entry| entry.name != *candidate))
+            .expect("suffix search should find a unique name")
     }
 }
 
@@ -306,11 +300,9 @@ color = [0.0, 0.9, 0.5]
     }
 
     fn config_text_renamed(text: &str, name: &str) -> String {
-        let current_name = Config::parse(text).unwrap().name;
-        text.replace(
-            &format!("name = \"{current_name}\""),
-            &format!("name = \"{name}\""),
-        )
+        let mut document = ConfigDocument::parse(text).unwrap();
+        document.set_name(name);
+        document.to_toml_string()
     }
 
     #[test]
@@ -429,7 +421,7 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
-    fn copy_selected_entry_uses_valid_selected_draft_and_unique_copy_name() {
+    fn copy_selected_entry_preserves_dirty_valid_draft() {
         let first = config_text("Plant", "F", 60.0);
         let second = config_text("Plant copy", "F+F", 90.0);
         let draft = first.replace("angle = 60", "angle = 45");
@@ -440,34 +432,62 @@ color = [0.0, 0.9, 0.5]
         .unwrap();
         workspace.set_selected_draft_text(draft.clone());
 
-        workspace.copy_selected().unwrap();
+        workspace.copy_selected();
         let expected_text = config_text_renamed(&draft, "Plant copy 2");
+        let expected_applied = config_text_renamed(&first, "Plant copy 2");
 
         assert_eq!(workspace.selected_name(), "Plant copy 2");
         assert_eq!(workspace.selected_draft_text(), expected_text);
-        assert_eq!(workspace.selected_applied_text(), expected_text);
+        assert_eq!(workspace.selected_applied_text(), expected_applied);
         assert_eq!(workspace.selected_applied_config().name, "Plant copy 2");
-        assert_eq!(workspace.selected_applied_config().generation.angle, 45.0);
-        assert!(!workspace.selected_is_dirty());
+        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
+        assert!(workspace.selected_is_dirty());
         assert!(!workspace.selected_can_reset());
     }
 
     #[test]
-    fn copy_selected_entry_falls_back_to_last_applied_when_draft_is_invalid() {
+    fn copy_selected_entry_preserves_parseable_invalid_draft() {
+        let first = config_text("Plant", "F", 60.0);
+        let draft = first.replace("axiom = \"F\"", "axiom = \"[\"");
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Plant".to_string(), first.clone())]).unwrap();
+        workspace.set_selected_draft_text(draft.clone());
+
+        workspace.copy_selected();
+        let expected_draft = config_text_renamed(&draft, "Plant copy");
+        let expected_applied = config_text_renamed(&first, "Plant copy");
+
+        assert_eq!(workspace.selected_name(), "Plant copy");
+        assert_eq!(workspace.selected_draft_text(), expected_draft);
+        assert_eq!(workspace.selected_applied_text(), expected_applied);
+        assert_eq!(workspace.selected_applied_config().name, "Plant copy");
+        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
+        assert!(workspace.selected_draft_document().is_some());
+        assert!(matches!(
+            workspace.apply_selected(),
+            Err(ConfigError::UnmatchedOpen { .. })
+        ));
+        assert!(workspace.selected_is_dirty());
+        assert!(!workspace.selected_can_reset());
+    }
+
+    #[test]
+    fn copy_selected_entry_preserves_unparseable_draft_text() {
         let first = config_text("Plant", "F", 60.0);
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("Plant".to_string(), first.clone())]).unwrap();
         workspace.set_selected_draft_text("not valid toml".to_string());
 
-        workspace.copy_selected().unwrap();
-        let expected_text = config_text_renamed(&first, "Plant copy");
+        workspace.copy_selected();
+        let expected_applied = config_text_renamed(&first, "Plant copy");
 
         assert_eq!(workspace.selected_name(), "Plant copy");
-        assert_eq!(workspace.selected_draft_text(), expected_text);
-        assert_eq!(workspace.selected_applied_text(), expected_text);
+        assert_eq!(workspace.selected_draft_text(), "not valid toml");
+        assert_eq!(workspace.selected_applied_text(), expected_applied);
         assert_eq!(workspace.selected_applied_config().name, "Plant copy");
         assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
-        assert!(!workspace.selected_is_dirty());
+        assert!(workspace.selected_draft_document().is_none());
+        assert!(workspace.selected_is_dirty());
         assert!(!workspace.selected_can_reset());
     }
 
