@@ -12,7 +12,7 @@ impl FractalApp {
         let selected_entry = self.config_workspace.entry(self.selected_config_index);
         let selected_preset = selected_entry.map(|entry| entry.name().to_string());
         let is_dirty = selected_entry.is_some_and(|entry| entry.is_dirty());
-        let can_reset = self.config_workspace.can_reset(self.selected_config_index);
+        let can_reset = !is_dirty && self.config_workspace.can_reset(self.selected_config_index);
 
         let mut controls = column![
             text(TITLE).size(24),

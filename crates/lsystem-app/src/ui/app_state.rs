@@ -153,14 +153,23 @@ impl FractalApp {
                     }
                 }
             }
-            Message::ResetConfig => match self.config_workspace.reset(self.selected_config_index) {
-                Ok(Some(_)) => self.refresh_from_workspace(),
-                Ok(None) => Task::none(),
-                Err(error) => {
-                    self.error = Some(error.to_string());
-                    Task::none()
+            Message::ResetConfig => {
+                if self
+                    .config_workspace
+                    .entry(self.selected_config_index)
+                    .is_some_and(|entry| entry.is_dirty())
+                {
+                    return Task::none();
                 }
-            },
+                match self.config_workspace.reset(self.selected_config_index) {
+                    Ok(Some(_)) => self.refresh_from_workspace(),
+                    Ok(None) => Task::none(),
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        Task::none()
+                    }
+                }
+            }
             Message::IterationsChanged(iterations) => {
                 if self
                     .config_workspace

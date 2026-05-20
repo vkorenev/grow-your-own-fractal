@@ -450,12 +450,20 @@ pub(crate) fn App() -> impl IntoView {
                         type="button"
                         disabled=move || {
                             let index = selected_config_index.get();
-                            config_workspace.with(|workspace| !workspace.can_reset(index))
+                            config_workspace.with(|workspace| {
+                                workspace
+                                    .entry(index)
+                                    .is_none_or(|entry| entry.is_dirty())
+                                    || !workspace.can_reset(index)
+                            })
                         }
                         on:click={
                             let render_current = Rc::clone(&render_current);
                             let install_config = Rc::clone(&install_config);
                             move |_| {
+                                if is_dirty() {
+                                    return;
+                                }
                                 let reset = set_config_workspace.try_update(|workspace| {
                                     workspace.reset(selected_config_index.get_untracked())
                                 });
