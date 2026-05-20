@@ -59,3 +59,7 @@ No Redundant Attribution: Since the commits already contain the `Assisted-by` tr
 No TODOs: Unless the PR is explicitly marked as a [Draft], the description should not contain "to-do" items or "work in progress" notes.
 
 Structure: Use bullet points for readability and clear headings.
+
+## Pull request reviews
+
+When the task is to review an opened pull request on GitHub, there is no need to run CI checks locally. Rely on GitHub CI to run those checks.
