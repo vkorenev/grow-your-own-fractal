@@ -159,9 +159,7 @@ impl ConfigWorkspace {
 
         let mut last_applied_document = entry.last_applied_document.clone();
         last_applied_document.set_name(&name);
-        let config = last_applied_document
-            .to_config()
-            .expect("renamed applied document should remain a valid config");
+        let config = last_applied_document.to_config()?;
         self.entries.push(ConfigEntry {
             default: None,
             draft,
