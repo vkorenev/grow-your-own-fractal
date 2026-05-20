@@ -10,6 +10,9 @@ pub enum ConfigWorkspaceError {
     #[error("at least one config entry is required")]
     Empty,
 
+    #[error("invalid config entry index `{0}`")]
+    InvalidIndex(usize),
+
     #[error("duplicate config entry name `{0}`")]
     DuplicateName(String),
 
@@ -20,7 +23,6 @@ pub enum ConfigWorkspaceError {
 #[derive(Debug, Clone)]
 pub struct ConfigWorkspace {
     entries: Vec<ConfigEntry>,
-    selected: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +48,7 @@ impl ConfigWorkspaceEntry {
 }
 
 #[derive(Debug, Clone)]
-struct ConfigEntry {
+pub struct ConfigEntry {
     default: Option<ConfigDocument>,
     draft: Option<String>,
     last_applied_document: ConfigDocument,
@@ -93,83 +95,59 @@ impl ConfigWorkspace {
         }
         Ok(Self {
             entries: entries_out,
-            selected: 0,
         })
     }
 
-    pub fn selected_index(&self) -> usize {
-        self.selected
+    pub fn entries(&self) -> &[ConfigEntry] {
+        &self.entries
     }
 
-    pub fn selected_name(&self) -> &str {
-        self.entries[self.selected].name()
+    pub fn entry(&self, index: usize) -> Option<&ConfigEntry> {
+        self.entries.get(index)
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(ConfigEntry::name)
     }
 
-    pub fn selected_draft_text(&self) -> Cow<'_, str> {
-        self.entries[self.selected].draft_text()
+    pub fn index_by_name(&self, name: &str) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.name() == name)
     }
 
-    pub fn selected_draft_document(&self) -> Option<ConfigDocument> {
-        self.entries[self.selected].draft_document()
-    }
-
-    pub fn selected_applied_text(&self) -> String {
-        self.entries[self.selected].applied_text()
-    }
-
-    pub fn selected_applied_document(&self) -> &ConfigDocument {
-        &self.entries[self.selected].last_applied_document
-    }
-
-    pub fn selected_applied_config(&self) -> Config {
-        self.entries[self.selected].applied_config()
-    }
-
-    pub fn selected_is_dirty(&self) -> bool {
-        self.entries[self.selected].draft.is_some()
-    }
-
-    pub fn selected_can_reset(&self) -> bool {
-        let entry = &self.entries[self.selected];
+    pub fn can_reset(&self, index: usize) -> bool {
+        let Some(entry) = self.entries.get(index) else {
+            return false;
+        };
         let Some(default) = &entry.default else {
             return false;
         };
         let Some(name) = default.name() else {
             return false;
         };
-        entry.applied_text() != default.to_toml_string()
-            && !self.name_exists_except(name, self.selected)
+        entry.applied_text() != default.to_toml_string() && !self.name_exists_except(name, index)
     }
 
-    pub fn select_index(&mut self, index: usize) -> bool {
-        if index >= self.entries.len() {
-            return false;
-        }
-        self.selected = index;
-        true
+    pub fn set_draft_text(
+        &mut self,
+        index: usize,
+        text: String,
+    ) -> Result<(), ConfigWorkspaceError> {
+        let entry = self
+            .entries
+            .get_mut(index)
+            .ok_or(ConfigWorkspaceError::InvalidIndex(index))?;
+        let applied_text = entry.applied_text();
+        entry.draft = (text != applied_text).then_some(text);
+        Ok(())
     }
 
-    pub fn select_by_name(&mut self, name: &str) -> bool {
-        let Some(index) = self.entries.iter().position(|entry| entry.name() == name) else {
-            return false;
-        };
-        self.selected = index;
-        true
-    }
-
-    pub fn set_selected_draft_text(&mut self, text: String) {
-        let applied_text = self.entries[self.selected].applied_text();
-        self.entries[self.selected].draft = (text != applied_text).then_some(text);
-    }
-
-    pub fn copy_selected(&mut self) -> Config {
-        let selected = &self.entries[self.selected];
-        let name = self.unique_name(&format!("{} copy", selected.name()));
-        let draft = selected.draft.as_ref().map(|draft_text| {
+    pub fn copy(&mut self, index: usize) -> Result<(usize, Config), ConfigWorkspaceError> {
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(ConfigWorkspaceError::InvalidIndex(index))?;
+        let name = self.unique_name(&format!("{} copy", entry.name()));
+        let draft = entry.draft.as_ref().map(|draft_text| {
             ConfigDocument::parse(draft_text).map_or_else(
                 |_| draft_text.clone(),
                 |mut document| {
@@ -179,7 +157,7 @@ impl ConfigWorkspace {
             )
         });
 
-        let mut last_applied_document = selected.last_applied_document.clone();
+        let mut last_applied_document = entry.last_applied_document.clone();
         last_applied_document.set_name(&name);
         let config = last_applied_document
             .to_config()
@@ -189,42 +167,50 @@ impl ConfigWorkspace {
             draft,
             last_applied_document,
         });
-        self.selected = self.entries.len() - 1;
-        config
+        Ok((self.entries.len() - 1, config))
     }
 
-    pub fn apply_selected(&mut self) -> Result<Config, ConfigWorkspaceError> {
-        let selected = self.selected;
-        let Some(draft) = &self.entries[selected].draft else {
-            return Ok(self.entries[selected].applied_config());
+    pub fn apply(&mut self, index: usize) -> Result<Config, ConfigWorkspaceError> {
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(ConfigWorkspaceError::InvalidIndex(index))?;
+        let Some(draft) = &entry.draft else {
+            return Ok(entry.applied_config());
         };
         let document = ConfigDocument::parse(draft)?;
         let config = document.to_config()?;
-        if self.name_exists_except(&config.name, selected) {
+        if self.name_exists_except(&config.name, index) {
             return Err(ConfigWorkspaceError::DuplicateName(config.name));
         }
-        let entry = &mut self.entries[selected];
+        let entry = &mut self.entries[index];
         entry.last_applied_document = document;
         entry.draft = None;
         Ok(config)
     }
 
-    pub fn revert_selected(&mut self) -> String {
-        let entry = &mut self.entries[self.selected];
+    pub fn revert(&mut self, index: usize) -> Result<String, ConfigWorkspaceError> {
+        let entry = self
+            .entries
+            .get_mut(index)
+            .ok_or(ConfigWorkspaceError::InvalidIndex(index))?;
         entry.draft = None;
-        entry.applied_text()
+        Ok(entry.applied_text())
     }
 
-    pub fn reset_selected(&mut self) -> Result<Option<Config>, ConfigWorkspaceError> {
-        let selected = self.selected;
-        let Some(default) = self.entries[selected].default.clone() else {
+    pub fn reset(&mut self, index: usize) -> Result<Option<Config>, ConfigWorkspaceError> {
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or(ConfigWorkspaceError::InvalidIndex(index))?;
+        let Some(default) = entry.default.clone() else {
             return Ok(None);
         };
         let config = default.to_config()?;
-        if self.name_exists_except(&config.name, selected) {
+        if self.name_exists_except(&config.name, index) {
             return Err(ConfigWorkspaceError::DuplicateName(config.name));
         }
-        let entry = &mut self.entries[selected];
+        let entry = &mut self.entries[index];
         entry.last_applied_document = default;
         entry.draft = None;
         Ok(Some(config))
@@ -246,34 +232,35 @@ impl ConfigWorkspace {
 }
 
 impl ConfigEntry {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         self.last_applied_document
             .name()
             .expect("applied document should include metadata.name")
     }
 
-    fn draft_text(&self) -> Cow<'_, str> {
+    pub fn draft_text(&self) -> Cow<'_, str> {
         match &self.draft {
             Some(draft) => Cow::Borrowed(draft),
             None => Cow::Owned(self.applied_text()),
         }
     }
 
-    fn draft_document(&self) -> Option<ConfigDocument> {
-        match &self.draft {
-            Some(draft) => ConfigDocument::parse(draft).ok(),
-            None => Some(self.last_applied_document.clone()),
-        }
-    }
-
-    fn applied_text(&self) -> String {
+    pub fn applied_text(&self) -> String {
         self.last_applied_document.to_toml_string()
     }
 
-    fn applied_config(&self) -> Config {
+    pub fn applied_document(&self) -> &ConfigDocument {
+        &self.last_applied_document
+    }
+
+    pub fn applied_config(&self) -> Config {
         self.last_applied_document
             .to_config()
             .expect("applied document should remain a valid config")
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.draft.is_some()
     }
 }
 
@@ -321,37 +308,48 @@ color = [0.0, 0.9, 0.5]
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first, second]).unwrap();
 
-        workspace.set_selected_draft_text("edited first".to_string());
-        assert!(workspace.select_by_name("Second"));
-        workspace.set_selected_draft_text("edited second".to_string());
-        assert!(workspace.select_by_name("First"));
+        workspace
+            .set_draft_text(0, "edited first".to_string())
+            .unwrap();
+        workspace
+            .set_draft_text(1, "edited second".to_string())
+            .unwrap();
 
-        assert_eq!(workspace.selected_draft_text(), "edited first");
-        assert!(workspace.selected_draft_document().is_none());
-        assert!(workspace.selected_is_dirty());
-        assert!(workspace.select_by_name("Second"));
-        assert_eq!(workspace.selected_draft_text(), "edited second");
+        assert_eq!(workspace.entry(0).unwrap().draft_text(), "edited first");
+        assert!(ConfigDocument::parse(workspace.entry(0).unwrap().draft_text().as_ref()).is_err());
+        assert!(workspace.entry(0).unwrap().is_dirty());
+        assert_eq!(workspace.entry(1).unwrap().draft_text(), "edited second");
     }
 
     #[test]
     fn failed_apply_preserves_last_applied_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
-        let previous_config = workspace.selected_applied_config();
+        let previous_config = workspace.entry(0).unwrap().applied_config();
 
-        workspace.set_selected_draft_text("not valid toml".to_string());
-        let error = workspace.apply_selected().unwrap_err();
+        workspace
+            .set_draft_text(0, "not valid toml".to_string())
+            .unwrap();
+        let error = workspace.apply(0).unwrap_err();
         assert!(matches!(
             error,
             ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
         ));
 
-        assert_eq!(workspace.selected_applied_config(), previous_config);
         assert_eq!(
-            workspace.selected_applied_document().to_config().unwrap(),
+            workspace.entry(0).unwrap().applied_config(),
             previous_config
         );
-        assert!(workspace.selected_is_dirty());
+        assert_eq!(
+            workspace
+                .entry(0)
+                .unwrap()
+                .applied_document()
+                .to_config()
+                .unwrap(),
+            previous_config
+        );
+        assert!(workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
@@ -359,15 +357,25 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
 
-        workspace.set_selected_draft_text(first.replace("axiom = \"F\"", "axiom = \"[\""));
-        let error = workspace.apply_selected().unwrap_err();
+        workspace
+            .set_draft_text(0, first.replace("axiom = \"F\"", "axiom = \"[\""))
+            .unwrap();
+        let error = workspace.apply(0).unwrap_err();
 
         assert!(matches!(
             error,
             ConfigWorkspaceError::Config(ConfigError::UnmatchedOpen { .. })
         ));
-        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
-        assert!(workspace.selected_is_dirty());
+        assert_eq!(
+            workspace
+                .entry(0)
+                .unwrap()
+                .applied_config()
+                .generation
+                .angle,
+            60.0
+        );
+        assert!(workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
@@ -376,13 +384,15 @@ color = [0.0, 0.9, 0.5]
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone(), second]).unwrap();
 
-        workspace.set_selected_draft_text(config_text_renamed(&first, "Renamed"));
-        let config = workspace.apply_selected().unwrap();
+        workspace
+            .set_draft_text(0, config_text_renamed(&first, "Renamed"))
+            .unwrap();
+        let config = workspace.apply(0).unwrap();
 
         assert_eq!(config.name, "Renamed");
-        assert_eq!(workspace.selected_name(), "Renamed");
+        assert_eq!(workspace.entry(0).unwrap().name(), "Renamed");
         assert_eq!(workspace.names().collect::<Vec<_>>(), ["Renamed", "Second"]);
-        assert!(!workspace.selected_is_dirty());
+        assert!(!workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
@@ -391,16 +401,18 @@ color = [0.0, 0.9, 0.5]
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone(), second]).unwrap();
 
-        workspace.set_selected_draft_text(config_text_renamed(&first, "Second"));
-        let error = workspace.apply_selected().unwrap_err();
+        workspace
+            .set_draft_text(0, config_text_renamed(&first, "Second"))
+            .unwrap();
+        let error = workspace.apply(0).unwrap_err();
 
         assert!(matches!(
             error,
             ConfigWorkspaceError::DuplicateName(ref name) if name == "Second"
         ));
-        assert_eq!(workspace.selected_name(), "First");
-        assert_eq!(workspace.selected_applied_text(), first);
-        assert!(workspace.selected_is_dirty());
+        assert_eq!(workspace.entry(0).unwrap().name(), "First");
+        assert_eq!(workspace.entry(0).unwrap().applied_text(), first);
+        assert!(workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
@@ -408,40 +420,56 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
 
-        workspace.set_selected_draft_text(first.replace("angle = 60", "angle = 45"));
-        workspace.apply_selected().unwrap();
-        let applied = workspace.selected_draft_text().to_string();
-        workspace.set_selected_draft_text("temporary invalid text".to_string());
+        workspace
+            .set_draft_text(0, first.replace("angle = 60", "angle = 45"))
+            .unwrap();
+        workspace.apply(0).unwrap();
+        let applied = workspace.entry(0).unwrap().draft_text().to_string();
+        workspace
+            .set_draft_text(0, "temporary invalid text".to_string())
+            .unwrap();
 
-        let reverted = workspace.revert_selected().to_string();
+        let reverted = workspace.revert(0).unwrap();
 
         assert_eq!(reverted, applied);
-        assert_eq!(
-            workspace.selected_draft_document().unwrap().to_string(),
-            applied
-        );
-        assert!(!workspace.selected_is_dirty());
+        let draft_document =
+            ConfigDocument::parse(workspace.entry(0).unwrap().draft_text().as_ref()).unwrap();
+        assert_eq!(draft_document.to_string(), applied);
+        assert!(!workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
     fn reset_preset_restores_default_and_applies_it() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
-        assert!(!workspace.selected_can_reset());
+        assert!(!workspace.can_reset(0));
 
-        workspace.set_selected_draft_text(first.replace("angle = 60", "angle = 45"));
-        workspace.apply_selected().unwrap();
-        assert_eq!(workspace.selected_applied_config().generation.angle, 45.0);
-        assert!(workspace.selected_can_reset());
+        workspace
+            .set_draft_text(0, first.replace("angle = 60", "angle = 45"))
+            .unwrap();
+        workspace.apply(0).unwrap();
+        assert_eq!(
+            workspace
+                .entry(0)
+                .unwrap()
+                .applied_config()
+                .generation
+                .angle,
+            45.0
+        );
+        assert!(workspace.can_reset(0));
 
-        let reset_config = workspace.reset_selected().unwrap().unwrap();
+        let reset_config = workspace.reset(0).unwrap().unwrap();
 
         assert_eq!(reset_config.generation.angle, 60.0);
-        assert_eq!(workspace.selected_draft_text(), first);
-        assert_eq!(workspace.selected_applied_text(), first);
-        assert_eq!(workspace.selected_applied_document().to_string(), first);
-        assert!(!workspace.selected_is_dirty());
-        assert!(!workspace.selected_can_reset());
+        assert_eq!(workspace.entry(0).unwrap().draft_text(), first);
+        assert_eq!(workspace.entry(0).unwrap().applied_text(), first);
+        assert_eq!(
+            workspace.entry(0).unwrap().applied_document().to_string(),
+            first
+        );
+        assert!(!workspace.entry(0).unwrap().is_dirty());
+        assert!(!workspace.can_reset(0));
     }
 
     #[test]
@@ -451,12 +479,22 @@ color = [0.0, 0.9, 0.5]
             ConfigWorkspace::from_entries(vec![ConfigWorkspaceEntry::custom(first.clone())])
                 .unwrap();
 
-        assert!(!workspace.selected_can_reset());
-        workspace.set_selected_draft_text(first.replace("angle = 60", "angle = 45"));
-        workspace.apply_selected().unwrap();
+        assert!(!workspace.can_reset(0));
+        workspace
+            .set_draft_text(0, first.replace("angle = 60", "angle = 45"))
+            .unwrap();
+        workspace.apply(0).unwrap();
 
-        assert!(workspace.reset_selected().unwrap().is_none());
-        assert_eq!(workspace.selected_applied_config().generation.angle, 45.0);
+        assert!(workspace.reset(0).unwrap().is_none());
+        assert_eq!(
+            workspace
+                .entry(0)
+                .unwrap()
+                .applied_config()
+                .generation
+                .angle,
+            45.0
+        );
     }
 
     #[test]
@@ -466,88 +504,141 @@ color = [0.0, 0.9, 0.5]
         let mut workspace =
             ConfigWorkspace::from_presets(vec![first.clone(), second.clone()]).unwrap();
 
-        workspace.set_selected_draft_text(config_text_renamed(&first, "Third"));
-        workspace.apply_selected().unwrap();
-        assert!(workspace.select_by_name("Second"));
-        workspace.set_selected_draft_text(config_text_renamed(&second, "First"));
-        workspace.apply_selected().unwrap();
-        assert!(workspace.select_by_name("Third"));
+        workspace
+            .set_draft_text(0, config_text_renamed(&first, "Third"))
+            .unwrap();
+        workspace.apply(0).unwrap();
+        workspace
+            .set_draft_text(1, config_text_renamed(&second, "First"))
+            .unwrap();
+        workspace.apply(1).unwrap();
 
-        let error = workspace.reset_selected().unwrap_err();
+        let error = workspace.reset(0).unwrap_err();
 
         assert!(matches!(
             error,
             ConfigWorkspaceError::DuplicateName(ref name) if name == "First"
         ));
-        assert!(!workspace.selected_can_reset());
-        assert_eq!(workspace.selected_name(), "Third");
+        assert!(!workspace.can_reset(0));
+        assert_eq!(workspace.entry(0).unwrap().name(), "Third");
     }
 
     #[test]
-    fn copy_selected_entry_preserves_dirty_valid_draft() {
+    fn copy_entry_preserves_dirty_valid_draft() {
         let first = config_text("Plant", "F", 60.0);
         let second = config_text("Plant copy", "F+F", 90.0);
         let draft = first.replace("angle = 60", "angle = 45");
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone(), second]).unwrap();
-        workspace.set_selected_draft_text(draft.clone());
+        workspace.set_draft_text(0, draft.clone()).unwrap();
 
-        workspace.copy_selected();
+        let (index, _) = workspace.copy(0).unwrap();
         let expected_text = config_text_renamed(&draft, "Plant copy 2");
         let expected_applied = config_text_renamed(&first, "Plant copy 2");
 
-        assert_eq!(workspace.selected_name(), "Plant copy 2");
-        assert_eq!(workspace.selected_draft_text(), expected_text);
-        assert_eq!(workspace.selected_applied_text(), expected_applied);
-        assert_eq!(workspace.selected_applied_config().name, "Plant copy 2");
-        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
-        assert!(workspace.selected_is_dirty());
-        assert!(!workspace.selected_can_reset());
+        assert_eq!(workspace.entry(index).unwrap().name(), "Plant copy 2");
+        assert_eq!(workspace.entry(index).unwrap().draft_text(), expected_text);
+        assert_eq!(
+            workspace.entry(index).unwrap().applied_text(),
+            expected_applied
+        );
+        assert_eq!(
+            workspace.entry(index).unwrap().applied_config().name,
+            "Plant copy 2"
+        );
+        assert_eq!(
+            workspace
+                .entry(index)
+                .unwrap()
+                .applied_config()
+                .generation
+                .angle,
+            60.0
+        );
+        assert!(workspace.entry(index).unwrap().is_dirty());
+        assert!(!workspace.can_reset(index));
     }
 
     #[test]
-    fn copy_selected_entry_preserves_parseable_invalid_draft() {
+    fn copy_entry_preserves_parseable_invalid_draft() {
         let first = config_text("Plant", "F", 60.0);
         let draft = first.replace("axiom = \"F\"", "axiom = \"[\"");
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
-        workspace.set_selected_draft_text(draft.clone());
+        workspace.set_draft_text(0, draft.clone()).unwrap();
 
-        workspace.copy_selected();
+        let (index, _) = workspace.copy(0).unwrap();
         let expected_draft = config_text_renamed(&draft, "Plant copy");
         let expected_applied = config_text_renamed(&first, "Plant copy");
 
-        assert_eq!(workspace.selected_name(), "Plant copy");
-        assert_eq!(workspace.selected_draft_text(), expected_draft);
-        assert_eq!(workspace.selected_applied_text(), expected_applied);
-        assert_eq!(workspace.selected_applied_config().name, "Plant copy");
-        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
-        assert!(workspace.selected_draft_document().is_some());
+        assert_eq!(workspace.entry(index).unwrap().name(), "Plant copy");
+        assert_eq!(workspace.entry(index).unwrap().draft_text(), expected_draft);
+        assert_eq!(
+            workspace.entry(index).unwrap().applied_text(),
+            expected_applied
+        );
+        assert_eq!(
+            workspace.entry(index).unwrap().applied_config().name,
+            "Plant copy"
+        );
+        assert_eq!(
+            workspace
+                .entry(index)
+                .unwrap()
+                .applied_config()
+                .generation
+                .angle,
+            60.0
+        );
+        assert!(
+            ConfigDocument::parse(workspace.entry(index).unwrap().draft_text().as_ref()).is_ok()
+        );
         assert!(matches!(
-            workspace.apply_selected(),
+            workspace.apply(index),
             Err(ConfigWorkspaceError::Config(
                 ConfigError::UnmatchedOpen { .. }
             ))
         ));
-        assert!(workspace.selected_is_dirty());
-        assert!(!workspace.selected_can_reset());
+        assert!(workspace.entry(index).unwrap().is_dirty());
+        assert!(!workspace.can_reset(index));
     }
 
     #[test]
-    fn copy_selected_entry_preserves_unparseable_draft_text() {
+    fn copy_entry_preserves_unparseable_draft_text() {
         let first = config_text("Plant", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
-        workspace.set_selected_draft_text("not valid toml".to_string());
+        workspace
+            .set_draft_text(0, "not valid toml".to_string())
+            .unwrap();
 
-        workspace.copy_selected();
+        let (index, _) = workspace.copy(0).unwrap();
         let expected_applied = config_text_renamed(&first, "Plant copy");
 
-        assert_eq!(workspace.selected_name(), "Plant copy");
-        assert_eq!(workspace.selected_draft_text(), "not valid toml");
-        assert_eq!(workspace.selected_applied_text(), expected_applied);
-        assert_eq!(workspace.selected_applied_config().name, "Plant copy");
-        assert_eq!(workspace.selected_applied_config().generation.angle, 60.0);
-        assert!(workspace.selected_draft_document().is_none());
-        assert!(workspace.selected_is_dirty());
-        assert!(!workspace.selected_can_reset());
+        assert_eq!(workspace.entry(index).unwrap().name(), "Plant copy");
+        assert_eq!(
+            workspace.entry(index).unwrap().draft_text(),
+            "not valid toml"
+        );
+        assert_eq!(
+            workspace.entry(index).unwrap().applied_text(),
+            expected_applied
+        );
+        assert_eq!(
+            workspace.entry(index).unwrap().applied_config().name,
+            "Plant copy"
+        );
+        assert_eq!(
+            workspace
+                .entry(index)
+                .unwrap()
+                .applied_config()
+                .generation
+                .angle,
+            60.0
+        );
+        assert!(
+            ConfigDocument::parse(workspace.entry(index).unwrap().draft_text().as_ref()).is_err()
+        );
+        assert!(workspace.entry(index).unwrap().is_dirty());
+        assert!(!workspace.can_reset(index));
     }
 
     #[test]
@@ -617,7 +708,7 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
 
-        assert!(!workspace.selected_is_dirty());
+        assert!(!workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
@@ -625,29 +716,47 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
 
-        workspace.set_selected_draft_text("temporary edit".to_string());
-        assert!(workspace.selected_is_dirty());
+        workspace
+            .set_draft_text(0, "temporary edit".to_string())
+            .unwrap();
+        assert!(workspace.entry(0).unwrap().is_dirty());
 
-        workspace.set_selected_draft_text(first);
+        workspace.set_draft_text(0, first).unwrap();
 
-        assert!(!workspace.selected_is_dirty());
+        assert!(!workspace.entry(0).unwrap().is_dirty());
     }
 
     #[test]
-    fn select_index_returns_false_for_out_of_bounds() {
-        let first = config_text("First", "F", 60.0);
+    fn copy_returns_new_entry_index_without_workspace_selection() {
+        let first = config_text("Plant", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
 
-        assert!(!workspace.select_index(1));
-        assert_eq!(workspace.selected_index(), 0);
+        let (index, config) = workspace.copy(0).unwrap();
+
+        assert_eq!(index, 1);
+        assert_eq!(config.name, "Plant copy");
+        assert_eq!(workspace.entry(0).unwrap().name(), "Plant");
+        assert_eq!(workspace.entry(index).unwrap().name(), "Plant copy");
     }
 
     #[test]
-    fn select_by_name_returns_false_for_unknown_name() {
+    fn indexed_mutation_returns_error_for_out_of_bounds() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
 
-        assert!(!workspace.select_by_name("Missing"));
-        assert_eq!(workspace.selected_name(), "First");
+        let error = workspace
+            .set_draft_text(1, "edited".to_string())
+            .unwrap_err();
+
+        assert!(matches!(error, ConfigWorkspaceError::InvalidIndex(1)));
+    }
+
+    #[test]
+    fn index_by_name_returns_none_for_unknown_name() {
+        let first = config_text("First", "F", 60.0);
+        let workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
+
+        assert_eq!(workspace.index_by_name("Missing"), None);
+        assert_eq!(workspace.index_by_name("First"), Some(0));
     }
 }
