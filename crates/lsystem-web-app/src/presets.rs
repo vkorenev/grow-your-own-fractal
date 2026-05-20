@@ -3,7 +3,7 @@ use lsystem_core::{Config, GenerationConfig};
 
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
-pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
+pub(crate) fn load_presets() -> Vec<String> {
     let mut files: Vec<_> = PRESETS_DIR
         .files()
         .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("toml"))
@@ -13,14 +13,11 @@ pub(crate) fn load_presets() -> Vec<(String, &'static str)> {
         .into_iter()
         .filter_map(|f| {
             let content = f.contents_utf8()?;
-            let name = match Config::parse(content) {
-                Ok(config) => config.name,
-                Err(err) => {
-                    log::error!("Bundled preset {:?} failed to parse: {err}", f.path());
-                    return None;
-                }
-            };
-            Some((name, content))
+            if let Err(err) = Config::parse(content) {
+                log::error!("Bundled preset {:?} failed to parse: {err}", f.path());
+                return None;
+            }
+            Some(content.to_string())
         })
         .collect()
 }

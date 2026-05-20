@@ -62,6 +62,7 @@ pub(super) enum Message {
 
 pub(super) struct FractalApp {
     pub(super) config_workspace: ConfigWorkspace,
+    pub(super) selected_config_index: usize,
     pub(super) toml: iced::widget::text_editor::Content,
     pub(super) base_config: Option<Config>,
     pub(super) iterations: u32,
@@ -82,11 +83,16 @@ impl FractalApp {
     pub(super) fn new() -> (Self, Task<Message>) {
         let config_workspace = ConfigWorkspace::from_presets(load_presets())
             .expect("at least one bundled preset should parse");
-        let toml_text = config_workspace.selected_draft_text().to_string();
-        let base_config = config_workspace.selected_applied_config().clone();
+        let selected_config_index = 0;
+        let selected_entry = config_workspace
+            .entry(selected_config_index)
+            .expect("workspace should contain at least one config");
+        let toml_text = selected_entry.draft_text().into_owned();
+        let base_config = selected_entry.applied_config();
 
         let mut app = Self {
             config_workspace,
+            selected_config_index,
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
             base_config: Some(base_config),
             iterations: 1,
@@ -110,43 +116,77 @@ impl FractalApp {
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::PresetSelected(name) => {
-                if self.config_workspace.select_by_name(&name) {
+                if let Some(index) = self.config_workspace.index_by_name(&name) {
+                    self.selected_config_index = index;
                     return self.refresh_from_workspace();
                 }
                 Task::none()
             }
-            Message::CopyConfig => {
-                self.config_workspace.copy_selected();
-                self.refresh_from_workspace()
-            }
+            Message::CopyConfig => match self.config_workspace.copy(self.selected_config_index) {
+                Ok((index, _)) => {
+                    self.selected_config_index = index;
+                    self.refresh_from_workspace()
+                }
+                Err(error) => {
+                    self.error = Some(error.to_string());
+                    Task::none()
+                }
+            },
             Message::TomlEdited(action) => {
                 self.toml.perform(action);
-                self.config_workspace
-                    .set_selected_draft_text(self.toml.text());
+                if let Err(error) = self
+                    .config_workspace
+                    .set_draft_text(self.selected_config_index, self.toml.text())
+                {
+                    self.error = Some(error.to_string());
+                }
                 self.export_status = None;
                 Task::none()
             }
             Message::ApplyConfig => self.apply_config(),
             Message::RevertConfig => {
-                self.config_workspace.revert_selected();
-                self.refresh_from_workspace()
+                match self.config_workspace.revert(self.selected_config_index) {
+                    Ok(_) => self.refresh_from_workspace(),
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        Task::none()
+                    }
+                }
             }
             Message::ResetConfig => {
-                if self.config_workspace.reset_selected().is_some() {
-                    self.refresh_from_workspace()
-                } else {
-                    Task::none()
+                if self
+                    .config_workspace
+                    .entry(self.selected_config_index)
+                    .is_some_and(|entry| entry.is_dirty())
+                {
+                    return Task::none();
+                }
+                match self.config_workspace.reset(self.selected_config_index) {
+                    Ok(Some(_)) => self.refresh_from_workspace(),
+                    Ok(None) => Task::none(),
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        Task::none()
+                    }
                 }
             }
             Message::IterationsChanged(iterations) => {
-                if self.config_workspace.selected_is_dirty() {
+                if self
+                    .config_workspace
+                    .entry(self.selected_config_index)
+                    .is_some_and(|entry| entry.is_dirty())
+                {
                     return Task::none();
                 }
                 self.iterations = iterations.min(self.max_iterations);
                 self.schedule_scene_generation()
             }
             Message::AngleChanged(angle) => {
-                if self.config_workspace.selected_is_dirty() {
+                if self
+                    .config_workspace
+                    .entry(self.selected_config_index)
+                    .is_some_and(|entry| entry.is_dirty())
+                {
                     return Task::none();
                 }
                 self.angle = angle;
@@ -296,11 +336,15 @@ impl FractalApp {
     }
 
     fn apply_config(&mut self) -> Task<Message> {
-        self.config_workspace
-            .set_selected_draft_text(self.toml.text());
-        match self.config_workspace.apply_selected() {
+        if let Err(error) = self
+            .config_workspace
+            .set_draft_text(self.selected_config_index, self.toml.text())
+        {
+            self.error = Some(error.to_string());
+            return Task::none();
+        }
+        match self.config_workspace.apply(self.selected_config_index) {
             Ok(config) => {
-                let config = config.clone();
                 self.base_config = Some(config);
                 self.sync_controls_from_base_config();
                 self.error = None;
@@ -315,10 +359,13 @@ impl FractalApp {
     }
 
     fn refresh_from_workspace(&mut self) -> Task<Message> {
-        self.toml = iced::widget::text_editor::Content::with_text(
-            self.config_workspace.selected_draft_text(),
-        );
-        self.base_config = Some(self.config_workspace.selected_applied_config().clone());
+        let Some(entry) = self.config_workspace.entry(self.selected_config_index) else {
+            self.error = Some("Internal error: selected config is unavailable.".to_string());
+            return Task::none();
+        };
+        let toml_text = entry.draft_text();
+        self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
+        self.base_config = Some(entry.applied_config());
         self.sync_controls_from_base_config();
         self.error = None;
         self.export_status = None;
@@ -431,7 +478,7 @@ impl FractalApp {
     }
 }
 
-fn load_presets() -> Vec<(String, String)> {
+fn load_presets() -> Vec<String> {
     let mut files: Vec<_> = PRESETS_DIR
         .files()
         .filter(|file| file.path().extension().and_then(|ext| ext.to_str()) == Some("toml"))
@@ -441,14 +488,11 @@ fn load_presets() -> Vec<(String, String)> {
         .into_iter()
         .filter_map(|file| {
             let toml = file.contents_utf8()?;
-            let name = match Config::parse(toml) {
-                Ok(config) => config.name,
-                Err(err) => {
-                    log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
-                    return None;
-                }
-            };
-            Some((name, toml.to_string()))
+            if let Err(err) = Config::parse(toml) {
+                log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
+                return None;
+            }
+            Some(toml.to_string())
         })
         .collect()
 }
