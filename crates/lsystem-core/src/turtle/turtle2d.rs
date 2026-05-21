@@ -59,40 +59,25 @@ impl<I: Iterator<Item = char>> Iterator for Segments2D<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Config;
+    use crate::{Dimensions, GenerationConfig};
+    use std::collections::BTreeMap;
 
-    fn parse(axiom: &str) -> Config {
-        let toml = format!(
-            r#"[metadata]
-name = "t"
-
-[l-system]
-dimensions = 2
-axiom = "{axiom}"
-iterations = 0
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#
-        );
-        Config::parse(&toml).expect("valid test config")
+    fn gen_config(axiom: &str) -> GenerationConfig {
+        GenerationConfig {
+            dimensions: Dimensions::TwoD,
+            axiom: axiom.to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        }
     }
 
     #[test]
     fn single_f_draws_one_segment() {
-        let cfg = parse("F");
-        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg.generation).collect();
+        let cfg = gen_config("F");
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!((a - Vec2::ZERO).length() < 1e-5);
@@ -101,8 +86,8 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn plus_turns_left() {
-        let cfg = parse("F+F");
-        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg.generation).collect();
+        let cfg = gen_config("F+F");
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
         assert_eq!(segments.len(), 2);
         let [a, b] = segments[1];
         assert!((a - Vec2::new(1.0, 0.0)).length() < 1e-5);
@@ -117,8 +102,8 @@ color = [0.0, 0.9, 0.5]
         //   +F  → turn north, draw (1,0)→(1,1)
         //   ]   → restore position=(1,0), heading=0
         //   -F  → turn south (-90°), draw (1,0)→(1,-1)
-        let cfg = parse("F[+F]-F");
-        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg.generation).collect();
+        let cfg = gen_config("F[+F]-F");
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
         assert_eq!(segments.len(), 3);
         let [a3, b3] = segments[2];
         assert!(
@@ -134,33 +119,16 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn koch_segment_count() {
         for (iters, expected) in [(0u32, 3usize), (1, 12), (2, 48), (3, 192), (4, 768)] {
-            let toml = format!(
-                r#"[metadata]
-name = "Koch Snowflake"
-
-[l-system]
-dimensions = 2
-axiom = "F++F++F"
-iterations = {iters}
-
-[l-system.rules]
-F = "F-F++F-F"
-
-[turtle]
-angle = 60.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#
-            );
-            let cfg = Config::parse(&toml).expect("valid test config");
-            let segments: Vec<[Vec2; 2]> = crate::generate(&cfg.generation).collect();
+            let cfg = GenerationConfig {
+                dimensions: Dimensions::TwoD,
+                axiom: "F++F++F".to_string(),
+                iterations: iters,
+                angle: 60.0,
+                step: 1.0,
+                initial_heading: 0.0,
+                rules: BTreeMap::from([('F', "F-F++F-F".to_string())]),
+            };
+            let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
             assert_eq!(segments.len(), expected, "iter {iters}");
         }
     }

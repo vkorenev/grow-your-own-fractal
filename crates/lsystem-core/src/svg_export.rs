@@ -150,6 +150,7 @@ fn to_hex(rgb: [f32; 3]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ConfigDocument, ConfigSource};
 
     fn make_config(extra_toml: &str) -> Config {
         let toml = format!(
@@ -175,12 +176,13 @@ background = [0.0, 0.0, 0.0]
 {extra_toml}
 "#
         );
-        Config::parse(&toml).unwrap()
+        ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap())
+            .unwrap()
+            .into()
     }
 
     fn make_empty_config() -> Config {
-        Config::parse(
-            r#"[metadata]
+        let toml = r#"[metadata]
 name = "Empty"
 
 [l-system]
@@ -201,9 +203,10 @@ background = [0.0, 0.0, 0.0]
 [colors.line]
 mode = "solid"
 color = [0.0, 0.9, 0.5]
-"#,
-        )
-        .unwrap()
+"#;
+        ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
+            .unwrap()
+            .into()
     }
 
     #[test]

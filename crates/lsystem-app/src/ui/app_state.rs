@@ -478,7 +478,7 @@ impl FractalApp {
     }
 }
 
-fn load_presets() -> Vec<String> {
+fn load_presets() -> Vec<(String, String)> {
     let mut files: Vec<_> = PRESETS_DIR
         .files()
         .filter(|file| file.path().extension().and_then(|ext| ext.to_str()) == Some("toml"))
@@ -487,12 +487,8 @@ fn load_presets() -> Vec<String> {
     files
         .into_iter()
         .filter_map(|file| {
-            let toml = file.contents_utf8()?;
-            if let Err(err) = Config::parse(toml) {
-                log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
-                return None;
-            }
-            Some(toml.to_string())
+            let label = file.path().display().to_string();
+            Some((label, file.contents_utf8()?.to_string()))
         })
         .collect()
 }

@@ -207,7 +207,8 @@ pub fn viewport_transform(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{Config, generate};
+    use lsystem_core::{Dimensions, GenerationConfig, generate};
+    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -233,32 +234,16 @@ mod tests {
         assert!(close(params.value, 0.5));
     }
 
-    fn cfg(axiom: &str) -> Config {
-        let toml = format!(
-            r#"[metadata]
-name = "t"
-
-[l-system]
-dimensions = 2
-axiom = "{axiom}"
-iterations = 0
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#
-        );
-        Config::parse(&toml).unwrap()
+    fn cfg(axiom: &str) -> GenerationConfig {
+        GenerationConfig {
+            dimensions: Dimensions::TwoD,
+            axiom: axiom.to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        }
     }
 
     #[test]
@@ -267,7 +252,7 @@ color = [0.0, 0.9, 0.5]
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg("A").generation));
+        } = geometry_to_vertices(generate(&cfg("A")));
         assert!(vertices.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
@@ -279,7 +264,7 @@ color = [0.0, 0.9, 0.5]
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg("F").generation));
+        } = geometry_to_vertices(generate(&cfg("F")));
         assert_eq!(vertices.len(), 2);
         assert!(close(vertices[0].position[0], 0.0) && close(vertices[0].position[1], 0.0));
         assert!(close(vertices[1].position[0], 1.0) && close(vertices[1].position[1], 0.0));
@@ -293,7 +278,7 @@ color = [0.0, 0.9, 0.5]
             vertices,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg("F+F-F").generation));
+        } = geometry_to_vertices(generate(&cfg("F+F-F")));
         assert_eq!(vertices.len(), 6);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));

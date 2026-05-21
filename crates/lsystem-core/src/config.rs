@@ -124,30 +124,20 @@ pub struct GenerationConfig {
     pub rules: BTreeMap<char, String>,
 }
 
-impl Config {
-    pub fn parse(toml_str: &str) -> Result<Self, ConfigError> {
-        ConfigDocument::parse(toml_str)?.to_config()
-    }
-
-    pub fn to_toml_string(&self) -> String {
-        ConfigDocument::from_config(self).to_toml_string()
-    }
-}
-
 /// Format-preserving TOML document for an L-system configuration.
 #[derive(Debug, Clone)]
-pub struct ConfigDocument {
+pub struct ConfigSource {
     document: DocumentMut,
 }
 
-impl ConfigDocument {
+impl ConfigSource {
     pub fn parse(toml_str: &str) -> Result<Self, ConfigError> {
         Ok(Self {
             document: toml_str.parse()?,
         })
     }
 
-    pub fn to_config(&self) -> Result<Config, ConfigError> {
+    fn to_config(&self) -> Result<Config, ConfigError> {
         validate_schema(&self.document)?;
 
         let metadata = required_table(&self.document, "metadata")?;
@@ -256,14 +246,6 @@ impl ConfigDocument {
         self.document.to_string()
     }
 
-    pub(crate) fn name(&self) -> Option<&str> {
-        self.document
-            .get("metadata")?
-            .as_table()?
-            .get("name")?
-            .as_str()
-    }
-
     pub(crate) fn set_name(&mut self, name: &str) {
         if self
             .document
@@ -274,58 +256,55 @@ impl ConfigDocument {
         }
         self.document["metadata"]["name"] = value(name);
     }
+}
 
-    pub fn from_config(config: &Config) -> Self {
-        let mut document = DocumentMut::new();
-
-        document["metadata"] = Item::Table(Table::new());
-        document["metadata"]["name"] = value(config.name.clone());
-
-        document["l-system"] = Item::Table(Table::new());
-        document["l-system"]["dimensions"] = value(match config.generation.dimensions {
-            Dimensions::TwoD => 2i64,
-            Dimensions::ThreeD => 3i64,
-        });
-        document["l-system"]["axiom"] = literal_string_item(&config.generation.axiom);
-        document["l-system"]["iterations"] = value(i64::from(config.generation.iterations));
-
-        document["l-system"]["rules"] = Item::Table(Table::new());
-        for (key, rhs) in &config.generation.rules {
-            document["l-system"]["rules"][&key.to_string()] = literal_string_item(rhs);
-        }
-
-        document["turtle"] = Item::Table(Table::new());
-        document["turtle"]["angle"] = value(f64::from(config.generation.angle));
-        document["turtle"]["step"] = value(f64::from(config.generation.step));
-        document["turtle"]["initial_heading"] = value(f64::from(config.generation.initial_heading));
-
-        document["colors"] = Item::Table(Table::new());
-        document["colors"]["background"] = color_item(config.colors.background);
-
-        document["colors"]["line"] = Item::Table(Table::new());
-        match &config.colors.line {
-            LineColorConfig::Solid { color } => {
-                document["colors"]["line"]["mode"] = value("solid");
-                document["colors"]["line"]["color"] = color_item(*color);
-            }
-            LineColorConfig::Gradient { start, end } => {
-                document["colors"]["line"]["mode"] = value("gradient");
-                document["colors"]["line"]["start"] = color_item(*start);
-                document["colors"]["line"]["end"] = color_item(*end);
-            }
-            LineColorConfig::HueCycle { initial } => {
-                document["colors"]["line"]["mode"] = value("hue_cycle");
-                document["colors"]["line"]["initial"] = color_item(*initial);
-            }
-        }
-
-        Self { document }
+impl std::fmt::Display for ConfigSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_toml_string())
     }
 }
 
-impl std::fmt::Display for ConfigDocument {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.to_toml_string())
+/// A [`ConfigSource`] paired with the validated [`Config`] it produces.
+///
+/// The only constructor is `TryFrom<ConfigSource>`, which validates the document and rejects
+/// invalid ones. Holding a `ConfigDocument` is a runtime invariant: the document was validated
+/// at construction time, so `config()` always returns the validated value derived then.
+#[derive(Debug, Clone)]
+pub struct ConfigDocument {
+    source: ConfigSource,
+    config: Config,
+}
+
+impl TryFrom<ConfigSource> for ConfigDocument {
+    type Error = ConfigError;
+
+    fn try_from(source: ConfigSource) -> Result<Self, ConfigError> {
+        let config = source.to_config()?;
+        Ok(Self { source, config })
+    }
+}
+
+impl From<ConfigDocument> for Config {
+    fn from(doc: ConfigDocument) -> Self {
+        doc.config
+    }
+}
+
+impl ConfigDocument {
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn source(&self) -> &ConfigSource {
+        &self.source
+    }
+
+    pub fn name(&self) -> &str {
+        &self.config.name
+    }
+
+    pub fn to_toml_string(&self) -> String {
+        self.source.to_toml_string()
     }
 }
 
@@ -506,33 +485,14 @@ fn validate_color(color: [f32; 3], field: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn literal_string_item(value: &str) -> Item {
-    if !value.contains('\'') && !value.contains('\n') && !value.contains('\r') {
-        return format!("'{value}'")
-            .parse::<Item>()
-            .expect("validated L-system literal string should parse");
-    }
-    Value::from(value).into()
-}
-
-fn color_item([r, g, b]: [f32; 3]) -> Item {
-    let item = format!("[{}, {}, {}]", toml_float(r), toml_float(g), toml_float(b));
-    item.parse()
-        .expect("validated inline color array should parse")
-}
-
-fn toml_float(value: f32) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.1}")
-    } else {
-        value.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn parse_config(toml_str: &str) -> Result<Config, ConfigError> {
+        Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
+    }
 
     const KOCH_TOML: &str = r#"
 name = "Koch Snowflake"
@@ -637,15 +597,15 @@ start = [
 end = [ 0.7, 0.8, 0.9 ]
 "#;
 
-        let doc = ConfigDocument::parse(original).unwrap();
+        let doc = ConfigSource::parse(original).unwrap();
 
         assert_eq!(doc.to_string(), original);
-        assert!(doc.to_config().is_ok());
+        assert!(ConfigDocument::try_from(doc).is_ok());
     }
 
     #[test]
     fn config_uses_generation_config_for_lsystem_and_turtle_fields() {
-        let cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
+        let cfg = parse_config(NESTED_KOCH_TOML).unwrap();
 
         assert_eq!(cfg.name, "Koch Snowflake");
         assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
@@ -658,41 +618,8 @@ end = [ 0.7, 0.8, 0.9 ]
     }
 
     #[test]
-    fn config_document_from_config_writes_canonical_nested_toml() {
-        let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        cfg.generation.dimensions = Dimensions::ThreeD;
-        cfg.generation.axiom = "F\\F".to_string();
-        cfg.generation.rules.insert('F', "F\\F".to_string());
-        cfg.colors.line = LineColorConfig::Gradient {
-            start: [0.1, 0.2, 0.3],
-            end: [0.7, 0.8, 0.9],
-        };
-
-        let serialized = ConfigDocument::from_config(&cfg).to_string();
-
-        assert!(serialized.contains("[metadata]\n"));
-        assert!(serialized.contains("[l-system]\n"));
-        assert!(serialized.contains("[l-system.rules]\n"));
-        assert!(serialized.contains("[turtle]\n"));
-        assert!(serialized.contains("[colors]\n"));
-        assert!(serialized.contains("[colors.line]\n"));
-        assert!(serialized.contains("axiom = 'F\\F'"));
-        assert!(serialized.contains("F = 'F\\F'"));
-        assert!(!serialized.contains("F\\\\F"));
-        assert!(serialized.contains("start = [0.1, 0.2, 0.3]"));
-        assert!(serialized.contains("end = [0.7, 0.8, 0.9]"));
-        assert_eq!(
-            ConfigDocument::parse(&serialized)
-                .unwrap()
-                .to_config()
-                .unwrap(),
-            cfg
-        );
-    }
-
-    #[test]
     fn parses_nested_v2_config() {
-        let cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
+        let cfg = parse_config(NESTED_KOCH_TOML).unwrap();
         assert_eq!(cfg.name, "Koch Snowflake");
         assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
         assert_eq!(cfg.generation.axiom, "F++F++F");
@@ -724,7 +651,7 @@ colors.line.mode = "solid"
 colors.line.color = [0.0, 0.9, 0.5]
 "#;
 
-        let cfg = Config::parse(toml).unwrap();
+        let cfg = parse_config(toml).unwrap();
 
         assert_eq!(cfg.name, "Dotted");
         assert_eq!(cfg.generation.dimensions, Dimensions::ThreeD);
@@ -758,7 +685,7 @@ mode = "solid"
 color = [0.0, 0.9, 0.5]
 "#;
 
-        let cfg = Config::parse(toml).unwrap();
+        let cfg = parse_config(toml).unwrap();
 
         assert_eq!(cfg.name, "Implicit Parents");
         assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
@@ -767,7 +694,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn rejects_flat_v1_schema() {
         assert!(
-            Config::parse(KOCH_TOML).is_err(),
+            parse_config(KOCH_TOML).is_err(),
             "flat v1 TOML must not parse as v2"
         );
     }
@@ -799,156 +726,17 @@ mode = "solid"
 color = [0.1, 0.2, 0.3]
 "#;
 
-        let document = ConfigDocument::parse(toml).unwrap();
+        let source = ConfigSource::parse(toml).unwrap();
 
-        assert_eq!(document.to_toml_string(), toml);
-        let cfg = document.to_config().unwrap();
+        assert_eq!(source.to_toml_string(), toml);
+        let cfg: Config = ConfigDocument::try_from(source).unwrap().into();
         assert_eq!(cfg.generation.axiom, "F\\F");
         assert_eq!(cfg.generation.rules[&'F'], "F\\F");
     }
 
     #[test]
-    fn serializes_canonical_nested_toml_and_round_trips() {
-        let cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        let serialized = cfg.to_toml_string();
-
-        assert!(serialized.contains("[metadata]\n"));
-        assert!(serialized.contains("[l-system]\n"));
-        assert!(serialized.contains("[l-system.rules]\n"));
-        assert!(serialized.contains("[turtle]\n"));
-        assert!(serialized.contains("[colors]\n"));
-        assert!(serialized.contains("[colors.line]\n"));
-        assert!(!serialized.contains("background_color"));
-        assert!(!serialized.contains("[line_color]"));
-        assert!(!serialized.contains("[rules]"));
-
-        let round_tripped = Config::parse(&serialized).unwrap();
-        assert_eq!(round_tripped.name, cfg.name);
-        assert_eq!(
-            round_tripped.generation.dimensions,
-            cfg.generation.dimensions
-        );
-        assert_eq!(round_tripped.generation.axiom, cfg.generation.axiom);
-        assert_eq!(
-            round_tripped.generation.iterations,
-            cfg.generation.iterations
-        );
-        assert_eq!(round_tripped.generation.angle, cfg.generation.angle);
-        assert_eq!(round_tripped.generation.step, cfg.generation.step);
-        assert_eq!(
-            round_tripped.generation.initial_heading,
-            cfg.generation.initial_heading
-        );
-        assert_eq!(round_tripped.generation.rules, cfg.generation.rules);
-        assert_eq!(round_tripped.to_toml_string(), serialized);
-    }
-
-    #[test]
-    fn serializes_axiom_and_rules_as_literal_strings() {
-        let cfg = Config::parse(
-            r#"[metadata]
-name = "Backslash"
-
-[l-system]
-dimensions = 3
-axiom = 'F\F'
-iterations = 1
-
-[l-system.rules]
-F = 'F\F'
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#,
-        )
-        .unwrap();
-
-        let serialized = cfg.to_toml_string();
-
-        assert!(serialized.contains("axiom = 'F\\F'"));
-        assert!(serialized.contains("F = 'F\\F'"));
-        assert!(!serialized.contains("F\\\\F"));
-        let round_tripped = Config::parse(&serialized).unwrap();
-        assert_eq!(round_tripped.generation.axiom, "F\\F");
-        assert_eq!(round_tripped.generation.rules[&'F'], "F\\F");
-    }
-
-    #[test]
-    fn serializes_solid_line_color_and_round_trips() {
-        let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        cfg.colors.line = LineColorConfig::Solid {
-            color: [0.1, 0.2, 0.3],
-        };
-
-        let serialized = cfg.to_toml_string();
-
-        assert!(serialized.contains("mode = \"solid\""));
-        assert!(serialized.contains("color = [0.1, 0.2, 0.3]"));
-        let round_tripped = Config::parse(&serialized).unwrap();
-        match round_tripped.colors.line {
-            LineColorConfig::Solid { color } => assert_eq!(color, [0.1, 0.2, 0.3]),
-            other => panic!("expected solid line color, got {other:?}"),
-        }
-        assert_eq!(round_tripped.to_toml_string(), serialized);
-    }
-
-    #[test]
-    fn serializes_gradient_line_color_and_round_trips() {
-        let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        cfg.colors.line = LineColorConfig::Gradient {
-            start: [0.1, 0.2, 0.3],
-            end: [0.7, 0.8, 0.9],
-        };
-
-        let serialized = cfg.to_toml_string();
-
-        assert!(serialized.contains("mode = \"gradient\""));
-        assert!(serialized.contains("start = [0.1, 0.2, 0.3]"));
-        assert!(serialized.contains("end = [0.7, 0.8, 0.9]"));
-        let round_tripped = Config::parse(&serialized).unwrap();
-        match round_tripped.colors.line {
-            LineColorConfig::Gradient { start, end } => {
-                assert_eq!(start, [0.1, 0.2, 0.3]);
-                assert_eq!(end, [0.7, 0.8, 0.9]);
-            }
-            other => panic!("expected gradient line color, got {other:?}"),
-        }
-        assert_eq!(round_tripped.to_toml_string(), serialized);
-    }
-
-    #[test]
-    fn serializes_empty_rules_table_for_ruleless_configs() {
-        let cfg = Config::parse(&test_toml(2, "F", 0, "90.0", "1.0", "0.0", "")).unwrap();
-        let serialized = cfg.to_toml_string();
-
-        assert!(serialized.contains("[l-system.rules]\n"));
-        let round_tripped = Config::parse(&serialized).unwrap();
-        assert!(round_tripped.generation.rules.is_empty());
-        assert_eq!(round_tripped.to_toml_string(), serialized);
-    }
-
-    #[test]
-    fn serializing_mutated_invalid_config_does_not_revalidate_and_panic() {
-        let mut cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
-        cfg.generation.axiom = "F1".to_string();
-
-        let result = std::panic::catch_unwind(|| cfg.to_toml_string());
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
     fn parses_valid_config() {
-        let cfg = Config::parse(NESTED_KOCH_TOML).unwrap();
+        let cfg = parse_config(NESTED_KOCH_TOML).unwrap();
         assert_eq!(cfg.generation.axiom, "F++F++F");
         assert_eq!(cfg.generation.angle, 60.0);
         assert_eq!(cfg.generation.step, 1.0);
@@ -977,7 +765,7 @@ background = [0.0, 0.0, 0.0]
 mode = "solid"
 color = [0.0, 0.9, 0.5]
 "#;
-        assert!(Config::parse(&toml).is_err());
+        assert!(parse_config(&toml).is_err());
     }
 
     #[test]
@@ -1003,7 +791,7 @@ background = [0.0, 0.0, 0.0]
 mode = "solid"
 color = [0.0, 0.9, 0.5]
 "#;
-        assert!(Config::parse(toml).is_err());
+        assert!(parse_config(toml).is_err());
     }
 
     #[test]
@@ -1013,7 +801,7 @@ color = [0.0, 0.9, 0.5]
             "background = [0.0, 0.0, 0.0]",
             "background = [0.0, 1.2, 0.0]",
         );
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1031,7 +819,7 @@ color = [0.0, 0.9, 0.5]
     fn rejects_non_finite_line_color_component() {
         let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
         let toml = toml.replace("color = [0.0, 0.9, 0.5]", "color = [0.0, nan, 0.5]");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(
                 err,
@@ -1049,7 +837,7 @@ color = [0.0, 0.9, 0.5]
     fn rejects_unknown_line_color_mode() {
         let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
         let toml = toml.replace("mode = \"solid\"", "mode = \"rainbow\"");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
 
         assert!(
             matches!(
@@ -1090,7 +878,7 @@ end = [1.0, 1.0, 1.0]"#,
         for (mode, replacement, expected_field) in cases {
             let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
             let toml = toml.replace("mode = \"solid\"\ncolor = [0.0, 0.9, 0.5]", replacement);
-            let err = Config::parse(&toml).unwrap_err();
+            let err = parse_config(&toml).unwrap_err();
 
             assert!(
                 matches!(
@@ -1105,7 +893,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_unknown_schema_fields() {
         let toml = format!("{}\n[experimental]\nfoo = true\n", NESTED_KOCH_TOML);
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
 
         assert!(
             matches!(err, ConfigError::UnknownField(ref field) if field == "experimental"),
@@ -1116,7 +904,7 @@ end = [1.0, 1.0, 1.0]"#,
             "initial_heading = 0.0",
             "initial_heading = 0.0\nfriction = 0.5",
         );
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
 
         assert!(
             matches!(err, ConfigError::UnknownField(ref field) if field == "turtle.friction"),
@@ -1138,7 +926,7 @@ end = [1.0, 1.0, 1.0]"#,
         for path in preset_paths {
             let toml = std::fs::read_to_string(&path)
                 .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-            Config::parse(&toml)
+            parse_config(&toml)
                 .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
         }
     }
@@ -1146,7 +934,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn strips_whitespace_from_axiom() {
         let toml = test_toml(2, "F + + F", 1, "90.0", "1.0", "0.0", r#"F = "F - F""#);
-        let cfg = Config::parse(&toml).unwrap();
+        let cfg = parse_config(&toml).unwrap();
         assert_eq!(cfg.generation.axiom, "F++F");
         assert_eq!(cfg.generation.rules[&'F'], "F-F");
     }
@@ -1154,7 +942,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_digit_in_axiom() {
         let toml = test_toml(2, "F+1", 1, "90.0", "1.0", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidSymbol { ch: '1', .. }),
             "unexpected error: {err}"
@@ -1164,7 +952,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_multi_char_rule_key() {
         let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", r#"FF = "FFF""#);
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidRuleKey { .. }),
             "unexpected error: {err}"
@@ -1175,7 +963,7 @@ end = [1.0, 1.0, 1.0]"#,
     fn rejects_invalid_dimensions() {
         for bad_dim in [1, 4, 300] {
             let toml = test_toml(bad_dim, "F", 1, "90.0", "1.0", "0.0", "");
-            let err = Config::parse(&toml).unwrap_err();
+            let err = parse_config(&toml).unwrap_err();
             assert!(
                 matches!(err, ConfigError::InvalidDimensions(d) if d == bad_dim),
                 "dim={bad_dim}: unexpected error: {err}"
@@ -1186,7 +974,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_non_finite_initial_heading() {
         let toml = test_toml(2, "F", 1, "90.0", "1.0", "nan", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
 
         assert!(
             matches!(err, ConfigError::InvalidInitialHeading(_)),
@@ -1197,13 +985,13 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn accepts_dimensions_3_with_3d_symbols() {
         let toml = test_toml(3, "F&F^F/F", 0, "90.0", "1.0", "0.0", "");
-        Config::parse(&toml).expect("3D config with 3D symbols should be valid");
+        parse_config(&toml).expect("3D config with 3D symbols should be valid");
     }
 
     #[test]
     fn rejects_3d_symbols_in_2d_config() {
         let toml = test_toml(2, "F&F", 1, "90.0", "1.0", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidSymbol { ch: '&', .. }),
             "unexpected error: {err}"
@@ -1213,7 +1001,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_unmatched_close_bracket_in_axiom() {
         let toml = test_toml(2, "F]F", 1, "90.0", "1.0", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedClose { position: 1, .. }),
             "unexpected error: {err}"
@@ -1223,7 +1011,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_unclosed_open_bracket_in_axiom() {
         let toml = test_toml(2, "F[F", 1, "90.0", "1.0", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedOpen { position: 1, .. }),
             "unexpected error: {err}"
@@ -1234,7 +1022,7 @@ end = [1.0, 1.0, 1.0]"#,
     fn reports_first_unclosed_bracket_not_last() {
         // "F[F[F": two unclosed brackets at positions 1 and 3; error must point to 1.
         let toml = test_toml(2, "F[F[F", 1, "90.0", "1.0", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedOpen { position: 1, .. }),
             "unexpected error: {err}"
@@ -1244,7 +1032,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_unbalanced_brackets_in_rule() {
         let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", r#"F = "F[+F""#);
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedOpen { .. }),
             "unexpected error: {err}"
@@ -1255,7 +1043,7 @@ end = [1.0, 1.0, 1.0]"#,
     fn rejects_non_positive_step() {
         for bad_step in ["0.0", "-1.0"] {
             let toml = test_toml(2, "F", 1, "90.0", bad_step, "0.0", "");
-            let err = Config::parse(&toml).unwrap_err();
+            let err = parse_config(&toml).unwrap_err();
             assert!(
                 matches!(err, ConfigError::InvalidStep(_)),
                 "step={bad_step}: unexpected error: {err}"
@@ -1266,7 +1054,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_non_finite_step() {
         let toml = test_toml(2, "F", 1, "90.0", "inf", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidStep(_)),
             "unexpected error: {err}"
@@ -1276,7 +1064,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_non_finite_angle() {
         let toml = test_toml(2, "F", 1, "nan", "1.0", "0.0", "");
-        let err = Config::parse(&toml).unwrap_err();
+        let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidAngle(_)),
             "unexpected error: {err}"
