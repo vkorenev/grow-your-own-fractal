@@ -486,13 +486,6 @@ fn load_presets() -> Vec<String> {
     files.sort_by_key(|file| file.path());
     files
         .into_iter()
-        .filter_map(|file| {
-            let toml = file.contents_utf8()?;
-            if let Err(err) = Config::parse(toml) {
-                log::error!("Bundled preset {:?} failed to parse: {err}", file.path());
-                return None;
-            }
-            Some(toml.to_string())
-        })
+        .filter_map(|file| file.contents_utf8().map(str::to_string))
         .collect()
 }

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{Config, ConfigDocument, ConfigError};
+use crate::{Config, ConfigDocument, ConfigError, ConfigSource};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -29,10 +29,16 @@ pub struct ConfigWorkspace {
 pub struct ConfigEntry {
     default: Option<ConfigDocument>,
     draft: Option<String>,
-    last_applied_document: ConfigDocument,
+    last_applied: ConfigDocument,
 }
 
 impl ConfigWorkspace {
+    /// Build a workspace from a collection of preset TOML strings.
+    ///
+    /// Presets that fail to parse or fail config validation are silently skipped with a
+    /// `log::warn!` — they do not cause an error. Returns [`ConfigWorkspaceError::Empty`] only
+    /// if every preset is invalid (or the iterator is empty). Duplicate names among the valid
+    /// presets still return [`ConfigWorkspaceError::DuplicateName`].
     pub fn from_presets(
         presets: impl IntoIterator<Item = String>,
     ) -> Result<Self, ConfigWorkspaceError> {
@@ -40,7 +46,13 @@ impl ConfigWorkspace {
         let mut entries_out = Vec::new();
 
         for text in presets {
-            let entry = ConfigEntry::preset(text)?;
+            let entry = match ConfigEntry::preset(text) {
+                Ok(entry) => entry,
+                Err(err) => {
+                    log::warn!("Skipping invalid preset: {err}");
+                    continue;
+                }
+            };
             let name = entry.name().to_string();
             if !names.insert(name.clone()) {
                 return Err(ConfigWorkspaceError::DuplicateName(name));
@@ -101,13 +113,16 @@ impl ConfigWorkspace {
 
     pub fn apply(&mut self, index: usize) -> Result<Config, ConfigWorkspaceError> {
         let entry = self.entry_or_error(index)?;
-        let Some((document, config)) = entry.pending_apply()? else {
+        let Some(applied) = entry.pending_apply()? else {
             return Ok(entry.applied_config());
         };
-        if self.name_exists_except(&config.name, index) {
-            return Err(ConfigWorkspaceError::DuplicateName(config.name));
+        if self.name_exists_except(&applied.config().name, index) {
+            return Err(ConfigWorkspaceError::DuplicateName(
+                applied.config().name.clone(),
+            ));
         }
-        self.entries[index].commit_apply(document);
+        let config = applied.config().clone();
+        self.entries[index].commit_apply(applied);
         Ok(config)
     }
 
@@ -122,9 +137,10 @@ impl ConfigWorkspace {
     /// Callers should gate user-visible resets on [`ConfigWorkspace::can_reset`] to avoid
     /// no-op resets when the applied document already matches the default.
     pub fn reset(&mut self, index: usize) -> Result<Option<ConfigEntry>, ConfigWorkspaceError> {
-        let Some((name, default, _)) = self.entry_or_error(index)?.reset_candidate()? else {
+        let Some(default) = self.entry_or_error(index)?.reset_candidate() else {
             return Ok(None);
         };
+        let name = default.name().to_string();
         if self.name_exists_except(&name, index) {
             return Err(ConfigWorkspaceError::DuplicateName(name));
         }
@@ -164,19 +180,17 @@ impl ConfigWorkspace {
 
 impl ConfigEntry {
     fn preset(text: String) -> Result<Self, ConfigWorkspaceError> {
-        let document = ConfigDocument::parse(&text)?;
-        document.to_config()?;
+        let source = ConfigSource::parse(&text)?;
+        let doc = ConfigDocument::try_from(source)?;
         Ok(Self {
-            default: Some(document.clone()),
+            default: Some(doc.clone()),
             draft: None,
-            last_applied_document: document,
+            last_applied: doc,
         })
     }
 
     pub fn name(&self) -> &str {
-        self.last_applied_document
-            .name()
-            .expect("applied document should include metadata.name")
+        self.last_applied.name()
     }
 
     pub fn draft_text(&self) -> Cow<'_, str> {
@@ -187,13 +201,11 @@ impl ConfigEntry {
     }
 
     fn applied_text(&self) -> String {
-        self.last_applied_document.to_toml_string()
+        self.last_applied.to_toml_string()
     }
 
     pub fn applied_config(&self) -> Config {
-        self.last_applied_document
-            .to_config()
-            .expect("applied document should remain a valid config")
+        self.last_applied.config().clone()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -207,36 +219,36 @@ impl ConfigEntry {
 
     fn copy_as(&self, name: &str) -> Result<Self, ConfigWorkspaceError> {
         let draft = self.draft.as_ref().map(|draft_text| {
-            ConfigDocument::parse(draft_text).map_or_else(
-                |_| draft_text.clone(),
-                |mut document| {
-                    document.set_name(name);
-                    document.to_toml_string()
+            ConfigSource::parse(draft_text).map_or_else(
+                |_| draft_text.clone(), // draft is unparseable TOML; keep verbatim so the user can fix it
+                |mut source| {
+                    source.set_name(name);
+                    source.to_toml_string()
                 },
             )
         });
 
-        let mut last_applied_document = self.last_applied_document.clone();
-        last_applied_document.set_name(name);
-        last_applied_document.to_config()?;
+        let mut source = self.last_applied.source().clone();
+        source.set_name(name);
+        let last_applied = ConfigDocument::try_from(source)?;
         Ok(Self {
             default: None,
             draft,
-            last_applied_document,
+            last_applied,
         })
     }
 
-    fn pending_apply(&self) -> Result<Option<(ConfigDocument, Config)>, ConfigWorkspaceError> {
+    fn pending_apply(&self) -> Result<Option<ConfigDocument>, ConfigWorkspaceError> {
         let Some(draft) = &self.draft else {
             return Ok(None);
         };
-        let document = ConfigDocument::parse(draft)?;
-        let config = document.to_config()?;
-        Ok(Some((document, config)))
+        let source = ConfigSource::parse(draft)?;
+        let doc = ConfigDocument::try_from(source)?;
+        Ok(Some(doc))
     }
 
-    fn commit_apply(&mut self, document: ConfigDocument) {
-        self.last_applied_document = document;
+    fn commit_apply(&mut self, applied: ConfigDocument) {
+        self.last_applied = applied;
         self.draft = None;
     }
 
@@ -244,23 +256,17 @@ impl ConfigEntry {
         self.draft = None;
     }
 
-    fn reset_candidate(
-        &self,
-    ) -> Result<Option<(String, ConfigDocument, Config)>, ConfigWorkspaceError> {
-        let Some(default) = self.default.clone() else {
-            return Ok(None);
-        };
-        let config = default.to_config()?;
-        Ok(Some((config.name.clone(), default, config)))
+    fn reset_candidate(&self) -> Option<ConfigDocument> {
+        self.default.clone()
     }
 
     fn commit_reset(&mut self, default: ConfigDocument) {
-        self.last_applied_document = default;
+        self.last_applied = default;
         self.draft = None;
     }
 
     fn default_name(&self) -> Option<&str> {
-        self.default.as_ref()?.name()
+        self.default.as_ref().map(ConfigDocument::name)
     }
 
     fn has_default_changes(&self) -> bool {
@@ -303,9 +309,9 @@ color = [0.0, 0.9, 0.5]
     }
 
     fn config_text_renamed(text: &str, name: &str) -> String {
-        let mut document = ConfigDocument::parse(text).unwrap();
-        document.set_name(name);
-        document.to_toml_string()
+        let mut source = ConfigSource::parse(text).unwrap();
+        source.set_name(name);
+        source.to_toml_string()
     }
 
     #[test]
@@ -322,7 +328,7 @@ color = [0.0, 0.9, 0.5]
             .unwrap();
 
         assert_eq!(workspace.entry(0).unwrap().draft_text(), "edited first");
-        assert!(ConfigDocument::parse(workspace.entry(0).unwrap().draft_text().as_ref()).is_err());
+        assert!(ConfigSource::parse(workspace.entry(0).unwrap().draft_text().as_ref()).is_err());
         assert!(workspace.entry(0).unwrap().is_dirty());
         assert_eq!(workspace.entry(1).unwrap().draft_text(), "edited second");
     }
@@ -413,7 +419,7 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
-    fn revert_restores_last_applied_document() {
+    fn revert_restores_last_applied() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
 
@@ -435,7 +441,7 @@ color = [0.0, 0.9, 0.5]
             workspace.entry(0).unwrap().draft_text()
         );
         let draft_document =
-            ConfigDocument::parse(workspace.entry(0).unwrap().draft_text().as_ref()).unwrap();
+            ConfigSource::parse(workspace.entry(0).unwrap().draft_text().as_ref()).unwrap();
         assert_eq!(draft_document.to_string(), applied);
         assert!(!workspace.entry(0).unwrap().is_dirty());
     }
@@ -603,9 +609,7 @@ color = [0.0, 0.9, 0.5]
                 .angle,
             60.0
         );
-        assert!(
-            ConfigDocument::parse(workspace.entry(index).unwrap().draft_text().as_ref()).is_ok()
-        );
+        assert!(ConfigSource::parse(workspace.entry(index).unwrap().draft_text().as_ref()).is_ok());
         assert!(matches!(
             workspace.apply(index),
             Err(ConfigWorkspaceError::Config(
@@ -655,7 +659,7 @@ color = [0.0, 0.9, 0.5]
             60.0
         );
         assert!(
-            ConfigDocument::parse(workspace.entry(index).unwrap().draft_text().as_ref()).is_err()
+            ConfigSource::parse(workspace.entry(index).unwrap().draft_text().as_ref()).is_err()
         );
         assert!(workspace.entry(index).unwrap().is_dirty());
         assert!(!workspace.can_reset(index));
@@ -681,13 +685,31 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
-    fn from_presets_propagates_invalid_text() {
+    fn from_presets_skips_invalid_text() {
         let error = ConfigWorkspace::from_presets(vec!["not valid toml".to_string()]).unwrap_err();
 
-        assert!(matches!(
-            error,
-            ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
-        ));
+        assert!(matches!(error, ConfigWorkspaceError::Empty));
+    }
+
+    #[test]
+    fn from_presets_skips_invalid_presets_and_keeps_valid_ones() {
+        let valid_a = config_text("First", "F", 60.0);
+        let valid_b = config_text("Second", "F+F", 90.0);
+        let invalid_toml = "not valid toml".to_string();
+        let invalid_config = config_text("Bad", "F", 60.0)
+            .replace("axiom = \"F\"", "axiom = \"[\"");
+
+        let workspace = ConfigWorkspace::from_presets(vec![
+            valid_a,
+            invalid_toml,
+            invalid_config,
+            valid_b,
+        ])
+        .unwrap();
+
+        assert_eq!(workspace.entries().len(), 2);
+        assert_eq!(workspace.entry(0).unwrap().name(), "First");
+        assert_eq!(workspace.entry(1).unwrap().name(), "Second");
     }
 
     #[test]
@@ -699,7 +721,7 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
-    fn draft_text_matching_applied_document_is_clean() {
+    fn draft_text_matching_applied_config_is_clean() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
 

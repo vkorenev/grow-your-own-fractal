@@ -79,7 +79,8 @@ impl<I: Iterator<Item = char>> Iterator for Segments3D<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Config;
+    use crate::{Dimensions, GenerationConfig};
+    use std::collections::BTreeMap;
 
     fn make(axiom: &str, angle_deg: f32) -> Vec<[Vec3; 2]> {
         make_with_heading(axiom, angle_deg, 0.0)
@@ -109,34 +110,17 @@ mod tests {
 
     #[test]
     fn generate_3d_uses_config_initial_heading() {
-        let cfg = Config::parse(
-            r#"
-[metadata]
-name = "t"
+        let cfg = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "F".to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 90.0,
+            rules: BTreeMap::new(),
+        };
 
-[l-system]
-dimensions = 3
-axiom = "F"
-iterations = 0
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 90.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#,
-        )
-        .expect("valid test config");
-
-        let segments: Vec<[Vec3; 2]> = crate::generate_3d(&cfg.generation).collect();
+        let segments: Vec<[Vec3; 2]> = crate::generate_3d(&cfg).collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!(a.distance(Vec3::ZERO) < 1e-5);

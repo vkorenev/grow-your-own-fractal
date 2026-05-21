@@ -11,14 +11,7 @@ pub(crate) fn load_presets() -> Vec<String> {
     files.sort_by_key(|f| f.path());
     files
         .into_iter()
-        .filter_map(|f| {
-            let content = f.contents_utf8()?;
-            if let Err(err) = Config::parse(content) {
-                log::error!("Bundled preset {:?} failed to parse: {err}", f.path());
-                return None;
-            }
-            Some(content.to_string())
-        })
+        .filter_map(|f| f.contents_utf8().map(str::to_string))
         .collect()
 }
 
