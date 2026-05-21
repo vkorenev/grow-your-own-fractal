@@ -348,15 +348,10 @@ pub(crate) fn App() -> impl IntoView {
                                 workspace.copy(selected_config_index.get_untracked())
                             });
                             match copied {
-                                Some(Ok((index, config))) => {
+                                Some(Ok((index, entry))) => {
                                     set_selected_config_index.set(index);
-                                    set_toml_text.set(config_workspace.with_untracked(|workspace| {
-                                        workspace
-                                            .entry(index)
-                                            .map(|entry| entry.draft_text().into_owned())
-                                            .unwrap_or_default()
-                                    }));
-                                    install_config(config);
+                                    set_toml_text.set(entry.draft_text().into_owned());
+                                    install_config(entry.applied_config());
                                     render_current();
                                 }
                                 Some(Err(err)) => {
@@ -417,17 +412,10 @@ pub(crate) fn App() -> impl IntoView {
                                     workspace.revert(selected_config_index.get_untracked())
                                 });
                                 match text {
-                                    Some(Ok(text)) => {
-                                        set_toml_text.set(text);
-                                        let config = config_workspace.with_untracked(|workspace| {
-                                            workspace
-                                                .entry(selected_config_index.get_untracked())
-                                                .map(|entry| entry.applied_config())
-                                        });
-                                        if let Some(config) = config {
-                                            install_config(config);
-                                            render_current();
-                                        }
+                                    Some(Ok(entry)) => {
+                                        set_toml_text.set(entry.draft_text().into_owned());
+                                        install_config(entry.applied_config());
+                                        render_current();
                                     }
                                     Some(Err(err)) => {
                                         set_error.set(Some(err.to_string()));
@@ -468,19 +456,14 @@ pub(crate) fn App() -> impl IntoView {
                                     workspace.reset(selected_config_index.get_untracked())
                                 });
                                 match reset {
-                                    Some(Ok(Some(config))) => {
-                                        let index = selected_config_index.get_untracked();
-                                        let text = config_workspace.with_untracked(|workspace| {
-                                            workspace
-                                                .entry(index)
-                                                .map(|entry| entry.draft_text().into_owned())
-                                                .unwrap_or_default()
-                                        });
-                                        set_toml_text.set(text);
-                                        install_config(config);
+                                    Some(Ok(Some(entry))) => {
+                                        set_toml_text.set(entry.draft_text().into_owned());
+                                        install_config(entry.applied_config());
                                         render_current();
                                     }
-                                    Some(Ok(None)) => {}
+                                    Some(Ok(None)) => {
+                                        log::warn!("reset: no-op for entry without a bundled default; button guard may have been bypassed");
+                                    }
                                     Some(Err(err)) => {
                                         set_error.set(Some(err.to_string()));
                                     }
