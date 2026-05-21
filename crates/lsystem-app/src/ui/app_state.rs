@@ -134,24 +134,26 @@ impl FractalApp {
             },
             Message::TomlEdited(action) => {
                 self.toml.perform(action);
-                if let Err(error) = self
-                    .config_workspace
-                    .set_draft_text(self.selected_config_index, self.toml.text())
-                {
-                    self.error = Some(error.to_string());
-                }
+                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
+                else {
+                    self.error =
+                        Some("Internal error: selected config is unavailable.".to_string());
+                    return Task::none();
+                };
+                entry.set_draft_text(self.toml.text());
                 self.export_status = None;
                 Task::none()
             }
             Message::ApplyConfig => self.apply_config(),
             Message::RevertConfig => {
-                match self.config_workspace.revert(self.selected_config_index) {
-                    Ok(_) => self.refresh_from_workspace(),
-                    Err(error) => {
-                        self.error = Some(error.to_string());
-                        Task::none()
-                    }
-                }
+                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
+                else {
+                    self.error =
+                        Some("Internal error: selected config is unavailable.".to_string());
+                    return Task::none();
+                };
+                entry.revert();
+                self.refresh_from_workspace()
             }
             Message::ResetConfig => {
                 if self
@@ -336,13 +338,11 @@ impl FractalApp {
     }
 
     fn apply_config(&mut self) -> Task<Message> {
-        if let Err(error) = self
-            .config_workspace
-            .set_draft_text(self.selected_config_index, self.toml.text())
-        {
-            self.error = Some(error.to_string());
+        let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index) else {
+            self.error = Some("Internal error: selected config is unavailable.".to_string());
             return Task::none();
-        }
+        };
+        entry.set_draft_text(self.toml.text());
         match self.config_workspace.apply(self.selected_config_index) {
             Ok(config) => {
                 self.base_config = Some(config);

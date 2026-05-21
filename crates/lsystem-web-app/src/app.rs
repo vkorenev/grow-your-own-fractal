@@ -181,14 +181,23 @@ pub(crate) fn App() -> impl IntoView {
         let interval_id = Rc::clone(&interval_id);
         let install_config = Rc::clone(&install_config);
         move || {
-            set_config_workspace.update(|workspace| {
-                if let Err(err) = workspace.set_draft_text(
-                    selected_config_index.get_untracked(),
-                    toml_text.get_untracked(),
-                ) {
-                    set_error.set(Some(err.to_string()));
-                }
+            let draft_updated = set_config_workspace.try_update(|workspace| {
+                let Some(entry) = workspace.entry_mut(selected_config_index.get_untracked()) else {
+                    set_error.set(Some(
+                        "Internal error: selected config is unavailable.".to_string(),
+                    ));
+                    return false;
+                };
+                entry.set_draft_text(toml_text.get_untracked());
+                true
             });
+            if !matches!(draft_updated, Some(true)) {
+                if draft_updated.is_none() {
+                    log::error!("apply: config_workspace signal was unavailable");
+                    set_error.set(Some("Internal error: could not apply config.".to_string()));
+                }
+                return;
+            }
             let applied = set_config_workspace
                 .try_update(|workspace| workspace.apply(selected_config_index.get_untracked()));
             match applied {
@@ -381,12 +390,13 @@ pub(crate) fn App() -> impl IntoView {
                         let text = textarea_value(ev);
                         set_toml_text.set(text.clone());
                         set_config_workspace.update(|workspace| {
-                            if let Err(err) = workspace.set_draft_text(
-                                selected_config_index.get_untracked(),
-                                text,
-                            ) {
-                                set_error.set(Some(err.to_string()));
-                            }
+                            let Some(entry) = workspace.entry_mut(selected_config_index.get_untracked()) else {
+                                set_error.set(Some(
+                                    "Internal error: selected config is unavailable.".to_string(),
+                                ));
+                                return;
+                            };
+                            entry.set_draft_text(text);
                         });
                     }
                 />
@@ -408,17 +418,26 @@ pub(crate) fn App() -> impl IntoView {
                             let render_current = Rc::clone(&render_current);
                             let install_config = Rc::clone(&install_config);
                             move |_| {
-                                let text = set_config_workspace.try_update(|workspace| {
-                                    workspace.revert(selected_config_index.get_untracked())
+                                let reverted = set_config_workspace.try_update(|workspace| {
+                                    let entry =
+                                        workspace.entry_mut(selected_config_index.get_untracked())?;
+                                    entry.revert();
+                                    Some((
+                                        entry.draft_text().into_owned(),
+                                        entry.applied_config(),
+                                    ))
                                 });
-                                match text {
-                                    Some(Ok(entry)) => {
-                                        set_toml_text.set(entry.draft_text().into_owned());
-                                        install_config(entry.applied_config());
+                                match reverted {
+                                    Some(Some((text, config))) => {
+                                        set_toml_text.set(text);
+                                        install_config(config);
                                         render_current();
                                     }
-                                    Some(Err(err)) => {
-                                        set_error.set(Some(err.to_string()));
+                                    Some(None) => {
+                                        set_error.set(Some(
+                                            "Internal error: selected config is unavailable."
+                                                .to_string(),
+                                        ));
                                     }
                                     None => {
                                         log::error!(
