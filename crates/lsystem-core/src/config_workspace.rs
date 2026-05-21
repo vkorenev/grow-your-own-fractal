@@ -696,16 +696,12 @@ color = [0.0, 0.9, 0.5]
         let valid_a = config_text("First", "F", 60.0);
         let valid_b = config_text("Second", "F+F", 90.0);
         let invalid_toml = "not valid toml".to_string();
-        let invalid_config = config_text("Bad", "F", 60.0)
-            .replace("axiom = \"F\"", "axiom = \"[\"");
+        let invalid_config =
+            config_text("Bad", "F", 60.0).replace("axiom = \"F\"", "axiom = \"[\"");
 
-        let workspace = ConfigWorkspace::from_presets(vec![
-            valid_a,
-            invalid_toml,
-            invalid_config,
-            valid_b,
-        ])
-        .unwrap();
+        let workspace =
+            ConfigWorkspace::from_presets(vec![valid_a, invalid_toml, invalid_config, valid_b])
+                .unwrap();
 
         assert_eq!(workspace.entries().len(), 2);
         assert_eq!(workspace.entry(0).unwrap().name(), "First");

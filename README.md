@@ -244,7 +244,7 @@ mise.toml                   pins trunk version (read by CI and local dev)
 crates/
   lsystem-core/             pure Rust, no rendering deps
     src/
-      config.rs             format-preserving TOML docs + Config/GenerationConfig structs
+      config.rs             ConfigSource (format-preserving TOML) → ConfigDocument (validated pair) → Config/GenerationConfig
       alphabet.rs           reserved-symbol sets, validation
       grammar.rs            axiom + rule expansion (N iterations); OwnedExpandIter for lifetime-free streaming
       turtle/
