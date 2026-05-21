@@ -33,23 +33,25 @@ pub struct ConfigEntry {
 }
 
 impl ConfigWorkspace {
-    /// Build a workspace from a collection of preset TOML strings.
+    /// Build a workspace from a collection of `(label, text)` preset pairs.
     ///
-    /// Presets that fail to parse or fail config validation are silently skipped with a
-    /// `log::warn!` — they do not cause an error. Returns [`ConfigWorkspaceError::Empty`] only
-    /// if every preset is invalid (or the iterator is empty). Duplicate names among the valid
-    /// presets still return [`ConfigWorkspaceError::DuplicateName`].
-    pub fn from_presets(
-        presets: impl IntoIterator<Item = String>,
+    /// `label` is a display name used only in log warnings (typically the file path).
+    /// Presets that fail to parse or fail config validation are skipped with a `log::warn!`
+    /// naming the offending label — they do not cause an error. Returns
+    /// [`ConfigWorkspaceError::Empty`] only if every preset is invalid (or the iterator is
+    /// empty). Duplicate names among the valid presets still return
+    /// [`ConfigWorkspaceError::DuplicateName`].
+    pub fn from_presets<L: std::fmt::Display>(
+        presets: impl IntoIterator<Item = (L, String)>,
     ) -> Result<Self, ConfigWorkspaceError> {
         let mut names = BTreeSet::new();
         let mut entries_out = Vec::new();
 
-        for text in presets {
+        for (label, text) in presets {
             let entry = match ConfigEntry::preset(text) {
                 Ok(entry) => entry,
                 Err(err) => {
-                    log::warn!("Skipping invalid preset: {err}");
+                    log::warn!("Skipping invalid preset {label}: {err}");
                     continue;
                 }
             };
@@ -318,7 +320,8 @@ color = [0.0, 0.9, 0.5]
     fn switching_entries_preserves_each_draft() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first, second]).unwrap();
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
 
         workspace
             .set_draft_text(0, "edited first".to_string())
@@ -336,7 +339,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn failed_apply_preserves_last_applied_config() {
         let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         let previous_config = workspace.entry(0).unwrap().applied_config();
 
         workspace
@@ -358,7 +361,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn apply_rejects_parseable_toml_with_invalid_config() {
         let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
 
         workspace
             .set_draft_text(0, first.replace("axiom = \"F\"", "axiom = \"[\""))
@@ -385,7 +388,9 @@ color = [0.0, 0.9, 0.5]
     fn apply_unique_renamed_draft_updates_entry_name() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone(), second]).unwrap();
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First", first.clone()), ("Second", second)])
+                .unwrap();
 
         workspace
             .set_draft_text(0, config_text_renamed(&first, "Renamed"))
@@ -402,7 +407,9 @@ color = [0.0, 0.9, 0.5]
     fn apply_rejects_duplicate_renamed_draft() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone(), second]).unwrap();
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First", first.clone()), ("Second", second)])
+                .unwrap();
 
         workspace
             .set_draft_text(0, config_text_renamed(&first, "Second"))
@@ -421,7 +428,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn revert_restores_last_applied() {
         let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
 
         workspace
             .set_draft_text(0, first.replace("angle = 60", "angle = 45"))
@@ -449,7 +456,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn reset_preset_restores_default_and_applies_it() {
         let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
         assert!(!workspace.can_reset(0));
 
         workspace
@@ -484,7 +491,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn custom_entry_has_no_default_to_reset() {
         let first = config_text("Custom", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Custom", first.clone())]).unwrap();
         let (index, _) = workspace.copy(0).unwrap();
 
         assert!(!workspace.can_reset(index));
@@ -512,8 +519,11 @@ color = [0.0, 0.9, 0.5]
     fn reset_rejects_default_name_collision() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
-        let mut workspace =
-            ConfigWorkspace::from_presets(vec![first.clone(), second.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![
+            ("First", first.clone()),
+            ("Second", second.clone()),
+        ])
+        .unwrap();
 
         workspace
             .set_draft_text(0, config_text_renamed(&first, "Third"))
@@ -539,7 +549,9 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("Plant", "F", 60.0);
         let second = config_text("Plant copy", "F+F", 90.0);
         let draft = first.replace("angle = 60", "angle = 45");
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone(), second]).unwrap();
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Plant", first.clone()), ("Plant copy", second)])
+                .unwrap();
         workspace.set_draft_text(0, draft.clone()).unwrap();
 
         let (index, entry) = workspace.copy(0).unwrap();
@@ -578,7 +590,7 @@ color = [0.0, 0.9, 0.5]
     fn copy_entry_preserves_parseable_invalid_draft() {
         let first = config_text("Plant", "F", 60.0);
         let draft = first.replace("axiom = \"F\"", "axiom = \"[\"");
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first.clone())]).unwrap();
         workspace.set_draft_text(0, draft.clone()).unwrap();
 
         let (index, entry) = workspace.copy(0).unwrap();
@@ -623,7 +635,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn copy_entry_preserves_unparseable_draft_text() {
         let first = config_text("Plant", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first.clone())]).unwrap();
         workspace
             .set_draft_text(0, "not valid toml".to_string())
             .unwrap();
@@ -667,7 +679,7 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn from_presets_rejects_empty_iterator() {
-        let error = ConfigWorkspace::from_presets(Vec::<String>::new()).unwrap_err();
+        let error = ConfigWorkspace::from_presets(Vec::<(&str, String)>::new()).unwrap_err();
 
         assert!(matches!(error, ConfigWorkspaceError::Empty));
     }
@@ -676,7 +688,8 @@ color = [0.0, 0.9, 0.5]
     fn from_presets_rejects_duplicate_names() {
         let first = config_text("Duplicate", "F", 60.0);
         let second = config_text("Duplicate", "F+F", 90.0);
-        let error = ConfigWorkspace::from_presets(vec![first, second]).unwrap_err();
+        let error =
+            ConfigWorkspace::from_presets(vec![("dup1", first), ("dup2", second)]).unwrap_err();
 
         assert!(matches!(
             error,
@@ -686,7 +699,8 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn from_presets_skips_invalid_text() {
-        let error = ConfigWorkspace::from_presets(vec!["not valid toml".to_string()]).unwrap_err();
+        let error = ConfigWorkspace::from_presets(vec![("test", "not valid toml".to_string())])
+            .unwrap_err();
 
         assert!(matches!(error, ConfigWorkspaceError::Empty));
     }
@@ -699,9 +713,13 @@ color = [0.0, 0.9, 0.5]
         let invalid_config =
             config_text("Bad", "F", 60.0).replace("axiom = \"F\"", "axiom = \"[\"");
 
-        let workspace =
-            ConfigWorkspace::from_presets(vec![valid_a, invalid_toml, invalid_config, valid_b])
-                .unwrap();
+        let workspace = ConfigWorkspace::from_presets(vec![
+            ("first", valid_a),
+            ("invalid-toml", invalid_toml),
+            ("invalid-config", invalid_config),
+            ("second", valid_b),
+        ])
+        .unwrap();
 
         assert_eq!(workspace.entries().len(), 2);
         assert_eq!(workspace.entry(0).unwrap().name(), "First");
@@ -711,7 +729,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn fresh_workspace_is_not_dirty() {
         let first = config_text("First", "F", 60.0);
-        let workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
+        let workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         assert!(!workspace.entry(0).unwrap().is_dirty());
     }
@@ -719,7 +737,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn draft_text_matching_applied_config_is_clean() {
         let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first.clone()]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
 
         workspace
             .set_draft_text(0, "temporary edit".to_string())
@@ -734,7 +752,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn copy_returns_new_entry_index_without_workspace_selection() {
         let first = config_text("Plant", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
 
         let (index, entry) = workspace.copy(0).unwrap();
 
@@ -747,7 +765,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn indexed_mutation_returns_error_for_out_of_bounds() {
         let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         let error = workspace
             .set_draft_text(1, "edited".to_string())
@@ -759,7 +777,7 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn index_by_name_returns_none_for_unknown_name() {
         let first = config_text("First", "F", 60.0);
-        let workspace = ConfigWorkspace::from_presets(vec![first]).unwrap();
+        let workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         assert_eq!(workspace.index_by_name("Missing"), None);
         assert_eq!(workspace.index_by_name("First"), Some(0));
