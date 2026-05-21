@@ -136,6 +136,10 @@ impl FractalApp {
                 self.toml.perform(action);
                 let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
                 else {
+                    log::error!(
+                        "TomlEdited: entry_mut returned None for index {}",
+                        self.selected_config_index
+                    );
                     self.error =
                         Some("Internal error: selected config is unavailable.".to_string());
                     return Task::none();
@@ -148,6 +152,10 @@ impl FractalApp {
             Message::RevertConfig => {
                 let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
                 else {
+                    log::error!(
+                        "RevertConfig: entry_mut returned None for index {}",
+                        self.selected_config_index
+                    );
                     self.error =
                         Some("Internal error: selected config is unavailable.".to_string());
                     return Task::none();
@@ -339,6 +347,10 @@ impl FractalApp {
 
     fn apply_config(&mut self) -> Task<Message> {
         let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index) else {
+            log::error!(
+                "apply_config: entry_mut returned None for index {}",
+                self.selected_config_index
+            );
             self.error = Some("Internal error: selected config is unavailable.".to_string());
             return Task::none();
         };
