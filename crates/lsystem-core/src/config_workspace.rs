@@ -55,9 +55,10 @@ impl ConfigWorkspace {
                     continue;
                 }
             };
-            let name = entry.name().to_string();
-            if !names.insert(name.clone()) {
-                return Err(ConfigWorkspaceError::DuplicateName(name));
+            if !names.insert(entry.name().to_string()) {
+                return Err(ConfigWorkspaceError::DuplicateName(
+                    entry.name().to_string(),
+                ));
             }
             entries_out.push(entry);
         }
