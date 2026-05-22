@@ -256,6 +256,20 @@ impl ConfigSource {
         }
         self.document["metadata"]["name"] = value(name);
     }
+
+    pub(crate) fn set_iterations(&mut self, iterations: u32) {
+        set_value_preserving_decor(
+            &mut self.document["l-system"]["iterations"],
+            Value::from(i64::from(iterations)),
+        );
+    }
+
+    pub(crate) fn set_angle(&mut self, angle: f32) {
+        set_value_preserving_decor(
+            &mut self.document["turtle"]["angle"],
+            Value::from(f64::from(angle)),
+        );
+    }
 }
 
 impl std::fmt::Display for ConfigSource {
@@ -366,6 +380,17 @@ fn validate_keys(table: &impl TableLike, path: &str, allowed: &[&str]) -> Result
         }
     }
     Ok(())
+}
+
+fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
+    debug_assert!(
+        item.as_value().is_some(),
+        "expected scalar Value item; decor will be lost for table/absent items"
+    );
+    if let Some(current_value) = item.as_value() {
+        *next_value.decor_mut() = current_value.decor().clone();
+    }
+    *item = Item::Value(next_value);
 }
 
 fn required_item<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a Item, ConfigError> {

@@ -385,7 +385,7 @@ pub(crate) fn App() -> impl IntoView {
                     on:input=move |ev| {
                         let text = textarea_value(ev);
                         set_toml_text.set(text.clone());
-                        set_config_workspace.update(|workspace| {
+                        let updated = set_config_workspace.try_update(|workspace| {
                             let index = selected_config_index.get_untracked();
                             let Some(entry) = workspace.entry_mut(index) else {
                                 log::error!("on_input: entry_mut returned None for index {index}");
@@ -396,6 +396,11 @@ pub(crate) fn App() -> impl IntoView {
                             };
                             entry.set_draft_text(text);
                         });
+                        if updated.is_none() {
+                            log::error!("textarea input: config_workspace signal was unavailable");
+                            set_error
+                                .set(Some("Internal error: could not update config.".to_string()));
+                        }
                     }
                 />
 
@@ -519,10 +524,50 @@ pub(crate) fn App() -> impl IntoView {
                             prop:value=move || iterations.get().to_string()
                             on:input={
                                 let render_current = Rc::clone(&render_current);
+                                let install_config = Rc::clone(&install_config);
                                 move |ev| {
-                                    let next = input_value(ev).parse::<u32>().unwrap_or(0);
-                                    set_iterations.set(next.clamp(0, max_iterations.get_untracked()));
-                                    render_current();
+                                    let next = input_value(ev)
+                                        .parse::<u32>()
+                                        .unwrap_or(0)
+                                        .clamp(0, max_iterations.get_untracked());
+                                    let updated = set_config_workspace.try_update(|workspace| {
+                                        let index = selected_config_index.get_untracked();
+                                        let Some(entry) = workspace.entry_mut(index) else {
+                                            return Err((index, None));
+                                        };
+                                        entry
+                                            .set_iterations(next)
+                                            .map_err(|error| (index, Some(error.to_string())))?;
+                                        Ok((entry.draft_text().into_owned(), entry.applied_config()))
+                                    });
+                                    match updated {
+                                        Some(Ok((text, config))) => {
+                                            set_toml_text.set(text);
+                                            install_config(config);
+                                            render_current();
+                                        }
+                                        Some(Err((index, None))) => {
+                                            log::error!(
+                                                "iterations input: entry_mut returned None for index {index}"
+                                            );
+                                            set_error.set(Some(
+                                                "Internal error: selected config is unavailable."
+                                                    .to_string(),
+                                            ));
+                                        }
+                                        Some(Err((_index, Some(message)))) => {
+                                            set_error.set(Some(message));
+                                        }
+                                        None => {
+                                            log::error!(
+                                                "iterations input: config_workspace signal was unavailable"
+                                            );
+                                            set_error.set(Some(
+                                                "Internal error: could not update config."
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         />
@@ -540,10 +585,50 @@ pub(crate) fn App() -> impl IntoView {
                             prop:value=move || angle.get().to_string()
                             on:input={
                                 let render_current = Rc::clone(&render_current);
+                                let install_config = Rc::clone(&install_config);
                                 move |ev| {
-                                    let next = input_value(ev).parse::<f32>().unwrap_or(60.0);
-                                    set_angle.set(next.clamp(1.0, 180.0));
-                                    render_current();
+                                    let next = input_value(ev)
+                                        .parse::<f32>()
+                                        .unwrap_or(60.0)
+                                        .clamp(1.0, 180.0);
+                                    let updated = set_config_workspace.try_update(|workspace| {
+                                        let index = selected_config_index.get_untracked();
+                                        let Some(entry) = workspace.entry_mut(index) else {
+                                            return Err((index, None));
+                                        };
+                                        entry
+                                            .set_angle(next)
+                                            .map_err(|error| (index, Some(error.to_string())))?;
+                                        Ok((entry.draft_text().into_owned(), entry.applied_config()))
+                                    });
+                                    match updated {
+                                        Some(Ok((text, config))) => {
+                                            set_toml_text.set(text);
+                                            install_config(config);
+                                            render_current();
+                                        }
+                                        Some(Err((index, None))) => {
+                                            log::error!(
+                                                "angle input: entry_mut returned None for index {index}"
+                                            );
+                                            set_error.set(Some(
+                                                "Internal error: selected config is unavailable."
+                                                    .to_string(),
+                                            ));
+                                        }
+                                        Some(Err((_index, Some(message)))) => {
+                                            set_error.set(Some(message));
+                                        }
+                                        None => {
+                                            log::error!(
+                                                "angle input: config_workspace signal was unavailable"
+                                            );
+                                            set_error.set(Some(
+                                                "Internal error: could not update config."
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
                                 }
                             }
                         />

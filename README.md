@@ -124,7 +124,8 @@ preset default after an applied preset has diverged from that default. Custom
 entries exist only for the current session and do not have a bundled default to
 reset to. While a draft differs from the last-applied TOML document,
 iteration/angle/export controls are hidden until the draft is applied or
-reverted.
+reverted. On a clean entry, changing the iteration or angle controls updates the
+last-applied TOML document as well as the rendered scene.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.

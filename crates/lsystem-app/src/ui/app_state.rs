@@ -181,26 +181,49 @@ impl FractalApp {
                 }
             }
             Message::IterationsChanged(iterations) => {
-                if self
-                    .config_workspace
-                    .entry(self.selected_config_index)
-                    .is_some_and(|entry| entry.is_dirty())
-                {
+                let iterations = iterations.min(self.max_iterations);
+                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
+                else {
+                    log::error!(
+                        "IterationsChanged: entry_mut returned None for index {}",
+                        self.selected_config_index
+                    );
+                    self.error =
+                        Some("Internal error: selected config is unavailable.".to_string());
+                    return Task::none();
+                };
+                if entry.is_dirty() {
                     return Task::none();
                 }
-                self.iterations = iterations.min(self.max_iterations);
-                self.schedule_scene_generation()
+                match entry.set_iterations(iterations) {
+                    Ok(()) => self.refresh_from_workspace(),
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        Task::none()
+                    }
+                }
             }
             Message::AngleChanged(angle) => {
-                if self
-                    .config_workspace
-                    .entry(self.selected_config_index)
-                    .is_some_and(|entry| entry.is_dirty())
-                {
+                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
+                else {
+                    log::error!(
+                        "AngleChanged: entry_mut returned None for index {}",
+                        self.selected_config_index
+                    );
+                    self.error =
+                        Some("Internal error: selected config is unavailable.".to_string());
+                    return Task::none();
+                };
+                if entry.is_dirty() {
                     return Task::none();
                 }
-                self.angle = angle;
-                self.schedule_scene_generation()
+                match entry.set_angle(angle) {
+                    Ok(()) => self.refresh_from_workspace(),
+                    Err(error) => {
+                        self.error = Some(error.to_string());
+                        Task::none()
+                    }
+                }
             }
             Message::PngWidthChanged(value) => {
                 self.png_width_text = value;
@@ -372,6 +395,10 @@ impl FractalApp {
 
     fn refresh_from_workspace(&mut self) -> Task<Message> {
         let Some(entry) = self.config_workspace.entry(self.selected_config_index) else {
+            log::error!(
+                "refresh_from_workspace: entry returned None for index {}",
+                self.selected_config_index
+            );
             self.error = Some("Internal error: selected config is unavailable.".to_string());
             return Task::none();
         };
