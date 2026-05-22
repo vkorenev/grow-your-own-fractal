@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
-use lsystem_core::{Config, ConfigWorkspace, ConfigWorkspaceError, Dimensions};
+use lsystem_core::{Config, ConfigWorkspace, Dimensions, EntryViewMut};
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -19,16 +19,12 @@ const AUTO_ROTATE_DT_MS: f32 = 16.0;
 pub(crate) fn App() -> impl IntoView {
     let initial_workspace =
         ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
-    let initial_config_index = 0usize;
-    let initial_entry = initial_workspace
-        .entry(initial_config_index)
-        .expect("workspace should contain at least one config");
+    let initial_entry = initial_workspace.selected();
     let first_toml = initial_entry.draft_text().into_owned();
     let initial_config = initial_entry.applied_config();
     let initial_max_iterations = max_iterations_for_config(&initial_config.generation);
 
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
-    let (selected_config_index, set_selected_config_index) = signal(initial_config_index);
     let (toml_text, set_toml_text) = signal(first_toml);
     let (base_config, set_base_config) = signal(Some(initial_config.clone()));
     let (error, set_error) = signal(None::<String>);
@@ -57,11 +53,7 @@ pub(crate) fn App() -> impl IntoView {
             .map(|c| matches!(c.generation.dimensions, Dimensions::ThreeD))
             .unwrap_or(false)
     };
-    let is_dirty = move || {
-        let index = selected_config_index.get();
-        config_workspace
-            .with(|workspace| workspace.entry(index).is_some_and(|entry| entry.is_dirty()))
-    };
+    let is_dirty = move || config_workspace.with(|workspace| workspace.selected().is_dirty());
 
     let canvas_ref = NodeRef::<Canvas>::new();
     let renderer = Rc::new(RefCell::new(None::<CanvasRenderer>));
@@ -182,12 +174,10 @@ pub(crate) fn App() -> impl IntoView {
         let install_config = Rc::clone(&install_config);
         move || {
             let applied = set_config_workspace.try_update(|workspace| {
-                let index = selected_config_index.get_untracked();
-                let Some(entry) = workspace.entry_mut(index) else {
-                    return Err(ConfigWorkspaceError::InvalidIndex(index));
-                };
-                entry.set_draft_text(toml_text.get_untracked());
-                workspace.apply(index)
+                workspace
+                    .selected_mut()
+                    .set_draft_text(toml_text.get_untracked());
+                workspace.apply()
             });
             match applied {
                 Some(Ok(config)) => {
@@ -204,14 +194,7 @@ pub(crate) fn App() -> impl IntoView {
                     render_current();
                 }
                 Some(Err(err)) => {
-                    if let ConfigWorkspaceError::InvalidIndex(index) = err {
-                        log::error!("apply: entry_mut returned None for index {index}");
-                        set_error.set(Some(
-                            "Internal error: selected config is unavailable.".to_string(),
-                        ));
-                    } else {
-                        set_error.set(Some(err.to_string()));
-                    }
+                    set_error.set(Some(err.to_string()));
                 }
                 None => {
                     log::error!("apply: config_workspace signal was unavailable");
@@ -226,17 +209,10 @@ pub(crate) fn App() -> impl IntoView {
         let render_current = Rc::clone(&render_current);
         let install_config = Rc::clone(&install_config);
         move || {
-            let index = selected_config_index.get_untracked();
-            if let Some(config) = config_workspace.with_untracked(|workspace| {
-                workspace.entry(index).map(|entry| entry.applied_config())
-            }) {
-                install_config(config);
-                render_current();
-            } else {
-                set_error.set(Some(
-                    "Internal error: selected config is unavailable.".to_string(),
-                ));
-            }
+            let config =
+                config_workspace.with_untracked(|workspace| workspace.selected().applied_config());
+            install_config(config);
+            render_current();
         }
     };
     let select_current_config = Rc::new(select_current_config);
@@ -304,21 +280,31 @@ pub(crate) fn App() -> impl IntoView {
                 <label for="preset">"Config"</label>
                 <select
                     id="preset"
-                    prop:value=move || selected_config_index.get().to_string()
+                    prop:value=move || {
+                        config_workspace.with(|workspace| workspace.selected_index().to_string())
+                    }
                     on:change={
                         let select_current_config = Rc::clone(&select_current_config);
                         move |ev| {
                             let idx = select_value(ev).parse::<usize>().unwrap_or(0);
-                            let selected = config_workspace.with_untracked(|workspace| {
-                                workspace.entry(idx).map(|entry| entry.draft_text().into_owned())
+                            let selected = set_config_workspace.try_update(|workspace| {
+                                workspace
+                                    .select(idx)
+                                    .map(|_| workspace.selected().draft_text().into_owned())
                             });
                             match selected {
-                                Some(text) => {
-                                    set_selected_config_index.set(idx);
+                                Some(Ok(text)) => {
                                     set_toml_text.set(text);
                                     select_current_config();
                                 }
+                                Some(Err(err)) => {
+                                    log::error!("select preset: rejected index {idx}: {err}");
+                                    set_error.set(Some(err.to_string()));
+                                }
                                 None => {
+                                    log::error!(
+                                        "select preset: config_workspace signal was unavailable"
+                                    );
                                     set_error.set(Some(
                                         "Internal error: could not select config.".to_string(),
                                     ));
@@ -349,12 +335,10 @@ pub(crate) fn App() -> impl IntoView {
                         let render_current = Rc::clone(&render_current);
                         let install_config = Rc::clone(&install_config);
                         move |_| {
-                            let copied = set_config_workspace.try_update(|workspace| {
-                                workspace.copy(selected_config_index.get_untracked())
-                            });
+                            let copied = set_config_workspace
+                                .try_update(|workspace| workspace.copy());
                             match copied {
-                                Some(Ok((index, entry))) => {
-                                    set_selected_config_index.set(index);
+                                Some(Ok((_index, entry))) => {
                                     set_toml_text.set(entry.draft_text().into_owned());
                                     install_config(entry.applied_config());
                                     render_current();
@@ -386,15 +370,7 @@ pub(crate) fn App() -> impl IntoView {
                         let text = textarea_value(ev);
                         set_toml_text.set(text.clone());
                         let updated = set_config_workspace.try_update(|workspace| {
-                            let index = selected_config_index.get_untracked();
-                            let Some(entry) = workspace.entry_mut(index) else {
-                                log::error!("on_input: entry_mut returned None for index {index}");
-                                set_error.set(Some(
-                                    "Internal error: selected config is unavailable.".to_string(),
-                                ));
-                                return;
-                            };
-                            entry.set_draft_text(text);
+                            workspace.selected_mut().set_draft_text(text);
                         });
                         if updated.is_none() {
                             log::error!("textarea input: config_workspace signal was unavailable");
@@ -422,25 +398,22 @@ pub(crate) fn App() -> impl IntoView {
                             let install_config = Rc::clone(&install_config);
                             move |_| {
                                 let reverted = set_config_workspace.try_update(|workspace| {
-                                    let entry =
-                                        workspace.entry_mut(selected_config_index.get_untracked())?;
-                                    entry.revert();
-                                    Some((
-                                        entry.draft_text().into_owned(),
-                                        entry.applied_config(),
-                                    ))
+                                    match workspace.selected_mut().view_mut() {
+                                        EntryViewMut::Dirty(dirty) => dirty.revert(),
+                                        EntryViewMut::Clean(_) => {
+                                            log::error!(
+                                                "revert fired while entry is clean; UI guards bypassed"
+                                            );
+                                        }
+                                    }
+                                    let entry = workspace.selected();
+                                    (entry.draft_text().into_owned(), entry.applied_config())
                                 });
                                 match reverted {
-                                    Some(Some((text, config))) => {
+                                    Some((text, config)) => {
                                         set_toml_text.set(text);
                                         install_config(config);
                                         render_current();
-                                    }
-                                    Some(None) => {
-                                        set_error.set(Some(
-                                            "Internal error: selected config is unavailable."
-                                                .to_string(),
-                                        ));
                                     }
                                     None => {
                                         log::error!(
@@ -459,12 +432,8 @@ pub(crate) fn App() -> impl IntoView {
                     <button
                         type="button"
                         disabled=move || {
-                            let index = selected_config_index.get();
                             config_workspace.with(|workspace| {
-                                workspace
-                                    .entry(index)
-                                    .is_none_or(|entry| entry.is_dirty())
-                                    || !workspace.can_reset(index)
+                                workspace.selected().is_dirty() || !workspace.can_reset()
                             })
                         }
                         on:click={
@@ -474,9 +443,8 @@ pub(crate) fn App() -> impl IntoView {
                                 if is_dirty() {
                                     return;
                                 }
-                                let reset = set_config_workspace.try_update(|workspace| {
-                                    workspace.reset(selected_config_index.get_untracked())
-                                });
+                                let reset = set_config_workspace
+                                    .try_update(|workspace| workspace.reset());
                                 match reset {
                                     Some(Ok(Some(entry))) => {
                                         set_toml_text.set(entry.draft_text().into_owned());
@@ -531,31 +499,33 @@ pub(crate) fn App() -> impl IntoView {
                                         .unwrap_or(0)
                                         .clamp(0, max_iterations.get_untracked());
                                     let updated = set_config_workspace.try_update(|workspace| {
-                                        let index = selected_config_index.get_untracked();
-                                        let Some(entry) = workspace.entry_mut(index) else {
-                                            return Err((index, None));
-                                        };
-                                        entry
-                                            .set_iterations(next)
-                                            .map_err(|error| (index, Some(error.to_string())))?;
-                                        Ok((entry.draft_text().into_owned(), entry.applied_config()))
+                                        let entry = workspace.selected_mut();
+                                        match entry.view_mut() {
+                                            EntryViewMut::Clean(mut clean) => {
+                                                clean
+                                                    .set_iterations(next)
+                                                    .map_err(|error| error.to_string())?;
+                                            }
+                                            EntryViewMut::Dirty(_) => {
+                                                log::error!(
+                                                    "iterations slider fired while entry is dirty; UI guards bypassed"
+                                                );
+                                                return Ok(None);
+                                            }
+                                        }
+                                        Ok(Some((
+                                            entry.draft_text().into_owned(),
+                                            entry.applied_config(),
+                                        )))
                                     });
                                     match updated {
-                                        Some(Ok((text, config))) => {
+                                        Some(Ok(Some((text, config)))) => {
                                             set_toml_text.set(text);
                                             install_config(config);
                                             render_current();
                                         }
-                                        Some(Err((index, None))) => {
-                                            log::error!(
-                                                "iterations input: entry_mut returned None for index {index}"
-                                            );
-                                            set_error.set(Some(
-                                                "Internal error: selected config is unavailable."
-                                                    .to_string(),
-                                            ));
-                                        }
-                                        Some(Err((_index, Some(message)))) => {
+                                        Some(Ok(None)) => {}
+                                        Some(Err(message)) => {
                                             set_error.set(Some(message));
                                         }
                                         None => {
@@ -592,31 +562,33 @@ pub(crate) fn App() -> impl IntoView {
                                         .unwrap_or(60.0)
                                         .clamp(1.0, 180.0);
                                     let updated = set_config_workspace.try_update(|workspace| {
-                                        let index = selected_config_index.get_untracked();
-                                        let Some(entry) = workspace.entry_mut(index) else {
-                                            return Err((index, None));
-                                        };
-                                        entry
-                                            .set_angle(next)
-                                            .map_err(|error| (index, Some(error.to_string())))?;
-                                        Ok((entry.draft_text().into_owned(), entry.applied_config()))
+                                        let entry = workspace.selected_mut();
+                                        match entry.view_mut() {
+                                            EntryViewMut::Clean(mut clean) => {
+                                                clean
+                                                    .set_angle(next)
+                                                    .map_err(|error| error.to_string())?;
+                                            }
+                                            EntryViewMut::Dirty(_) => {
+                                                log::error!(
+                                                    "angle slider fired while entry is dirty; UI guards bypassed"
+                                                );
+                                                return Ok(None);
+                                            }
+                                        }
+                                        Ok(Some((
+                                            entry.draft_text().into_owned(),
+                                            entry.applied_config(),
+                                        )))
                                     });
                                     match updated {
-                                        Some(Ok((text, config))) => {
+                                        Some(Ok(Some((text, config)))) => {
                                             set_toml_text.set(text);
                                             install_config(config);
                                             render_current();
                                         }
-                                        Some(Err((index, None))) => {
-                                            log::error!(
-                                                "angle input: entry_mut returned None for index {index}"
-                                            );
-                                            set_error.set(Some(
-                                                "Internal error: selected config is unavailable."
-                                                    .to_string(),
-                                            ));
-                                        }
-                                        Some(Err((_index, Some(message)))) => {
+                                        Some(Ok(None)) => {}
+                                        Some(Err(message)) => {
                                             set_error.set(Some(message));
                                         }
                                         None => {
