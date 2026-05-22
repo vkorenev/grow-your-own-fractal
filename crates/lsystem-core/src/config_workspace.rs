@@ -20,6 +20,15 @@ pub enum ConfigWorkspaceError {
     Config(#[from] ConfigError),
 }
 
+#[derive(Debug, Error)]
+pub enum ConfigEntryMutationError {
+    #[error("config entry has unapplied edits")]
+    Dirty,
+
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+}
+
 #[derive(Debug, Clone)]
 pub struct ConfigWorkspace {
     entries: Vec<ConfigEntry>,
@@ -200,6 +209,14 @@ impl ConfigEntry {
         self.draft = (text != applied_text).then_some(text);
     }
 
+    pub fn set_iterations(&mut self, iterations: u32) -> Result<(), ConfigEntryMutationError> {
+        self.update_last_applied_source(|source| source.set_iterations(iterations))
+    }
+
+    pub fn set_angle(&mut self, angle: f32) -> Result<(), ConfigEntryMutationError> {
+        self.update_last_applied_source(|source| source.set_angle(angle))
+    }
+
     fn copy_as(&self, name: &str) -> Result<Self, ConfigWorkspaceError> {
         let draft = self.draft.as_ref().map(|draft_text| {
             ConfigSource::parse(draft_text).map_or_else(
@@ -246,6 +263,21 @@ impl ConfigEntry {
     fn commit_reset(&mut self, default: ConfigDocument) {
         self.last_applied = default;
         self.draft = None;
+    }
+
+    fn update_last_applied_source(
+        &mut self,
+        update: impl FnOnce(&mut ConfigSource),
+    ) -> Result<(), ConfigEntryMutationError> {
+        if self.is_dirty() {
+            return Err(ConfigEntryMutationError::Dirty);
+        }
+
+        let mut source = self.last_applied.source().clone();
+        update(&mut source);
+        let last_applied = ConfigDocument::try_from(source)?;
+        self.last_applied = last_applied;
+        Ok(())
     }
 
     fn default_name(&self) -> Option<&str> {
@@ -295,6 +327,49 @@ color = [0.0, 0.9, 0.5]
         let mut source = ConfigSource::parse(text).unwrap();
         source.set_name(name);
         source.to_toml_string()
+    }
+
+    fn dotted_config_text() -> String {
+        r#"metadata.name = "Dotted"
+l-system.dimensions = 2
+l-system.axiom = "F"
+l-system.iterations = 1
+l-system.rules.F = "FF"
+turtle.angle = 60.0
+turtle.step = 1.0
+turtle.initial_heading = 0.0
+colors.background = [0.0, 0.0, 0.0]
+colors.line.mode = "solid"
+colors.line.color = [0.0, 0.9, 0.5]
+"#
+        .to_string()
+    }
+
+    fn decorated_config_text() -> String {
+        r#"[metadata]
+name = "Decorated"
+
+[l-system]
+dimensions = 2
+axiom = "F"
+iterations = 1 # keep iterations comment
+
+[l-system.rules]
+F = "FF"
+
+[turtle]
+angle = 60.0 # keep angle comment
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
+"#
+        .to_string()
     }
 
     #[test]
@@ -748,6 +823,113 @@ color = [0.0, 0.9, 0.5]
         workspace.entry_mut(0).unwrap().set_draft_text(first);
 
         assert!(!workspace.entry(0).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_iterations_updates_toml_and_applied_config() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        workspace.entry_mut(0).unwrap().set_iterations(5).unwrap();
+
+        let entry = workspace.entry(0).unwrap();
+        assert!(entry.draft_text().contains("iterations = 5"));
+        assert_eq!(entry.applied_config().generation.iterations, 5);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_angle_updates_toml_and_applied_config() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        workspace.entry_mut(0).unwrap().set_angle(45.5).unwrap();
+
+        let entry = workspace.entry(0).unwrap();
+        assert!(entry.draft_text().contains("angle = 45.5"));
+        assert_eq!(entry.applied_config().generation.angle, 45.5);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_control_mutators_preserve_dotted_toml() {
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Dotted", dotted_config_text())]).unwrap();
+
+        let entry = workspace.entry_mut(0).unwrap();
+        entry.set_iterations(5).unwrap();
+        entry.set_angle(45.5).unwrap();
+
+        let entry = workspace.entry(0).unwrap();
+        let text = entry.draft_text();
+        assert!(text.contains("l-system.iterations = 5"));
+        assert!(text.contains("turtle.angle = 45.5"));
+        assert!(!text.contains("[l-system]"));
+        assert!(!text.contains("[turtle]"));
+        assert_eq!(entry.applied_config().generation.iterations, 5);
+        assert_eq!(entry.applied_config().generation.angle, 45.5);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_control_mutators_preserve_scalar_comments() {
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Decorated", decorated_config_text())]).unwrap();
+
+        let entry = workspace.entry_mut(0).unwrap();
+        entry.set_iterations(5).unwrap();
+        entry.set_angle(45.5).unwrap();
+
+        let text = workspace.entry(0).unwrap().draft_text().into_owned();
+        assert!(text.contains("iterations = 5 # keep iterations comment"));
+        assert!(text.contains("angle = 45.5 # keep angle comment"));
+    }
+
+    #[test]
+    fn control_mutator_rejects_dirty_entry_and_leaves_it_unchanged() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let draft = "temporary edit".to_string();
+        workspace
+            .entry_mut(0)
+            .unwrap()
+            .set_draft_text(draft.clone());
+        let previous_config = workspace.entry(0).unwrap().applied_config();
+
+        let error = workspace
+            .entry_mut(0)
+            .unwrap()
+            .set_iterations(5)
+            .unwrap_err();
+
+        assert!(matches!(error, ConfigEntryMutationError::Dirty));
+        let entry = workspace.entry(0).unwrap();
+        assert_eq!(entry.draft_text(), draft);
+        assert_eq!(entry.applied_config(), previous_config);
+        assert!(entry.is_dirty());
+    }
+
+    #[test]
+    fn set_angle_rejects_non_finite_value_and_leaves_entry_unchanged() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let previous_text = workspace.entry(0).unwrap().draft_text().into_owned();
+        let previous_config = workspace.entry(0).unwrap().applied_config();
+
+        let error = workspace
+            .entry_mut(0)
+            .unwrap()
+            .set_angle(f32::NAN)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigEntryMutationError::Config(ConfigError::InvalidAngle(_))
+        ));
+        let entry = workspace.entry(0).unwrap();
+        assert_eq!(entry.draft_text(), previous_text);
+        assert_eq!(entry.applied_config(), previous_config);
+        assert!(!entry.is_dirty());
     }
 
     #[test]

@@ -12,7 +12,9 @@ pub use config::{
     ColorConfig, Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, GenerationConfig,
     LineColorConfig,
 };
-pub use config_workspace::{ConfigEntry, ConfigWorkspace, ConfigWorkspaceError};
+pub use config_workspace::{
+    ConfigEntry, ConfigEntryMutationError, ConfigWorkspace, ConfigWorkspaceError,
+};
 pub use grammar::max_safe_iterations;
 
 use glam::{Vec2, Vec3};
