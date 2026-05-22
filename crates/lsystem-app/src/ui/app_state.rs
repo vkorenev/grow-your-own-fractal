@@ -395,6 +395,10 @@ impl FractalApp {
 
     fn refresh_from_workspace(&mut self) -> Task<Message> {
         let Some(entry) = self.config_workspace.entry(self.selected_config_index) else {
+            log::error!(
+                "refresh_from_workspace: entry returned None for index {}",
+                self.selected_config_index
+            );
             self.error = Some("Internal error: selected config is unavailable.".to_string());
             return Task::none();
         };

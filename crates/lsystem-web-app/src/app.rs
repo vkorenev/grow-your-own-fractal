@@ -385,7 +385,7 @@ pub(crate) fn App() -> impl IntoView {
                     on:input=move |ev| {
                         let text = textarea_value(ev);
                         set_toml_text.set(text.clone());
-                        set_config_workspace.update(|workspace| {
+                        let updated = set_config_workspace.try_update(|workspace| {
                             let index = selected_config_index.get_untracked();
                             let Some(entry) = workspace.entry_mut(index) else {
                                 log::error!("on_input: entry_mut returned None for index {index}");
@@ -396,6 +396,11 @@ pub(crate) fn App() -> impl IntoView {
                             };
                             entry.set_draft_text(text);
                         });
+                        if updated.is_none() {
+                            log::error!("textarea input: config_workspace signal was unavailable");
+                            set_error
+                                .set(Some("Internal error: could not update config.".to_string()));
+                        }
                     }
                 />
 

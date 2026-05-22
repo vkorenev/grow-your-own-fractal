@@ -383,6 +383,10 @@ fn validate_keys(table: &impl TableLike, path: &str, allowed: &[&str]) -> Result
 }
 
 fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
+    debug_assert!(
+        item.as_value().is_some(),
+        "expected scalar Value item; decor will be lost for table/absent items"
+    );
     if let Some(current_value) = item.as_value() {
         *next_value.decor_mut() = current_value.decor().clone();
     }

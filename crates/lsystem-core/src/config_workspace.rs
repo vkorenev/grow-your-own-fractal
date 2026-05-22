@@ -275,8 +275,7 @@ impl ConfigEntry {
 
         let mut source = self.last_applied.source().clone();
         update(&mut source);
-        let last_applied = ConfigDocument::try_from(source)?;
-        self.last_applied = last_applied;
+        self.last_applied = ConfigDocument::try_from(source)?;
         Ok(())
     }
 
@@ -883,6 +882,17 @@ color = [0.0, 0.9, 0.5]
         let text = workspace.entry(0).unwrap().draft_text().into_owned();
         assert!(text.contains("iterations = 5 # keep iterations comment"));
         assert!(text.contains("angle = 45.5 # keep angle comment"));
+    }
+
+    #[test]
+    fn control_mutation_on_preset_entry_makes_it_resettable() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        assert!(!workspace.can_reset(0));
+
+        workspace.entry_mut(0).unwrap().set_iterations(5).unwrap();
+
+        assert!(workspace.can_reset(0));
     }
 
     #[test]
