@@ -2,7 +2,7 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use include_dir::{Dir, include_dir};
-use lsystem_core::{Config, ConfigWorkspace};
+use lsystem_core::{Config, ConfigWorkspace, EntryViewMut};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -62,7 +62,6 @@ pub(super) enum Message {
 
 pub(super) struct FractalApp {
     pub(super) config_workspace: ConfigWorkspace,
-    pub(super) selected_config_index: usize,
     pub(super) toml: iced::widget::text_editor::Content,
     pub(super) base_config: Option<Config>,
     pub(super) iterations: u32,
@@ -83,16 +82,12 @@ impl FractalApp {
     pub(super) fn new() -> (Self, Task<Message>) {
         let config_workspace = ConfigWorkspace::from_presets(load_presets())
             .expect("at least one bundled preset should parse");
-        let selected_config_index = 0;
-        let selected_entry = config_workspace
-            .entry(selected_config_index)
-            .expect("workspace should contain at least one config");
+        let selected_entry = config_workspace.selected();
         let toml_text = selected_entry.draft_text().into_owned();
         let base_config = selected_entry.applied_config();
 
         let mut app = Self {
             config_workspace,
-            selected_config_index,
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
             base_config: Some(base_config),
             iterations: 1,
@@ -117,16 +112,16 @@ impl FractalApp {
         match message {
             Message::PresetSelected(name) => {
                 if let Some(index) = self.config_workspace.index_by_name(&name) {
-                    self.selected_config_index = index;
+                    if let Err(error) = self.config_workspace.select(index) {
+                        self.error = Some(error.to_string());
+                        return Task::none();
+                    }
                     return self.refresh_from_workspace();
                 }
                 Task::none()
             }
-            Message::CopyConfig => match self.config_workspace.copy(self.selected_config_index) {
-                Ok((index, _)) => {
-                    self.selected_config_index = index;
-                    self.refresh_from_workspace()
-                }
+            Message::CopyConfig => match self.config_workspace.copy() {
+                Ok(_) => self.refresh_from_workspace(),
                 Err(error) => {
                     self.error = Some(error.to_string());
                     Task::none()
@@ -134,44 +129,28 @@ impl FractalApp {
             },
             Message::TomlEdited(action) => {
                 self.toml.perform(action);
-                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
-                else {
-                    log::error!(
-                        "TomlEdited: entry_mut returned None for index {}",
-                        self.selected_config_index
-                    );
-                    self.error =
-                        Some("Internal error: selected config is unavailable.".to_string());
-                    return Task::none();
-                };
-                entry.set_draft_text(self.toml.text());
+                self.config_workspace
+                    .selected_mut()
+                    .set_draft_text(self.toml.text());
                 self.export_status = None;
                 Task::none()
             }
             Message::ApplyConfig => self.apply_config(),
-            Message::RevertConfig => {
-                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
-                else {
-                    log::error!(
-                        "RevertConfig: entry_mut returned None for index {}",
-                        self.selected_config_index
-                    );
-                    self.error =
-                        Some("Internal error: selected config is unavailable.".to_string());
-                    return Task::none();
-                };
-                entry.revert();
-                self.refresh_from_workspace()
-            }
+            Message::RevertConfig => match self.config_workspace.selected_mut().view_mut() {
+                EntryViewMut::Dirty(dirty) => {
+                    dirty.revert();
+                    self.refresh_from_workspace()
+                }
+                EntryViewMut::Clean(_) => {
+                    log::error!("revert fired while entry is clean; UI guards bypassed");
+                    Task::none()
+                }
+            },
             Message::ResetConfig => {
-                if self
-                    .config_workspace
-                    .entry(self.selected_config_index)
-                    .is_some_and(|entry| entry.is_dirty())
-                {
+                if self.config_workspace.selected().is_dirty() {
                     return Task::none();
                 }
-                match self.config_workspace.reset(self.selected_config_index) {
+                match self.config_workspace.reset() {
                     Ok(Some(_)) => self.refresh_from_workspace(),
                     Ok(None) => Task::none(),
                     Err(error) => {
@@ -182,49 +161,35 @@ impl FractalApp {
             }
             Message::IterationsChanged(iterations) => {
                 let iterations = iterations.min(self.max_iterations);
-                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
-                else {
-                    log::error!(
-                        "IterationsChanged: entry_mut returned None for index {}",
-                        self.selected_config_index
-                    );
-                    self.error =
-                        Some("Internal error: selected config is unavailable.".to_string());
-                    return Task::none();
-                };
-                if entry.is_dirty() {
-                    return Task::none();
+                match self.config_workspace.selected_mut().view_mut() {
+                    EntryViewMut::Clean(mut clean) => match clean.set_iterations(iterations) {
+                        Ok(()) => self.refresh_from_workspace(),
+                        Err(error) => {
+                            self.error = Some(error.to_string());
+                            Task::none()
+                        }
+                    },
+                    EntryViewMut::Dirty(_) => {
+                        log::error!(
+                            "iterations slider fired while entry is dirty; UI guards bypassed"
+                        );
+                        Task::none()
+                    }
                 }
-                match entry.set_iterations(iterations) {
+            }
+            Message::AngleChanged(angle) => match self.config_workspace.selected_mut().view_mut() {
+                EntryViewMut::Clean(mut clean) => match clean.set_angle(angle) {
                     Ok(()) => self.refresh_from_workspace(),
                     Err(error) => {
                         self.error = Some(error.to_string());
                         Task::none()
                     }
+                },
+                EntryViewMut::Dirty(_) => {
+                    log::error!("angle slider fired while entry is dirty; UI guards bypassed");
+                    Task::none()
                 }
-            }
-            Message::AngleChanged(angle) => {
-                let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index)
-                else {
-                    log::error!(
-                        "AngleChanged: entry_mut returned None for index {}",
-                        self.selected_config_index
-                    );
-                    self.error =
-                        Some("Internal error: selected config is unavailable.".to_string());
-                    return Task::none();
-                };
-                if entry.is_dirty() {
-                    return Task::none();
-                }
-                match entry.set_angle(angle) {
-                    Ok(()) => self.refresh_from_workspace(),
-                    Err(error) => {
-                        self.error = Some(error.to_string());
-                        Task::none()
-                    }
-                }
-            }
+            },
             Message::PngWidthChanged(value) => {
                 self.png_width_text = value;
                 self.export_status = None;
@@ -369,16 +334,10 @@ impl FractalApp {
     }
 
     fn apply_config(&mut self) -> Task<Message> {
-        let Some(entry) = self.config_workspace.entry_mut(self.selected_config_index) else {
-            log::error!(
-                "apply_config: entry_mut returned None for index {}",
-                self.selected_config_index
-            );
-            self.error = Some("Internal error: selected config is unavailable.".to_string());
-            return Task::none();
-        };
-        entry.set_draft_text(self.toml.text());
-        match self.config_workspace.apply(self.selected_config_index) {
+        self.config_workspace
+            .selected_mut()
+            .set_draft_text(self.toml.text());
+        match self.config_workspace.apply() {
             Ok(config) => {
                 self.base_config = Some(config);
                 self.sync_controls_from_base_config();
@@ -394,14 +353,7 @@ impl FractalApp {
     }
 
     fn refresh_from_workspace(&mut self) -> Task<Message> {
-        let Some(entry) = self.config_workspace.entry(self.selected_config_index) else {
-            log::error!(
-                "refresh_from_workspace: entry returned None for index {}",
-                self.selected_config_index
-            );
-            self.error = Some("Internal error: selected config is unavailable.".to_string());
-            return Task::none();
-        };
+        let entry = self.config_workspace.selected();
         let toml_text = entry.draft_text();
         self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
         self.base_config = Some(entry.applied_config());

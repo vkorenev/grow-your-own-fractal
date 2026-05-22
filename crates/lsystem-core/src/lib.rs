@@ -13,7 +13,7 @@ pub use config::{
     LineColorConfig,
 };
 pub use config_workspace::{
-    ConfigEntry, ConfigEntryMutationError, ConfigWorkspace, ConfigWorkspaceError,
+    CleanMut, ConfigEntry, ConfigWorkspace, ConfigWorkspaceError, DirtyMut, EntryViewMut,
 };
 pub use grammar::max_safe_iterations;
 
