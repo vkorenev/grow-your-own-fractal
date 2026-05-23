@@ -177,7 +177,7 @@ pub(crate) fn App() -> impl IntoView {
                 workspace
                     .selected_mut()
                     .set_draft_text(toml_text.get_untracked());
-                workspace.apply()
+                workspace.apply().map(|entry| entry.applied_config())
             });
             match applied {
                 Some(Ok(config)) => {
@@ -335,12 +335,15 @@ pub(crate) fn App() -> impl IntoView {
                         let render_current = Rc::clone(&render_current);
                         let install_config = Rc::clone(&install_config);
                         move |_| {
-                            let copied = set_config_workspace
-                                .try_update(|workspace| workspace.copy());
+                            let copied = set_config_workspace.try_update(|workspace| {
+                                workspace.copy().map(|entry| {
+                                    (entry.draft_text().into_owned(), entry.applied_config())
+                                })
+                            });
                             match copied {
-                                Some(Ok((_index, entry))) => {
-                                    set_toml_text.set(entry.draft_text().into_owned());
-                                    install_config(entry.applied_config());
+                                Some(Ok((text, config))) => {
+                                    set_toml_text.set(text);
+                                    install_config(config);
                                     render_current();
                                 }
                                 Some(Err(err)) => {
@@ -443,12 +446,17 @@ pub(crate) fn App() -> impl IntoView {
                                 if is_dirty() {
                                     return;
                                 }
-                                let reset = set_config_workspace
-                                    .try_update(|workspace| workspace.reset());
+                                let reset = set_config_workspace.try_update(|workspace| {
+                                    workspace.reset().map(|opt| {
+                                        opt.map(|entry| {
+                                            (entry.draft_text().into_owned(), entry.applied_config())
+                                        })
+                                    })
+                                });
                                 match reset {
-                                    Some(Ok(Some(entry))) => {
-                                        set_toml_text.set(entry.draft_text().into_owned());
-                                        install_config(entry.applied_config());
+                                    Some(Ok(Some((text, config)))) => {
+                                        set_toml_text.set(text);
+                                        install_config(config);
                                         render_current();
                                     }
                                     Some(Ok(None)) => {

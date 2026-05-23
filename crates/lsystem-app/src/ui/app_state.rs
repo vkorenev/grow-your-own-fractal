@@ -338,8 +338,8 @@ impl FractalApp {
             .selected_mut()
             .set_draft_text(self.toml.text());
         match self.config_workspace.apply() {
-            Ok(config) => {
-                self.base_config = Some(config);
+            Ok(entry) => {
+                self.base_config = Some(entry.applied_config());
                 self.sync_controls_from_base_config();
                 self.error = None;
                 self.export_status = None;
