@@ -790,7 +790,7 @@ background = [0.0, 0.0, 0.0]
 mode = "solid"
 color = [0.0, 0.9, 0.5]
 "#;
-        assert!(parse_config(&toml).is_err());
+        assert!(parse_config(toml).is_err());
     }
 
     #[test]
