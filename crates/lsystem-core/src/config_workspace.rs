@@ -132,40 +132,47 @@ impl ConfigWorkspace {
         entry.has_default_changes() && !self.name_exists_except(name, self.selected)
     }
 
-    /// Creates a renamed copy of the selected entry and selects the new entry.
-    pub fn copy(&mut self) -> Result<(usize, ConfigEntry), ConfigWorkspaceError> {
+    /// Creates a renamed copy of the selected entry, auto-selects the new entry, and
+    /// returns a borrow of it. After the borrow drops, the same entry remains accessible
+    /// via [`ConfigWorkspace::selected`].
+    pub fn copy(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
         let new_entry = {
             let entry = self.selected();
             let name = self.unique_name(&format!("{} copy", entry.name()));
             entry.copy_as(&name)?
         };
-        self.entries.push(new_entry.clone());
-        let index = self.entries.len() - 1;
-        self.selected = index;
-        Ok((index, new_entry))
+        self.entries.push(new_entry);
+        self.selected = self.entries.len() - 1;
+        Ok(&self.entries[self.selected])
     }
 
-    pub fn apply(&mut self) -> Result<Config, ConfigWorkspaceError> {
-        let entry = self.selected();
-        let Some(applied) = entry.pending_apply()? else {
-            return Ok(entry.applied_config());
+    /// Validates the selected entry's draft text and commits it as the new applied
+    /// document. Returns a borrow of the selected entry on success; the returned entry
+    /// is always clean (`is_dirty() == false`). If the entry has no pending draft, this
+    /// is a no-op and returns the unchanged entry. Returns
+    /// [`ConfigWorkspaceError::Config`] on parse or validation failure and
+    /// [`ConfigWorkspaceError::DuplicateName`] if the draft renames the entry to a name
+    /// already used elsewhere in the workspace. Failure leaves workspace state untouched.
+    pub fn apply(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
+        let idx = self.selected;
+        let Some(applied) = self.entries[idx].pending_apply()? else {
+            return Ok(&self.entries[idx]);
         };
-        if self.name_exists_except(&applied.config().name, self.selected) {
+        if self.name_exists_except(&applied.config().name, idx) {
             return Err(ConfigWorkspaceError::DuplicateName(
                 applied.config().name.clone(),
             ));
         }
-        let config = applied.config().clone();
-        let idx = self.selected;
         self.entries[idx].commit_apply(applied);
-        Ok(config)
+        Ok(&self.entries[idx])
     }
 
-    /// Restores the selected entry to its bundled default document.
+    /// Restores the selected entry to its bundled default document. On `Ok(Some(_))`
+    /// the returned entry is clean and its applied text equals the bundled default.
     /// Returns `Ok(None)` only when the entry has no bundled default (e.g. custom copies).
     /// Callers should gate user-visible resets on [`ConfigWorkspace::can_reset`] to avoid
     /// no-op resets when the applied document already matches the default.
-    pub fn reset(&mut self) -> Result<Option<ConfigEntry>, ConfigWorkspaceError> {
+    pub fn reset(&mut self) -> Result<Option<&ConfigEntry>, ConfigWorkspaceError> {
         let Some(default) = self.selected().reset_candidate() else {
             return Ok(None);
         };
@@ -175,7 +182,7 @@ impl ConfigWorkspace {
         }
         let idx = self.selected;
         self.entries[idx].commit_reset(default);
-        Ok(Some(self.entries[idx].clone()))
+        Ok(Some(&self.entries[idx]))
     }
 
     fn unique_name(&self, base: &str) -> String {
@@ -495,12 +502,27 @@ color = [0.0, 0.9, 0.5]
         workspace
             .selected_mut()
             .set_draft_text(config_text_renamed(&first, "Renamed"));
-        let config = workspace.apply().unwrap();
+        let entry = workspace.apply().unwrap();
 
-        assert_eq!(config.name, "Renamed");
-        assert_eq!(workspace.selected().name(), "Renamed");
+        assert_eq!(entry.name(), "Renamed");
+        let entry_ptr = entry as *const _;
+        assert!(std::ptr::eq(entry_ptr, workspace.selected()));
         assert_eq!(workspace.names().collect::<Vec<_>>(), ["Renamed", "Second"]);
         assert!(!workspace.selected().is_dirty());
+    }
+
+    #[test]
+    fn apply_on_clean_entry_returns_selected_entry_unchanged() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
+
+        let entry = workspace.apply().unwrap();
+
+        assert_eq!(entry.name(), "First");
+        assert_eq!(entry.applied_text(), first);
+        assert!(!entry.is_dirty());
+        let entry_ptr = entry as *const _;
+        assert!(std::ptr::eq(entry_ptr, workspace.selected()));
     }
 
     #[test]
@@ -561,14 +583,16 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(workspace.selected().applied_config().generation.angle, 45.0);
         assert!(workspace.can_reset());
 
-        let reset_entry = workspace.reset().unwrap().unwrap();
-
+        let reset_entry = workspace
+            .reset()
+            .unwrap()
+            .expect("expected reset to apply default");
         assert!(!reset_entry.is_dirty());
         assert_eq!(reset_entry.applied_config().generation.angle, 60.0);
-        assert_eq!(reset_entry.draft_text(), workspace.selected().draft_text());
-        assert_eq!(workspace.selected().draft_text(), first);
-        assert_eq!(workspace.selected().applied_text(), first);
-        assert!(!workspace.selected().is_dirty());
+        assert_eq!(reset_entry.draft_text(), first);
+        assert_eq!(reset_entry.applied_text(), first);
+        let reset_entry_ptr = reset_entry as *const _;
+        assert!(std::ptr::eq(reset_entry_ptr, workspace.selected()));
         assert!(!workspace.can_reset());
     }
 
@@ -576,8 +600,7 @@ color = [0.0, 0.9, 0.5]
     fn custom_entry_has_no_default_to_reset() {
         let first = config_text("Custom", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("Custom", first.clone())]).unwrap();
-        let (index, _) = workspace.copy().unwrap();
-        assert_eq!(workspace.selected_index(), index);
+        workspace.copy().unwrap();
 
         assert!(!workspace.can_reset());
         let draft = workspace
@@ -634,13 +657,13 @@ color = [0.0, 0.9, 0.5]
         workspace.select(0).unwrap();
         workspace.selected_mut().set_draft_text(draft.clone());
 
-        let (index, entry) = workspace.copy().unwrap();
+        let entry = workspace.copy().unwrap();
         let expected_text = config_text_renamed(&draft, "Plant copy 2");
         let expected_applied = config_text_renamed(&first, "Plant copy 2");
 
-        assert_eq!(workspace.selected_index(), index);
-        assert_eq!(entry.draft_text(), workspace.selected().draft_text());
-        assert_eq!(entry.is_dirty(), workspace.selected().is_dirty());
+        assert_eq!(entry.name(), "Plant copy 2");
+        assert_eq!(entry.draft_text(), expected_text);
+        assert!(entry.is_dirty());
         assert_eq!(workspace.selected().name(), "Plant copy 2");
         assert_eq!(workspace.selected().draft_text(), expected_text);
         assert_eq!(workspace.selected().applied_text(), expected_applied);
@@ -657,15 +680,15 @@ color = [0.0, 0.9, 0.5]
         let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first.clone())]).unwrap();
         workspace.selected_mut().set_draft_text(draft.clone());
 
-        let (index, entry) = workspace.copy().unwrap();
+        let entry = workspace.copy().unwrap();
         let expected_draft = config_text_renamed(&draft, "Plant copy");
         let expected_applied = config_text_renamed(&first, "Plant copy");
 
-        assert_eq!(workspace.selected_index(), index);
-        assert_eq!(entry.draft_text(), workspace.selected().draft_text());
-        assert_eq!(entry.is_dirty(), workspace.selected().is_dirty());
-        assert_eq!(workspace.selected().name(), "Plant copy");
-        assert_eq!(workspace.selected().draft_text(), expected_draft);
+        assert_eq!(entry.name(), "Plant copy");
+        assert_eq!(entry.draft_text(), expected_draft);
+        assert!(entry.is_dirty());
+
+        assert_eq!(workspace.selected_index(), 1);
         assert_eq!(workspace.selected().applied_text(), expected_applied);
         assert_eq!(workspace.selected().applied_config().name, "Plant copy");
         assert_eq!(workspace.selected().applied_config().generation.angle, 60.0);
@@ -688,14 +711,14 @@ color = [0.0, 0.9, 0.5]
             .selected_mut()
             .set_draft_text("not valid toml".to_string());
 
-        let (index, entry) = workspace.copy().unwrap();
+        let entry = workspace.copy().unwrap();
         let expected_applied = config_text_renamed(&first, "Plant copy");
 
-        assert_eq!(workspace.selected_index(), index);
-        assert_eq!(entry.draft_text(), workspace.selected().draft_text());
-        assert_eq!(entry.is_dirty(), workspace.selected().is_dirty());
-        assert_eq!(workspace.selected().name(), "Plant copy");
-        assert_eq!(workspace.selected().draft_text(), "not valid toml");
+        assert_eq!(entry.name(), "Plant copy");
+        assert_eq!(entry.draft_text(), "not valid toml");
+        assert!(entry.is_dirty());
+
+        assert_eq!(workspace.selected_index(), 1);
         assert_eq!(workspace.selected().applied_text(), expected_applied);
         assert_eq!(workspace.selected().applied_config().name, "Plant copy");
         assert_eq!(workspace.selected().applied_config().generation.angle, 60.0);
@@ -907,13 +930,13 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("Plant", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
 
-        let (index, entry) = workspace.copy().unwrap();
-
-        assert_eq!(index, 1);
-        assert_eq!(workspace.selected_index(), index);
+        let entry = workspace.copy().unwrap();
         assert_eq!(entry.name(), "Plant copy");
+        let entry_ptr = entry as *const _;
+
+        assert_eq!(workspace.selected_index(), 1);
+        assert!(std::ptr::eq(entry_ptr, workspace.selected()));
         assert_eq!(workspace.entries()[0].name(), "Plant");
-        assert_eq!(workspace.selected().name(), "Plant copy");
     }
 
     #[test]

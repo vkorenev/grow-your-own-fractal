@@ -64,19 +64,22 @@ pub fn max_safe_iterations(axiom: &str, rules: &BTreeMap<char, String>, max_segm
 
     let mut yields: BTreeMap<char, u64> = [('F', 1u64)].into();
 
+    let mut updates: Vec<(char, u64)> = Vec::with_capacity(rules.len());
     for n in 0..=HARD_MAX {
         if total(&yields) > max_segments {
             return n.saturating_sub(1);
         }
-        let mut next = yields.clone();
+        updates.clear();
         for (c, rhs) in rules {
             let v = rhs
                 .chars()
                 .map(|ch| *yields.get(&ch).unwrap_or(&0))
                 .fold(0u64, |a, x| a.saturating_add(x));
-            next.insert(*c, v);
+            updates.push((*c, v));
         }
-        yields = next;
+        for (c, v) in updates.drain(..) {
+            yields.insert(c, v);
+        }
     }
     HARD_MAX
 }
