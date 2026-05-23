@@ -2,6 +2,8 @@
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
+> **REQUIRED before any interaction with Git or GitHub** — including `git` commands, the `gh` CLI, GitHub MCP tools, or any other mechanism that reads or writes repository or pull-request state: read `.agents/rules/git-and-github.md`.
+
 ## Project Overview
 
 **Grow Your Own Fractal** — an interactive L-System (Lindenmayer system) visualizer in Rust. The browser-first app (`lsystem-web-app`) uses Leptos/DOM controls with a wgpu canvas that uses WebGPU with a WebGL2 fallback on browser wasm targets, backed by the toolkit-independent `lsystem-renderer` crate. The `lsystem-app` crate uses Iced for native desktop and retained wasm builds; its fractal viewport is an `iced::widget::shader` custom primitive backed by the shared wgpu line pipeline.
@@ -36,8 +38,6 @@ cargo test -p lsystem-core --features svg svg_export
 `trunk` is managed by mise; run `mise install` to get the pinned version from `mise.toml`. `trunk` may fail to launch when `NO_COLOR=1` is present in the environment; use `NO_COLOR=true` or `NO_COLOR=false` as a workaround.
 
 ## Supplemental Rules
-
-Before running Git or GitHub CLI commands, read `.agents/rules/git-and-github.md`.
 
 When making code changes, check whether `README.md` and/or `AGENTS.md` need updates for the changed behavior, commands, architecture, or workflow. Update them in the same change when applicable.
 
