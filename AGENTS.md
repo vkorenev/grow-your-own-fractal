@@ -17,11 +17,10 @@ trunk serve --config crates/lsystem-app/Trunk.toml    # Iced web app at localhos
 
 # Verification (all run in CI)
 cargo fmt --check --all
-cargo clippy --workspace -- -D warnings
-cargo clippy --workspace --all-features -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo test --workspace --all-features --all-targets
-cargo check --target wasm32-unknown-unknown --workspace
-cargo check --target wasm32-unknown-unknown --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
 cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
 cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
 trunk build --release --config crates/lsystem-app/Trunk.toml
@@ -130,4 +129,4 @@ Bundled TOML L-System definitions. New fractals are added here; they are embedde
 - **DOM browser UI with GPU canvas**: `lsystem-web-app` owns browser UI state in Leptos signals and renders the fractal into a dedicated `<canvas>`. It creates a wgpu surface from `web_sys::HtmlCanvasElement`, reuses `LinePipeline`, and drives rendering from explicit DOM events instead of a continuous repaint loop. On browser wasm targets, `wgpu_util` creates the instance with a web display handle and WebGPU detection so wgpu can use WebGPU when available and fall back to WebGL2 otherwise.
 - **Surface acquisition recovery**: `GpuContext::begin_frame` retries `CurrentSurfaceTexture::Outdated` once after reconfiguring the surface. Timeout and occlusion are quiet skip reasons, validation/repeated-outdated are explicit skip reasons, and true surface loss is reported to callers. The Leptos web renderer rebuilds `GpuContext` and `LinePipeline` after surface loss while preserving CPU-side scene/camera/color state and marking geometry for reupload.
 - **SVG export is 2D-only**: SVG export is a `lsystem-core` Cargo feature (`svg`). `export_svg(config) -> String` collects 2D segments, computes a padded bounding box, and builds SVG XML. The Y-axis flip is handled by a `<g transform="matrix(1 0 0 -1 0 0)">` group. Both apps hide the SVG export button when `config.dimensions == 3`.
-- **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass. CI tests the workspace with all features/all targets, checks and lints native default/all-features builds, checks and lints `wasm32-unknown-unknown` default/all-features builds, and builds both Trunk web apps. GitHub Pages deploys the Leptos browser app.
+- **Strict CI**: `clippy -D warnings` and `cargo fmt --check` must pass. A single Clippy job lints native default/all-features builds (with `--all-targets`) and `wasm32-unknown-unknown` default/all-features builds. CI also tests the workspace with all features/all targets, builds rustdoc with `RUSTDOCFLAGS=-D warnings`, and builds both Trunk web apps. Toolchain channel/components/targets come from `rust-toolchain.toml`; rustup auto-installs them on first cargo invocation. GitHub Pages deploys the Leptos browser app.

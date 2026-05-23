@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -19,8 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
       - run: cargo fmt --check --all
 
   clippy:
@@ -29,11 +31,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace -- -D warnings
-      - run: cargo clippy --workspace --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
+      - run: cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
 
   test:
     name: Test
@@ -44,20 +46,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features --all-targets
 
-  wasm-check:
-    name: WASM Check
+  docs:
+    name: Docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target wasm32-unknown-unknown --workspace
-      - run: cargo check --target wasm32-unknown-unknown --workspace --all-features
-      - run: cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
-      - run: cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
+      - env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --workspace --all-features
 
   trunk-build:
     name: Trunk Build
@@ -65,8 +63,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v4
       - run: trunk build --release --config crates/lsystem-app/Trunk.toml
