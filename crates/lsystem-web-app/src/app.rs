@@ -283,10 +283,10 @@ pub(crate) fn App() -> impl IntoView {
                     prop:value=move || {
                         config_workspace.with(|workspace| workspace.selected_index().to_string())
                     }
-                    on:change={
+                    on:change:target={
                         let select_current_config = Rc::clone(&select_current_config);
                         move |ev| {
-                            let idx = select_value(ev).parse::<usize>().unwrap_or(0);
+                            let idx = ev.target().value().parse::<usize>().unwrap_or(0);
                             let selected = set_config_workspace.try_update(|workspace| {
                                 workspace
                                     .select(idx)
@@ -369,8 +369,8 @@ pub(crate) fn App() -> impl IntoView {
                     id="config"
                     spellcheck="false"
                     prop:value=move || toml_text.get()
-                    on:input=move |ev| {
-                        let text = textarea_value(ev);
+                    on:input:target=move |ev| {
+                        let text = ev.target().value();
                         set_toml_text.set(text.clone());
                         let updated = set_config_workspace.try_update(|workspace| {
                             workspace.selected_mut().set_draft_text(text);
@@ -498,11 +498,11 @@ pub(crate) fn App() -> impl IntoView {
                             min="0"
                             max=move || max_iterations.get().to_string()
                             prop:value=move || iterations.get().to_string()
-                            on:input={
+                            on:input:target={
                                 let render_current = Rc::clone(&render_current);
                                 let install_config = Rc::clone(&install_config);
                                 move |ev| {
-                                    let next = input_value(ev)
+                                    let next = ev.target().value()
                                         .parse::<u32>()
                                         .unwrap_or(0)
                                         .clamp(0, max_iterations.get_untracked());
@@ -561,11 +561,11 @@ pub(crate) fn App() -> impl IntoView {
                             max="180"
                             step="0.5"
                             prop:value=move || angle.get().to_string()
-                            on:input={
+                            on:input:target={
                                 let render_current = Rc::clone(&render_current);
                                 let install_config = Rc::clone(&install_config);
                                 move |ev| {
-                                    let next = input_value(ev)
+                                    let next = ev.target().value()
                                         .parse::<f32>()
                                         .unwrap_or(60.0)
                                         .clamp(1.0, 180.0);
@@ -623,8 +623,8 @@ pub(crate) fn App() -> impl IntoView {
                         max="4096"
                         step="16"
                         prop:value=move || png_width.get().to_string()
-                        on:input=move |ev| {
-                            let next = input_value(ev).parse::<u32>().unwrap_or(2048);
+                        on:input:target=move |ev| {
+                            let next = ev.target().value().parse::<u32>().unwrap_or(2048);
                             set_png_width.set(next.clamp(256, 4096));
                         }
                     />
@@ -679,8 +679,8 @@ pub(crate) fn App() -> impl IntoView {
                                 max="360"
                                 step="10"
                                 prop:value=move || auto_rotate_speed.get().to_string()
-                                on:input=move |ev| {
-                                    let next = input_value(ev).parse::<f32>().unwrap_or(45.0);
+                                on:input:target=move |ev| {
+                                    let next = ev.target().value().parse::<f32>().unwrap_or(45.0);
                                     set_auto_rotate_speed.set(next.clamp(10.0, 360.0));
                                 }
                             />
@@ -833,27 +833,6 @@ pub(crate) fn App() -> impl IntoView {
             </section>
         </main>
     }
-}
-
-fn input_value(ev: web_sys::Event) -> String {
-    ev.target()
-        .and_then(|target| target.dyn_into::<web_sys::HtmlInputElement>().ok())
-        .map(|input| input.value())
-        .unwrap_or_default()
-}
-
-fn textarea_value(ev: web_sys::Event) -> String {
-    ev.target()
-        .and_then(|target| target.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
-        .map(|input| input.value())
-        .unwrap_or_default()
-}
-
-fn select_value(ev: web_sys::Event) -> String {
-    ev.target()
-        .and_then(|target| target.dyn_into::<web_sys::HtmlSelectElement>().ok())
-        .map(|select| select.value())
-        .unwrap_or_default()
 }
 
 fn with_renderer<F, H>(
