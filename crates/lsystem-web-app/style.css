@@ -45,6 +45,16 @@ textarea {
   color: #aeb6c3;
 }
 
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.check-row input {
+  min-height: 0;
+}
+
 .controls select,
 .controls textarea,
 .controls input {
@@ -116,6 +126,19 @@ textarea {
   font-size: 13px;
   text-align: right;
   color: #cbd5e1;
+}
+
+.color-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-row input[type="color"] {
+  width: 42px;
+  min-height: 28px;
+  padding: 2px;
 }
 
 .export-row {

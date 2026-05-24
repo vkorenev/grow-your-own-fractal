@@ -3,17 +3,129 @@ use std::rc::Rc;
 
 use leptos::html::Canvas;
 use leptos::prelude::*;
-use lsystem_core::{Config, ConfigWorkspace, Dimensions, EntryViewMut};
+use lsystem_core::{
+    CleanMut, ColorConfig, Config, ConfigError, ConfigWorkspace, Dimensions, EntryViewMut,
+    LineColorConfig,
+};
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
+use crate::color_input::{hex_to_rgb, rgb_to_hex};
 use crate::export::{export_png, export_svg};
 use crate::presets::{effective_config, load_presets, max_iterations_for_config};
 use crate::renderer::{CanvasRenderer, RenderStatus};
 
 const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_MS: f32 = 16.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LineColorMode {
+    Solid,
+    Gradient,
+    HueCycle,
+}
+
+impl LineColorMode {
+    fn from_line_color(line_color: &LineColorConfig) -> Self {
+        match line_color {
+            LineColorConfig::Solid { .. } => Self::Solid,
+            LineColorConfig::Gradient { .. } => Self::Gradient,
+            LineColorConfig::HueCycle { .. } => Self::HueCycle,
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "solid" => Some(Self::Solid),
+            "gradient" => Some(Self::Gradient),
+            "hue_cycle" => Some(Self::HueCycle),
+            _ => None,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Solid => "solid",
+            Self::Gradient => "gradient",
+            Self::HueCycle => "hue_cycle",
+        }
+    }
+
+    fn default_line_color(self) -> LineColorConfig {
+        match self {
+            Self::Solid => LineColorConfig::DEFAULT_SOLID,
+            Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
+            Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ColorControlMemory {
+    background: [f32; 3],
+    solid: Option<[f32; 3]>,
+    gradient: Option<([f32; 3], [f32; 3])>,
+    hue_cycle: Option<[f32; 3]>,
+}
+
+impl ColorControlMemory {
+    fn from_colors(colors: &ColorConfig) -> Self {
+        let mut memory = Self {
+            background: colors.background.unwrap_or(ColorConfig::DEFAULT_BACKGROUND),
+            solid: None,
+            gradient: None,
+            hue_cycle: None,
+        };
+        memory.remember_line(colors.line);
+        memory
+    }
+
+    fn background(&self) -> [f32; 3] {
+        self.background
+    }
+
+    fn remember_background(&mut self, background: [f32; 3]) {
+        self.background = background;
+    }
+
+    fn remember_line(&mut self, line_color: LineColorConfig) {
+        match line_color {
+            LineColorConfig::Solid { color } => self.solid = Some(color),
+            LineColorConfig::Gradient { start, end } => self.gradient = Some((start, end)),
+            LineColorConfig::HueCycle { initial } => self.hue_cycle = Some(initial),
+        }
+    }
+
+    fn line_for(&self, mode: LineColorMode) -> LineColorConfig {
+        match (mode, self) {
+            (
+                LineColorMode::Solid,
+                Self {
+                    solid: Some(color), ..
+                },
+            ) => LineColorConfig::Solid { color: *color },
+            (
+                LineColorMode::Gradient,
+                Self {
+                    gradient: Some((start, end)),
+                    ..
+                },
+            ) => LineColorConfig::Gradient {
+                start: *start,
+                end: *end,
+            },
+            (
+                LineColorMode::HueCycle,
+                Self {
+                    hue_cycle: Some(initial),
+                    ..
+                },
+            ) => LineColorConfig::HueCycle { initial: *initial },
+            _ => mode.default_line_color(),
+        }
+    }
+}
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
@@ -27,6 +139,8 @@ pub(crate) fn App() -> impl IntoView {
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
     let (toml_text, set_toml_text) = signal(first_toml);
     let (base_config, set_base_config) = signal(Some(initial_config.clone()));
+    let (color_memory, set_color_memory) =
+        signal(ColorControlMemory::from_colors(&initial_config.colors));
     let (error, set_error) = signal(None::<String>);
     let (iterations, set_iterations) = signal(
         initial_config
@@ -133,6 +247,26 @@ pub(crate) fn App() -> impl IntoView {
     };
     let render_current = Rc::new(render_current);
 
+    let render_current_colors = {
+        let renderer = Rc::clone(&renderer);
+        let recover_after_render = Rc::clone(&recover_after_render);
+        move || {
+            let Some(canvas) = canvas_ref.get_untracked() else {
+                return;
+            };
+            let Some(config) = base_config.get_untracked() else {
+                return;
+            };
+            with_renderer(
+                canvas,
+                &renderer,
+                &recover_after_render,
+                |renderer, canvas| renderer.set_colors_and_render(canvas, &config.colors),
+            );
+        }
+    };
+    let render_current_colors = Rc::new(render_current_colors);
+
     canvas_ref.on_load({
         let renderer = Rc::clone(&renderer);
         let render_current = Rc::clone(&render_current);
@@ -168,11 +302,22 @@ pub(crate) fn App() -> impl IntoView {
         set_error.set(None);
     });
 
+    let install_full_config = Rc::new({
+        let install_config = Rc::clone(&install_config);
+        move |config: Config| {
+            set_color_memory.set(ColorControlMemory::from_colors(&config.colors));
+            install_config(config);
+        }
+    });
+
     let apply_current = {
         let render_current = Rc::clone(&render_current);
         let interval_id = Rc::clone(&interval_id);
-        let install_config = Rc::clone(&install_config);
+        let install_full_config = Rc::clone(&install_full_config);
         move || {
+            if !config_workspace.with_untracked(|workspace| workspace.selected().is_dirty()) {
+                return;
+            }
             let applied = set_config_workspace.try_update(|workspace| {
                 workspace
                     .selected_mut()
@@ -182,7 +327,7 @@ pub(crate) fn App() -> impl IntoView {
             match applied {
                 Some(Ok(config)) => {
                     let new_is_3d = matches!(config.generation.dimensions, Dimensions::ThreeD);
-                    install_config(config);
+                    install_full_config(config);
                     if !new_is_3d && auto_rotate.get_untracked() {
                         if let Some(id) = interval_id.take()
                             && let Some(window) = web_sys::window()
@@ -207,11 +352,11 @@ pub(crate) fn App() -> impl IntoView {
 
     let select_current_config = {
         let render_current = Rc::clone(&render_current);
-        let install_config = Rc::clone(&install_config);
+        let install_full_config = Rc::clone(&install_full_config);
         move || {
             let config =
                 config_workspace.with_untracked(|workspace| workspace.selected().applied_config());
-            install_config(config);
+            install_full_config(config);
             render_current();
         }
     };
@@ -333,7 +478,7 @@ pub(crate) fn App() -> impl IntoView {
                     type="button"
                     on:click={
                         let render_current = Rc::clone(&render_current);
-                        let install_config = Rc::clone(&install_config);
+                        let install_full_config = Rc::clone(&install_full_config);
                         move |_| {
                             let copied = set_config_workspace.try_update(|workspace| {
                                 workspace.copy().map(|entry| {
@@ -343,7 +488,7 @@ pub(crate) fn App() -> impl IntoView {
                             match copied {
                                 Some(Ok((text, config))) => {
                                     set_toml_text.set(text);
-                                    install_config(config);
+                                    install_full_config(config);
                                     render_current();
                                 }
                                 Some(Err(err)) => {
@@ -386,6 +531,7 @@ pub(crate) fn App() -> impl IntoView {
                 <div class="row">
                     <button
                         type="button"
+                        disabled=move || !is_dirty()
                         on:click={
                             let apply_current = Rc::clone(&apply_current);
                             move |_| apply_current()
@@ -398,7 +544,7 @@ pub(crate) fn App() -> impl IntoView {
                         disabled=move || !is_dirty()
                         on:click={
                             let render_current = Rc::clone(&render_current);
-                            let install_config = Rc::clone(&install_config);
+                            let install_full_config = Rc::clone(&install_full_config);
                             move |_| {
                                 let reverted = set_config_workspace.try_update(|workspace| {
                                     match workspace.selected_mut().view_mut() {
@@ -415,7 +561,7 @@ pub(crate) fn App() -> impl IntoView {
                                 match reverted {
                                     Some((text, config)) => {
                                         set_toml_text.set(text);
-                                        install_config(config);
+                                        install_full_config(config);
                                         render_current();
                                     }
                                     None => {
@@ -441,7 +587,7 @@ pub(crate) fn App() -> impl IntoView {
                         }
                         on:click={
                             let render_current = Rc::clone(&render_current);
-                            let install_config = Rc::clone(&install_config);
+                            let install_full_config = Rc::clone(&install_full_config);
                             move |_| {
                                 if is_dirty() {
                                     return;
@@ -456,7 +602,7 @@ pub(crate) fn App() -> impl IntoView {
                                 match reset {
                                     Some(Ok(Some((text, config)))) => {
                                         set_toml_text.set(text);
-                                        install_config(config);
+                                        install_full_config(config);
                                         render_current();
                                     }
                                     Some(Ok(None)) => {
@@ -506,46 +652,15 @@ pub(crate) fn App() -> impl IntoView {
                                         .parse::<u32>()
                                         .unwrap_or(0)
                                         .clamp(0, max_iterations.get_untracked());
-                                    let updated = set_config_workspace.try_update(|workspace| {
-                                        let entry = workspace.selected_mut();
-                                        match entry.view_mut() {
-                                            EntryViewMut::Clean(mut clean) => {
-                                                clean
-                                                    .set_iterations(next)
-                                                    .map_err(|error| error.to_string())?;
-                                            }
-                                            EntryViewMut::Dirty(_) => {
-                                                log::error!(
-                                                    "iterations slider fired while entry is dirty; UI guards bypassed"
-                                                );
-                                                return Ok(None);
-                                            }
-                                        }
-                                        Ok(Some((
-                                            entry.draft_text().into_owned(),
-                                            entry.applied_config(),
-                                        )))
-                                    });
-                                    match updated {
-                                        Some(Ok(Some((text, config)))) => {
-                                            set_toml_text.set(text);
-                                            install_config(config);
-                                            render_current();
-                                        }
-                                        Some(Ok(None)) => {}
-                                        Some(Err(message)) => {
-                                            set_error.set(Some(message));
-                                        }
-                                        None => {
-                                            log::error!(
-                                                "iterations input: config_workspace signal was unavailable"
-                                            );
-                                            set_error.set(Some(
-                                                "Internal error: could not update config."
-                                                    .to_string(),
-                                            ));
-                                        }
-                                    }
+                                    update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current,
+                                        "iterations input",
+                                        move |clean| clean.set_iterations(next),
+                                    );
                                 }
                             }
                         />
@@ -569,50 +684,365 @@ pub(crate) fn App() -> impl IntoView {
                                         .parse::<f32>()
                                         .unwrap_or(60.0)
                                         .clamp(1.0, 180.0);
-                                    let updated = set_config_workspace.try_update(|workspace| {
-                                        let entry = workspace.selected_mut();
-                                        match entry.view_mut() {
-                                            EntryViewMut::Clean(mut clean) => {
-                                                clean
-                                                    .set_angle(next)
-                                                    .map_err(|error| error.to_string())?;
-                                            }
-                                            EntryViewMut::Dirty(_) => {
-                                                log::error!(
-                                                    "angle slider fired while entry is dirty; UI guards bypassed"
-                                                );
-                                                return Ok(None);
-                                            }
-                                        }
-                                        Ok(Some((
-                                            entry.draft_text().into_owned(),
-                                            entry.applied_config(),
-                                        )))
-                                    });
-                                    match updated {
-                                        Some(Ok(Some((text, config)))) => {
-                                            set_toml_text.set(text);
-                                            install_config(config);
-                                            render_current();
-                                        }
-                                        Some(Ok(None)) => {}
-                                        Some(Err(message)) => {
-                                            set_error.set(Some(message));
-                                        }
-                                        None => {
-                                            log::error!(
-                                                "angle input: config_workspace signal was unavailable"
-                                            );
-                                            set_error.set(Some(
-                                                "Internal error: could not update config."
-                                                    .to_string(),
-                                            ));
-                                        }
-                                    }
+                                    update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current,
+                                        "angle input",
+                                        move |clean| clean.set_angle(next),
+                                    );
                                 }
                             }
                         />
                         <output>{move || format!("{:.1}", angle.get())}</output>
+                    </div>
+
+                    <label class="check-row" for="background-override">
+                        <input
+                            id="background-override"
+                            type="checkbox"
+                            prop:checked=move || {
+                                base_config
+                                    .get()
+                                    .and_then(|config| config.colors.background)
+                                    .is_some()
+                            }
+                            on:change:target={
+                                let render_current_colors = Rc::clone(&render_current_colors);
+                                let install_config = Rc::clone(&install_config);
+                                move |ev| {
+                                    base_config.with_untracked(|config| {
+                                        if let Some(Some(background)) =
+                                            config.as_ref().map(|config| config.colors.background)
+                                        {
+                                            set_color_memory.update(|memory| {
+                                                memory.remember_background(background);
+                                            });
+                                        }
+                                    });
+                                    let enabled = ev.target().checked();
+                                    let background = if enabled {
+                                        Some(color_memory.get_untracked().background())
+                                    } else {
+                                        None
+                                    };
+                                    update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current_colors,
+                                        "background checkbox",
+                                        move |clean| clean.set_background(background),
+                                    );
+                                }
+                            }
+                        />
+                        <span>"Background"</span>
+                    </label>
+
+                    <div class="color-row" class:hidden=move || {
+                        base_config
+                            .get()
+                            .and_then(|config| config.colors.background)
+                            .is_none()
+                    }>
+                        <label for="background-color">"Background color"</label>
+                        <input
+                            id="background-color"
+                            type="color"
+                            prop:value=move || {
+                                rgb_to_hex(
+                                    base_config
+                                        .get()
+                                        .map(|config| config.colors.effective_background())
+                                        .unwrap_or(ColorConfig::DEFAULT_BACKGROUND),
+                                )
+                            }
+                            on:input:target={
+                                let render_current_colors = Rc::clone(&render_current_colors);
+                                let install_config = Rc::clone(&install_config);
+                                move |ev| {
+                                    let Some(color) = hex_to_rgb(&ev.target().value()) else {
+                                        set_error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    if update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current_colors,
+                                        "background color input",
+                                        move |clean| clean.set_background(Some(color)),
+                                    ) {
+                                        set_color_memory.update(|memory| {
+                                            memory.remember_background(color);
+                                        });
+                                    }
+                                }
+                            }
+                        />
+                    </div>
+
+                    <label for="line-color-mode">"Line color"</label>
+                    <select
+                        id="line-color-mode"
+                        prop:value=move || {
+                            LineColorMode::from_line_color(&current_line_color(base_config))
+                                .key()
+                                .to_string()
+                        }
+                        on:change:target={
+                            let render_current_colors = Rc::clone(&render_current_colors);
+                            let install_config = Rc::clone(&install_config);
+                            move |ev| {
+                                let mode_key = ev.target().value();
+                                let Some(mode) = LineColorMode::from_key(&mode_key) else {
+                                    log::error!("unknown line color mode selected: {mode_key}");
+                                    return;
+                                };
+                                let current = base_config.with_untracked(line_color_of);
+                                let Some(line_color) =
+                                    set_color_memory.try_update(|memory| {
+                                        memory.remember_line(current);
+                                        memory.line_for(mode)
+                                    })
+                                else {
+                                    log::error!(
+                                        "line color mode select: line color memory signal was unavailable"
+                                    );
+                                    set_error.set(Some(
+                                        "Internal error: could not update line color.".to_string(),
+                                    ));
+                                    return;
+                                };
+                                if update_clean_config(
+                                    set_config_workspace,
+                                    set_toml_text,
+                                    set_error,
+                                    &install_config,
+                                    &render_current_colors,
+                                    "line color mode select",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    set_color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
+                            }
+                        }
+                    >
+                        <option value="solid">"Solid"</option>
+                        <option value="gradient">"Gradient"</option>
+                        <option value="hue_cycle">"Hue cycle"</option>
+                    </select>
+
+                    <div class="color-row" class:hidden=move || {
+                        !matches!(
+                            Some(current_line_color(base_config)),
+                            Some(LineColorConfig::Solid { .. })
+                        )
+                    }>
+                        <label for="line-solid-color">"Line color"</label>
+                        <input
+                            id="line-solid-color"
+                            type="color"
+                            prop:value=move || {
+                                match line_color_for_mode(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::Solid,
+                                ) {
+                                    LineColorConfig::Solid { color } => rgb_to_hex(color),
+                                    _ => unreachable!("solid mode must provide solid color"),
+                                }
+                            }
+                            on:input:target={
+                                let render_current_colors = Rc::clone(&render_current_colors);
+                                let install_config = Rc::clone(&install_config);
+                                move |ev| {
+                                    let Some(color) = hex_to_rgb(&ev.target().value()) else {
+                                        set_error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let line_color = LineColorConfig::Solid { color };
+                                    if update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current_colors,
+                                        "solid line color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        set_color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            }
+                        />
+                    </div>
+
+                    <div class="color-row" class:hidden=move || {
+                        !matches!(
+                            Some(current_line_color(base_config)),
+                            Some(LineColorConfig::Gradient { .. })
+                        )
+                    }>
+                        <label for="line-gradient-start">"Gradient start"</label>
+                        <input
+                            id="line-gradient-start"
+                            type="color"
+                            prop:value=move || {
+                                match line_color_for_mode(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::Gradient,
+                                ) {
+                                    LineColorConfig::Gradient { start, .. } => rgb_to_hex(start),
+                                    _ => unreachable!("gradient mode must provide gradient color"),
+                                }
+                            }
+                            on:input:target={
+                                let render_current_colors = Rc::clone(&render_current_colors);
+                                let install_config = Rc::clone(&install_config);
+                                move |ev| {
+                                    let Some(start) = hex_to_rgb(&ev.target().value()) else {
+                                        set_error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let current = line_color_for_mode_untracked(
+                                        base_config,
+                                        color_memory,
+                                        LineColorMode::Gradient,
+                                    );
+                                    let end = match current {
+                                        LineColorConfig::Gradient { end, .. } => end,
+                                        _ => unreachable!("gradient mode must provide gradient color"),
+                                    };
+                                    let line_color = LineColorConfig::Gradient {
+                                        start,
+                                        end,
+                                    };
+                                    if update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current_colors,
+                                        "gradient start color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        set_color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            }
+                        />
+
+                        <label for="line-gradient-end">"Gradient end"</label>
+                        <input
+                            id="line-gradient-end"
+                            type="color"
+                            prop:value=move || {
+                                match line_color_for_mode(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::Gradient,
+                                ) {
+                                    LineColorConfig::Gradient { end, .. } => rgb_to_hex(end),
+                                    _ => unreachable!("gradient mode must provide gradient color"),
+                                }
+                            }
+                            on:input:target={
+                                let render_current_colors = Rc::clone(&render_current_colors);
+                                let install_config = Rc::clone(&install_config);
+                                move |ev| {
+                                    let Some(end) = hex_to_rgb(&ev.target().value()) else {
+                                        set_error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let current = line_color_for_mode_untracked(
+                                        base_config,
+                                        color_memory,
+                                        LineColorMode::Gradient,
+                                    );
+                                    let start = match current {
+                                        LineColorConfig::Gradient { start, .. } => start,
+                                        _ => unreachable!("gradient mode must provide gradient color"),
+                                    };
+                                    let line_color = LineColorConfig::Gradient {
+                                        start,
+                                        end,
+                                    };
+                                    if update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current_colors,
+                                        "gradient end color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        set_color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            }
+                        />
+                    </div>
+
+                    <div class="color-row" class:hidden=move || {
+                        !matches!(
+                            Some(current_line_color(base_config)),
+                            Some(LineColorConfig::HueCycle { .. })
+                        )
+                    }>
+                        <label for="line-hue-cycle-initial">"Initial color"</label>
+                        <input
+                            id="line-hue-cycle-initial"
+                            type="color"
+                            prop:value=move || {
+                                match line_color_for_mode(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::HueCycle,
+                                ) {
+                                    LineColorConfig::HueCycle { initial } => rgb_to_hex(initial),
+                                    _ => unreachable!("hue-cycle mode must provide hue-cycle color"),
+                                }
+                            }
+                            on:input:target={
+                                let render_current_colors = Rc::clone(&render_current_colors);
+                                let install_config = Rc::clone(&install_config);
+                                move |ev| {
+                                    let Some(initial) = hex_to_rgb(&ev.target().value()) else {
+                                        set_error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let line_color = LineColorConfig::HueCycle { initial };
+                                    if update_clean_config(
+                                        set_config_workspace,
+                                        set_toml_text,
+                                        set_error,
+                                        &install_config,
+                                        &render_current_colors,
+                                        "hue-cycle initial color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        set_color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            }
+                        />
                     </div>
 
                     <label for="png-width">"PNG width"</label>
@@ -832,6 +1262,90 @@ pub(crate) fn App() -> impl IntoView {
                 </div>
             </section>
         </main>
+    }
+}
+
+fn update_clean_config(
+    set_config_workspace: WriteSignal<ConfigWorkspace>,
+    set_toml_text: WriteSignal<String>,
+    set_error: WriteSignal<Option<String>>,
+    install_config: &Rc<impl Fn(Config)>,
+    render_after_update: &Rc<impl Fn()>,
+    event: &'static str,
+    update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+) -> bool {
+    let updated = set_config_workspace.try_update(|workspace| {
+        let entry = workspace.selected_mut();
+        match entry.view_mut() {
+            EntryViewMut::Clean(mut clean) => {
+                update(&mut clean).map_err(|error| error.to_string())?;
+            }
+            EntryViewMut::Dirty(_) => {
+                log::error!("{event} fired while entry is dirty; UI guards bypassed");
+                return Ok(None);
+            }
+        }
+        Ok(Some((
+            entry.draft_text().into_owned(),
+            entry.applied_config(),
+        )))
+    });
+
+    match updated {
+        Some(Ok(Some((text, config)))) => {
+            set_toml_text.set(text);
+            install_config(config);
+            render_after_update();
+            true
+        }
+        Some(Ok(None)) => false,
+        Some(Err(message)) => {
+            set_error.set(Some(message));
+            false
+        }
+        None => {
+            log::error!("{event}: config_workspace signal was unavailable");
+            set_error.set(Some("Internal error: could not update config.".to_string()));
+            false
+        }
+    }
+}
+
+/// Reads the line color out of an optional config, falling back to the default.
+fn line_color_of(config: &Option<Config>) -> LineColorConfig {
+    config
+        .as_ref()
+        .map(|config| config.colors.line)
+        .unwrap_or_default()
+}
+
+fn current_line_color(base_config: ReadSignal<Option<Config>>) -> LineColorConfig {
+    base_config.with(line_color_of)
+}
+
+fn line_color_for_mode(
+    base_config: ReadSignal<Option<Config>>,
+    memory: ReadSignal<ColorControlMemory>,
+    mode: LineColorMode,
+) -> LineColorConfig {
+    let current = current_line_color(base_config);
+    if LineColorMode::from_line_color(&current) == mode {
+        current
+    } else {
+        memory.with(|memory| memory.line_for(mode))
+    }
+}
+
+fn line_color_for_mode_untracked(
+    base_config: ReadSignal<Option<Config>>,
+    memory: ReadSignal<ColorControlMemory>,
+    mode: LineColorMode,
+) -> LineColorConfig {
+    let current = base_config.with_untracked(line_color_of);
+    if LineColorMode::from_line_color(&current) == mode {
+        current
+    } else {
+        memory.with_untracked(|memory| memory.line_for(mode))
     }
 }
 

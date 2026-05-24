@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{Config, ConfigDocument, ConfigError, ConfigSource};
+use crate::{Config, ConfigDocument, ConfigError, ConfigSource, LineColorConfig};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -324,6 +324,16 @@ impl CleanMut<'_> {
     pub fn set_angle(&mut self, angle: f32) -> Result<(), ConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_angle(angle))
+    }
+
+    pub fn set_background(&mut self, background: Option<[f32; 3]>) -> Result<(), ConfigError> {
+        self.0
+            .update_last_applied_source(|source| source.set_background(background))
+    }
+
+    pub fn set_line_color(&mut self, line_color: LineColorConfig) -> Result<(), ConfigError> {
+        self.0
+            .update_last_applied_source(|source| source.set_line_color(&line_color))
     }
 }
 
@@ -827,6 +837,292 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
+    fn clean_entry_set_background_some_updates_toml_and_applied_config() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace)
+            .set_background(Some([0.1, 0.2, 0.3]))
+            .unwrap();
+
+        let entry = workspace.selected();
+        assert!(entry.draft_text().contains("background = [0.1, 0.2, 0.3]"));
+        assert_eq!(
+            entry.applied_config().colors.background,
+            Some([0.1, 0.2, 0.3])
+        );
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_background_none_removes_toml_and_keeps_config_valid() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace).set_background(None).unwrap();
+
+        let entry = workspace.selected();
+        assert!(!entry.draft_text().contains("background ="));
+        assert_eq!(entry.applied_config().colors.background, None);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_background_rejects_invalid_value_and_leaves_entry_unchanged() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let previous_text = workspace.selected().draft_text().into_owned();
+        let previous_config = workspace.selected().applied_config();
+
+        let error = clean_mut(&mut workspace)
+            .set_background(Some([0.1, 1.2, 0.3]))
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidColorComponent {
+                ref field,
+                component: 1,
+                value
+            } if field == "colors.background" && value == 1.2
+        ));
+        let entry = workspace.selected();
+        assert_eq!(entry.draft_text(), previous_text);
+        assert_eq!(entry.applied_config(), previous_config);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_line_color_updates_solid_gradient_and_hue_cycle_configs() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Solid {
+                color: [0.2, 0.3, 0.4],
+            })
+            .unwrap();
+        assert_eq!(
+            workspace.selected().applied_config().colors.line,
+            LineColorConfig::Solid {
+                color: [0.2, 0.3, 0.4],
+            }
+        );
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Gradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            })
+            .unwrap();
+        assert_eq!(
+            workspace.selected().applied_config().colors.line,
+            LineColorConfig::Gradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            }
+        );
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::HueCycle {
+                initial: [0.25, 0.5, 0.75],
+            })
+            .unwrap();
+        assert_eq!(
+            workspace.selected().applied_config().colors.line,
+            LineColorConfig::HueCycle {
+                initial: [0.25, 0.5, 0.75],
+            }
+        );
+    }
+
+    #[test]
+    fn clean_entry_set_line_color_rejects_invalid_value_and_leaves_entry_unchanged() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let previous_text = workspace.selected().draft_text().into_owned();
+        let previous_config = workspace.selected().applied_config();
+
+        let error = clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Gradient {
+                start: [0.1, 1.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidColorComponent {
+                ref field,
+                component: 1,
+                value
+            } if field == "colors.line.start" && value == 1.2
+        ));
+        let entry = workspace.selected();
+        assert_eq!(entry.draft_text(), previous_text);
+        assert_eq!(entry.applied_config(), previous_config);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_line_color_transitions_remove_stale_keys() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Gradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            })
+            .unwrap();
+        let text = workspace.selected().draft_text().into_owned();
+        assert!(text.contains("mode = \"gradient\""));
+        assert!(text.contains("start = [0.1, 0.2, 0.3]"));
+        assert!(text.contains("end = [0.7, 0.8, 0.9]"));
+        assert!(!text.contains("color ="));
+        assert!(!text.contains("initial ="));
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::HueCycle {
+                initial: [0.4, 0.5, 0.6],
+            })
+            .unwrap();
+        let text = workspace.selected().draft_text().into_owned();
+        assert!(text.contains("mode = \"hue_cycle\""));
+        assert!(text.contains("initial = [0.4, 0.5, 0.6]"));
+        assert!(!text.contains("color ="));
+        assert!(!text.contains("start ="));
+        assert!(!text.contains("end ="));
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Solid {
+                color: [0.2, 0.3, 0.4],
+            })
+            .unwrap();
+        let text = workspace.selected().draft_text().into_owned();
+        assert!(text.contains("mode = \"solid\""));
+        assert!(text.contains("color = [0.2, 0.3, 0.4]"));
+        assert!(!text.contains("initial ="));
+        assert!(!text.contains("start ="));
+        assert!(!text.contains("end ="));
+    }
+
+    #[test]
+    fn clean_entry_color_mutators_preserve_existing_value_comments() {
+        let text = r#"[metadata]
+name = "Decorated Color"
+
+[l-system]
+dimensions = 2
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "FF"
+
+[turtle]
+angle = 60.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [0.0, 0.0, 0.0] # keep background comment
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5] # keep line color comment
+"#;
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
+
+        clean_mut(&mut workspace)
+            .set_background(Some([0.1, 0.2, 0.3]))
+            .unwrap();
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Solid {
+                color: [0.4, 0.5, 0.6],
+            })
+            .unwrap();
+
+        let text = workspace.selected().draft_text().into_owned();
+        assert!(text.contains("background = [0.1, 0.2, 0.3] # keep background comment"));
+        assert!(text.contains("color = [0.4, 0.5, 0.6] # keep line color comment"));
+    }
+
+    #[test]
+    fn clean_entry_color_mutators_preserve_existing_array_formatting() {
+        let text = r#"[metadata]
+name = "Decorated Arrays"
+
+[l-system]
+dimensions = 2
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "FF"
+
+[turtle]
+angle = 60.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = [ 0.0, 0.0, 0.0 ]
+
+[colors.line]
+mode = "gradient"
+start = [
+    0.0,
+    0.9,
+    0.5,
+]
+end = [ 1.0, 1.0, 1.0 ]
+"#;
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
+
+        clean_mut(&mut workspace)
+            .set_background(Some([0.1, 0.2, 0.3]))
+            .unwrap();
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Gradient {
+                start: [0.4, 0.5, 0.6],
+                end: [0.7, 0.8, 0.9],
+            })
+            .unwrap();
+
+        let text = workspace.selected().draft_text().into_owned();
+        assert!(text.contains("background = [ 0.1, 0.2, 0.3 ]"));
+        assert!(text.contains("start = [\n    0.4,\n    0.5,\n    0.6,\n]"));
+        assert!(text.contains("end = [ 0.7, 0.8, 0.9 ]"));
+    }
+
+    #[test]
+    fn color_mutation_on_preset_entry_makes_it_resettable() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
+        assert!(!workspace.can_reset());
+
+        clean_mut(&mut workspace)
+            .set_background(Some([0.1, 0.2, 0.3]))
+            .unwrap();
+
+        assert!(workspace.can_reset());
+
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        assert!(!workspace.can_reset());
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::Solid {
+                color: [0.1, 0.2, 0.3],
+            })
+            .unwrap();
+
+        assert!(workspace.can_reset());
+    }
+
+    #[test]
     fn clean_entry_control_mutators_preserve_dotted_toml() {
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("Dotted", dotted_config_text())]).unwrap();
@@ -846,6 +1142,49 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(entry.applied_config().generation.iterations, 5);
         assert_eq!(entry.applied_config().generation.angle, 45.5);
         assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_color_mutators_preserve_dotted_toml() {
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("Dotted", dotted_config_text())]).unwrap();
+
+        {
+            let mut clean = clean_mut(&mut workspace);
+            clean.set_background(Some([0.1, 0.2, 0.3])).unwrap();
+            clean
+                .set_line_color(LineColorConfig::Gradient {
+                    start: [0.4, 0.5, 0.6],
+                    end: [0.7, 0.8, 0.9],
+                })
+                .unwrap();
+        }
+
+        let entry = workspace.selected();
+        let text = entry.draft_text();
+        assert!(text.contains("colors.background = [0.1, 0.2, 0.3]"));
+        assert!(text.contains("colors.line.mode = \"gradient\""));
+        assert!(text.contains("colors.line.start = [0.4, 0.5, 0.6]"));
+        assert!(text.contains("colors.line.end = [0.7, 0.8, 0.9]"));
+        assert!(!text.contains("[colors]"));
+        assert!(!text.contains("[colors.line]"));
+        assert_eq!(
+            entry.applied_config().colors.background,
+            Some([0.1, 0.2, 0.3])
+        );
+        assert_eq!(
+            entry.applied_config().colors.line,
+            LineColorConfig::Gradient {
+                start: [0.4, 0.5, 0.6],
+                end: [0.7, 0.8, 0.9],
+            }
+        );
+        assert!(!entry.is_dirty());
+
+        clean_mut(&mut workspace).set_background(None).unwrap();
+        let entry = workspace.selected();
+        assert!(!entry.draft_text().contains("colors.background"));
+        assert_eq!(entry.applied_config().colors.background, None);
     }
 
     #[test]

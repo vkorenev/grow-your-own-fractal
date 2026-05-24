@@ -33,6 +33,16 @@ enum SceneGeometry {
     },
 }
 
+impl SceneGeometry {
+    fn total_segments(&self) -> u32 {
+        let vertex_count = match self {
+            SceneGeometry::TwoD { vertices, .. } => vertices.len(),
+            SceneGeometry::ThreeD { vertices, .. } => vertices.len(),
+        };
+        (vertex_count / 2) as u32
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Scene {
     geometry: SceneGeometry,
@@ -49,15 +59,15 @@ impl Scene {
         camera: Camera,
         revision: u64,
     ) -> Self {
-        let total_segments = (data.vertices.len() / 2) as u32;
+        let geometry = SceneGeometry::TwoD {
+            vertices: Arc::new(data.vertices),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
+        };
         Self {
-            geometry: SceneGeometry::TwoD {
-                vertices: Arc::new(data.vertices),
-                bounds_min: data.bounds_min,
-                bounds_max: data.bounds_max,
-            },
-            color_params: color_params_from_config(&colors.line, total_segments),
-            background: colors.background,
+            color_params: color_params_from_config(&colors.line, geometry.total_segments()),
+            geometry,
+            background: colors.effective_background(),
             camera,
             revision,
         }
@@ -69,15 +79,15 @@ impl Scene {
         camera: Camera,
         revision: u64,
     ) -> Self {
-        let total_segments = (data.vertices.len() / 2) as u32;
+        let geometry = SceneGeometry::ThreeD {
+            vertices: Arc::new(data.vertices),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
+        };
         Self {
-            geometry: SceneGeometry::ThreeD {
-                vertices: Arc::new(data.vertices),
-                bounds_min: data.bounds_min,
-                bounds_max: data.bounds_max,
-            },
-            color_params: color_params_from_config(&colors.line, total_segments),
-            background: colors.background,
+            color_params: color_params_from_config(&colors.line, geometry.total_segments()),
+            geometry,
+            background: colors.effective_background(),
             camera,
             revision,
         }
@@ -146,6 +156,13 @@ impl Scene {
                 self.camera.zoom_3d(factor);
             }
         }
+    }
+
+    pub(super) fn update_colors(&mut self, colors: &ColorConfig) {
+        let total_segments = self.geometry.total_segments();
+        self.color_params = color_params_from_config(&colors.line, total_segments);
+        self.background = colors.effective_background();
+        self.revision = self.revision.wrapping_add(1);
     }
 
     fn snapshot(&self) -> SceneSnapshot {
@@ -303,7 +320,7 @@ impl Default for Scene {
                 bounds_max: [1.0, 1.0],
             },
             color_params: ColorParams::default(),
-            background: [0.0, 0.0, 0.0],
+            background: ColorConfig::DEFAULT_BACKGROUND,
             camera: Camera::new(),
             revision: 0,
         }
