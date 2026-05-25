@@ -560,16 +560,11 @@ impl FractalApp {
     }
 
     fn sync_controls_from_workspace(&mut self) {
-        let (max_iterations, iterations) = {
-            let generation = &self.selected_config().generation;
-            let max_seg = lsystem_renderer::line_renderer::max_segments_for(generation.dimensions);
-            let max_iterations =
-                lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg)
-                    as u32;
-            (max_iterations, generation.iterations.min(max_iterations))
-        };
-        self.max_iterations = max_iterations;
-        self.iterations = iterations;
+        let generation = &self.config_workspace.selected().applied_config().generation;
+        let max_seg = lsystem_renderer::line_renderer::max_segments_for(generation.dimensions);
+        self.max_iterations =
+            lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
+        self.iterations = generation.iterations.min(self.max_iterations);
     }
 
     pub(super) fn selected_config(&self) -> &Config {
@@ -774,6 +769,18 @@ mod tests {
     }
 
     #[test]
+    fn angle_changed_while_dirty_is_ignored() {
+        let (mut app, _) = FractalApp::new();
+        let original_angle = app.selected_config().generation.angle;
+        let modified = format!("{} ", app.config_workspace.selected().draft_text());
+        app.config_workspace.selected_mut().set_draft_text(modified);
+
+        let _ = app.update(Message::AngleChanged(original_angle + 10.0));
+
+        assert_eq!(app.selected_config().generation.angle, original_angle);
+    }
+
+    #[test]
     fn effective_is_3d_uses_config_not_stale_scene() {
         let (mut app, _) = FractalApp::new();
         let three_d_config = r#"[metadata]
@@ -798,7 +805,6 @@ color = [0.0, 0.9, 0.5]
 "#;
         app.config_workspace =
             ConfigWorkspace::from_presets(vec![("3d", three_d_config.to_string())]).unwrap();
-        app.iterations = u32::MAX;
 
         assert!(!app.scene.is_3d());
         assert!(app.effective_is_3d());
