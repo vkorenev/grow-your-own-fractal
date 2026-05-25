@@ -1,9 +1,11 @@
 use iced::widget::{
-    button, column, container, pick_list, row, scrollable, slider, text, text_editor, text_input,
+    button, checkbox, column, container, pick_list, row, scrollable, slider, text, text_editor,
+    text_input,
 };
 use iced::{Color, Element, Length, Theme};
+use lsystem_core::LineColorConfig;
 
-use super::app_state::{FractalApp, Message};
+use super::app_state::{FractalApp, LineColorMode, Message};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
@@ -26,7 +28,7 @@ impl FractalApp {
                 .height(260)
                 .on_action(Message::TomlEdited),
             row![
-                button("Apply").on_press(Message::ApplyConfig),
+                button("Apply").on_press_maybe(is_dirty.then_some(Message::ApplyConfig)),
                 button("Revert").on_press_maybe(is_dirty.then_some(Message::RevertConfig)),
                 button("Reset").on_press_maybe(can_reset.then_some(Message::ResetConfig)),
             ]
@@ -35,12 +37,12 @@ impl FractalApp {
         ]
         .spacing(10);
 
-        let is_3d = self.scene.is_3d();
+        let is_3d = self.effective_is_3d();
 
         if is_dirty {
             controls = controls
                 .push(text("Apply or Revert the edited config before using controls.").size(13));
-        } else if self.base_config.is_some() {
+        } else if let Some(config) = &self.base_config {
             controls = controls
                 .push(text("Overrides").size(13))
                 .push(text(format!("Iterations: {}", self.iterations)))
@@ -50,13 +52,15 @@ impl FractalApp {
                     Message::IterationsChanged,
                 ))
                 .push(text(format!("Angle: {:.1}", self.angle)))
-                .push(slider(1.0..=180.0, self.angle, Message::AngleChanged).step(0.5))
-                .push(text("PNG width").size(13))
-                .push(
-                    text_input("2048", &self.png_width_text)
-                        .on_input(Message::PngWidthChanged)
-                        .width(Length::Fill),
-                );
+                .push(slider(1.0..=180.0, self.angle, Message::AngleChanged).step(0.5));
+
+            controls = push_color_controls(controls, config);
+
+            controls = controls.push(text("PNG width").size(13)).push(
+                text_input("2048", &self.png_width_text)
+                    .on_input(Message::PngWidthChanged)
+                    .width(Length::Fill),
+            );
 
             let mut export_row = row![button("Export PNG").on_press(Message::ExportPng)].spacing(8);
             if !is_3d {
@@ -121,4 +125,108 @@ impl FractalApp {
                 .into(),
         }
     }
+}
+
+fn push_color_controls<'a>(
+    mut controls: iced::widget::Column<'a, Message>,
+    config: &'a lsystem_core::Config,
+) -> iced::widget::Column<'a, Message> {
+    let background = config.colors.background;
+    controls = controls.push(
+        checkbox(background.is_some())
+            .label("Background")
+            .on_toggle(Message::BackgroundOverrideToggled),
+    );
+    if let Some(color) = background {
+        controls = controls.push(rgb_controls(
+            "Background RGB",
+            color,
+            Message::BackgroundColorChanged,
+        ));
+    }
+
+    let line_color = &config.colors.line;
+    let selected_mode = Some(LineColorMode::from_line_color(line_color));
+    controls = controls.push(text("Line color").size(13)).push(
+        pick_list(selected_mode, LineColorMode::ALL, |choice| {
+            choice.to_string()
+        })
+        .on_select(Message::LineColorModeSelected)
+        .width(Length::Fill),
+    );
+
+    match *line_color {
+        LineColorConfig::Solid { color } => {
+            controls.push(rgb_controls("Line RGB", color, |color| {
+                Message::LineColorChanged(LineColorConfig::Solid { color })
+            }))
+        }
+        LineColorConfig::Gradient { start, end } => controls
+            .push(rgb_controls("Gradient start", start, move |start| {
+                Message::LineColorChanged(LineColorConfig::Gradient { start, end })
+            }))
+            .push(rgb_controls("Gradient end", end, move |end| {
+                Message::LineColorChanged(LineColorConfig::Gradient { start, end })
+            })),
+        LineColorConfig::HueCycle { initial } => {
+            controls.push(rgb_controls("Initial RGB", initial, |initial| {
+                Message::LineColorChanged(LineColorConfig::HueCycle { initial })
+            }))
+        }
+    }
+}
+
+fn rgb_controls<'a>(
+    label: &'a str,
+    color: [f32; 3],
+    message: impl Fn([f32; 3]) -> Message + Clone + 'a,
+) -> Element<'a, Message> {
+    column![
+        row![text(label).size(13), color_swatch(color)].spacing(8),
+        color_slider("R", color, 0, message.clone()),
+        color_slider("G", color, 1, message.clone()),
+        color_slider("B", color, 2, message),
+    ]
+    .spacing(6)
+    .into()
+}
+
+fn color_slider<'a>(
+    label: &'a str,
+    color: [f32; 3],
+    component: usize,
+    message: impl Fn([f32; 3]) -> Message + 'a,
+) -> Element<'a, Message> {
+    row![
+        text(label).size(12).width(Length::Fixed(16.0)),
+        slider(0.0..=1.0, color[component], move |value| {
+            let mut next = color;
+            next[component] = value;
+            message(next)
+        })
+        .step(0.01),
+        text(format!("{:.0}", color[component] * 255.0))
+            .size(12)
+            .width(Length::Fixed(34.0)),
+    ]
+    .spacing(6)
+    .align_y(iced::alignment::Vertical::Center)
+    .into()
+}
+
+fn color_swatch(color: [f32; 3]) -> Element<'static, Message> {
+    let [r, g, b] = color;
+    container(text(""))
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(18.0))
+        .style(move |_theme: &Theme| container::Style {
+            background: Some(Color::from_rgb(r, g, b).into()),
+            border: iced::Border {
+                color: Color::from_rgb(0.45, 0.5, 0.58),
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }

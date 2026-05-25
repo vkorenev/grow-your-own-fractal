@@ -1,6 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod app;
+mod color_input;
 mod export;
 mod presets;
 mod renderer;

@@ -10,7 +10,7 @@ pub fn export_svg(config: &Config) -> String {
     let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
 
     if segments.is_empty() {
-        let bg = to_hex(config.colors.background);
+        let bg = to_hex(config.colors.effective_background());
         return format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
         );
@@ -55,7 +55,7 @@ pub fn export_svg(config: &Config) -> String {
     let w = max_x - min_x;
     let h = max_y - min_y;
 
-    let bg = to_hex(config.colors.background);
+    let bg = to_hex(config.colors.effective_background());
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
@@ -209,6 +209,33 @@ color = [0.0, 0.9, 0.5]
             .into()
     }
 
+    fn make_config_without_background() -> Config {
+        let toml = r#"[metadata]
+name = "No Background"
+
+[l-system]
+dimensions = 2
+axiom = "F+F"
+iterations = 1
+
+[l-system.rules]
+
+[turtle]
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+
+[colors.line]
+mode = "solid"
+color = [1.0, 0.0, 0.0]
+"#;
+        ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
+            .unwrap()
+            .into()
+    }
+
     #[test]
     fn solid_contains_svg_and_color() {
         let cfg = make_config("mode = \"solid\"\ncolor = [1.0, 0.0, 0.0]");
@@ -259,5 +286,13 @@ color = [0.0, 0.9, 0.5]
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(!svg.contains("<path"), "unexpected <path in empty SVG");
         assert!(!svg.contains("<line"), "unexpected <line in empty SVG");
+    }
+
+    #[test]
+    fn missing_background_uses_default_black_fill() {
+        let cfg = make_config_without_background();
+        let svg = export_svg(&cfg);
+
+        assert!(svg.contains("fill=\"#000000\""));
     }
 }

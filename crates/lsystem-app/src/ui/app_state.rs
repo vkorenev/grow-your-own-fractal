@@ -2,7 +2,10 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use include_dir::{Dir, include_dir};
-use lsystem_core::{Config, ConfigWorkspace, EntryViewMut};
+use lsystem_core::{
+    CleanMut, ColorConfig, Config, ConfigError, ConfigWorkspace, Dimensions, EntryViewMut,
+    LineColorConfig,
+};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -20,6 +23,109 @@ static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LineColorMode {
+    Solid,
+    Gradient,
+    HueCycle,
+}
+
+impl LineColorMode {
+    pub(super) const ALL: &'static [Self] = &[Self::Solid, Self::Gradient, Self::HueCycle];
+
+    pub(super) fn from_line_color(line_color: &LineColorConfig) -> Self {
+        match line_color {
+            LineColorConfig::Solid { .. } => Self::Solid,
+            LineColorConfig::Gradient { .. } => Self::Gradient,
+            LineColorConfig::HueCycle { .. } => Self::HueCycle,
+        }
+    }
+
+    fn default_line_color(self) -> LineColorConfig {
+        match self {
+            Self::Solid => LineColorConfig::DEFAULT_SOLID,
+            Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
+            Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
+        }
+    }
+}
+
+impl std::fmt::Display for LineColorMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Solid => "Solid",
+            Self::Gradient => "Gradient",
+            Self::HueCycle => "Hue cycle",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ColorControlMemory {
+    background: [f32; 3],
+    solid: Option<[f32; 3]>,
+    gradient: Option<([f32; 3], [f32; 3])>,
+    hue_cycle: Option<[f32; 3]>,
+}
+
+impl ColorControlMemory {
+    fn from_colors(colors: &ColorConfig) -> Self {
+        let mut memory = Self {
+            background: colors.background.unwrap_or(ColorConfig::DEFAULT_BACKGROUND),
+            solid: None,
+            gradient: None,
+            hue_cycle: None,
+        };
+        memory.remember_line(colors.line);
+        memory
+    }
+
+    fn background(&self) -> [f32; 3] {
+        self.background
+    }
+
+    fn remember_background(&mut self, background: [f32; 3]) {
+        self.background = background;
+    }
+
+    fn remember_line(&mut self, line_color: LineColorConfig) {
+        match line_color {
+            LineColorConfig::Solid { color } => self.solid = Some(color),
+            LineColorConfig::Gradient { start, end } => self.gradient = Some((start, end)),
+            LineColorConfig::HueCycle { initial } => self.hue_cycle = Some(initial),
+        }
+    }
+
+    fn line_for(&self, mode: LineColorMode) -> LineColorConfig {
+        match (mode, self) {
+            (
+                LineColorMode::Solid,
+                Self {
+                    solid: Some(color), ..
+                },
+            ) => LineColorConfig::Solid { color: *color },
+            (
+                LineColorMode::Gradient,
+                Self {
+                    gradient: Some((start, end)),
+                    ..
+                },
+            ) => LineColorConfig::Gradient {
+                start: *start,
+                end: *end,
+            },
+            (
+                LineColorMode::HueCycle,
+                Self {
+                    hue_cycle: Some(initial),
+                    ..
+                },
+            ) => LineColorConfig::HueCycle { initial: *initial },
+            _ => mode.default_line_color(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     PresetSelected(String),
@@ -30,6 +136,10 @@ pub(super) enum Message {
     ResetConfig,
     IterationsChanged(u32),
     AngleChanged(f32),
+    BackgroundOverrideToggled(bool),
+    BackgroundColorChanged([f32; 3]),
+    LineColorModeSelected(LineColorMode),
+    LineColorChanged(LineColorConfig),
     PngWidthChanged(String),
     ExportSvg,
     ExportPng,
@@ -75,6 +185,7 @@ pub(super) struct FractalApp {
     pub(super) scene: Scene,
     pub(super) auto_rotate: bool,
     pub(super) auto_rotate_speed: f32,
+    color_memory: ColorControlMemory,
     scene_generation: Arc<AtomicU64>,
 }
 
@@ -85,6 +196,7 @@ impl FractalApp {
         let selected_entry = config_workspace.selected();
         let toml_text = selected_entry.draft_text().into_owned();
         let base_config = selected_entry.applied_config();
+        let color_memory = ColorControlMemory::from_colors(&base_config.colors);
 
         let mut app = Self {
             config_workspace,
@@ -101,6 +213,7 @@ impl FractalApp {
             scene: Scene::default(),
             auto_rotate: false,
             auto_rotate_speed: 45.0,
+            color_memory,
             scene_generation: Arc::new(AtomicU64::new(0)),
         };
         app.sync_controls_from_base_config();
@@ -161,35 +274,52 @@ impl FractalApp {
             }
             Message::IterationsChanged(iterations) => {
                 let iterations = iterations.min(self.max_iterations);
-                match self.config_workspace.selected_mut().view_mut() {
-                    EntryViewMut::Clean(mut clean) => match clean.set_iterations(iterations) {
-                        Ok(()) => self.refresh_from_workspace(),
-                        Err(error) => {
-                            self.error = Some(error.to_string());
-                            Task::none()
-                        }
-                    },
-                    EntryViewMut::Dirty(_) => {
-                        log::error!(
-                            "iterations slider fired while entry is dirty; UI guards bypassed"
-                        );
-                        Task::none()
-                    }
-                }
+                self.update_clean_config("iterations slider", |clean| {
+                    clean.set_iterations(iterations)
+                })
             }
-            Message::AngleChanged(angle) => match self.config_workspace.selected_mut().view_mut() {
-                EntryViewMut::Clean(mut clean) => match clean.set_angle(angle) {
-                    Ok(()) => self.refresh_from_workspace(),
-                    Err(error) => {
-                        self.error = Some(error.to_string());
-                        Task::none()
-                    }
-                },
-                EntryViewMut::Dirty(_) => {
-                    log::error!("angle slider fired while entry is dirty; UI guards bypassed");
-                    Task::none()
+            Message::AngleChanged(angle) => {
+                self.update_clean_config("angle slider", |clean| clean.set_angle(angle))
+            }
+            Message::BackgroundOverrideToggled(enabled) => {
+                if let Some(Some(background)) = self
+                    .base_config
+                    .as_ref()
+                    .map(|config| config.colors.background)
+                {
+                    self.color_memory.remember_background(background);
                 }
-            },
+                let background = if enabled {
+                    Some(self.color_memory.background())
+                } else {
+                    None
+                };
+                self.update_clean_color_config("background override toggle", |clean| {
+                    clean.set_background(background)
+                })
+            }
+            Message::BackgroundColorChanged(color) => {
+                self.color_memory.remember_background(color);
+                self.update_clean_color_config("background color slider", |clean| {
+                    clean.set_background(Some(color))
+                })
+            }
+            Message::LineColorModeSelected(mode) => {
+                let current = self
+                    .base_config
+                    .as_ref()
+                    .map(|config| config.colors.line)
+                    .unwrap_or_default();
+                self.color_memory.remember_line(current);
+                let line_color = self.color_memory.line_for(mode);
+                self.update_clean_color_config("line color mode select", |clean| {
+                    clean.set_line_color(line_color)
+                })
+            }
+            Message::LineColorChanged(line_color) => self
+                .update_clean_color_config("line color control", |clean| {
+                    clean.set_line_color(line_color)
+                }),
             Message::PngWidthChanged(value) => {
                 self.png_width_text = value;
                 self.export_status = None;
@@ -199,7 +329,7 @@ impl FractalApp {
                 Task::none()
             }
             Message::ExportSvg => {
-                if self.scene.is_3d() {
+                if self.effective_is_3d() {
                     return Task::none();
                 }
                 self.export(ExportKind::Svg)
@@ -214,9 +344,15 @@ impl FractalApp {
                 Task::none()
             }
             Message::SceneGenerated(result) => {
-                if let SceneBuildResult::Ready { generation, scene } = result
+                if let SceneBuildResult::Ready {
+                    generation,
+                    mut scene,
+                } = result
                     && self.is_current_generation(generation)
                 {
+                    if let Some(config) = &self.base_config {
+                        scene.update_colors(&config.colors);
+                    }
                     self.scene = scene;
                     self.scene_pending = false;
                 }
@@ -337,9 +473,13 @@ impl FractalApp {
         self.config_workspace
             .selected_mut()
             .set_draft_text(self.toml.text());
+        if !self.config_workspace.selected().is_dirty() {
+            return Task::none();
+        }
         match self.config_workspace.apply() {
             Ok(entry) => {
                 self.base_config = Some(entry.applied_config());
+                self.reset_color_memory_from_base_config();
                 self.sync_controls_from_base_config();
                 self.error = None;
                 self.export_status = None;
@@ -353,14 +493,97 @@ impl FractalApp {
     }
 
     fn refresh_from_workspace(&mut self) -> Task<Message> {
+        self.refresh_from_workspace_impl(true)
+    }
+
+    fn refresh_from_workspace_preserving_color_memory(&mut self) -> Task<Message> {
+        self.refresh_from_workspace_impl(false)
+    }
+
+    fn refresh_from_workspace_impl(&mut self, reset_color_memory: bool) -> Task<Message> {
         let entry = self.config_workspace.selected();
         let toml_text = entry.draft_text();
         self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
         self.base_config = Some(entry.applied_config());
+        if reset_color_memory {
+            self.reset_color_memory_from_base_config();
+        }
         self.sync_controls_from_base_config();
         self.error = None;
         self.export_status = None;
         self.schedule_scene_generation()
+    }
+
+    /// Rebuilds the scene from scratch (config-affecting changes such as
+    /// iterations or angle).
+    fn update_clean_config(
+        &mut self,
+        event: &'static str,
+        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+    ) -> Task<Message> {
+        self.update_clean_entry(
+            event,
+            update,
+            Self::refresh_from_workspace_preserving_color_memory,
+        )
+    }
+
+    /// Recolors the existing scene in place (color-only changes that do not
+    /// alter geometry).
+    fn update_clean_color_config(
+        &mut self,
+        event: &'static str,
+        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+    ) -> Task<Message> {
+        self.update_clean_entry(event, update, Self::refresh_after_clean_color_update)
+    }
+
+    /// Applies `update` to the selected entry while it is clean, then runs
+    /// `on_success`. Logs and no-ops if UI guards let a dirty entry through.
+    fn update_clean_entry(
+        &mut self,
+        event: &'static str,
+        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+        on_success: impl FnOnce(&mut Self) -> Task<Message>,
+    ) -> Task<Message> {
+        match self.config_workspace.selected_mut().view_mut() {
+            EntryViewMut::Clean(mut clean) => match update(&mut clean) {
+                Ok(()) => on_success(self),
+                Err(error) => {
+                    self.error = Some(error.to_string());
+                    Task::none()
+                }
+            },
+            EntryViewMut::Dirty(_) => {
+                log::error!("{event} fired while entry is dirty; UI guards bypassed");
+                Task::none()
+            }
+        }
+    }
+
+    fn refresh_after_clean_color_update(&mut self) -> Task<Message> {
+        let entry = self.config_workspace.selected();
+        let toml_text = entry.draft_text();
+        let config = entry.applied_config();
+        self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
+        self.scene.update_colors(&config.colors);
+        self.base_config = Some(config);
+        self.error = None;
+        self.export_status = None;
+        Task::none()
+    }
+
+    fn reset_color_memory_from_base_config(&mut self) {
+        self.color_memory = self
+            .base_config
+            .as_ref()
+            .map(|config| ColorControlMemory::from_colors(&config.colors))
+            .unwrap_or(ColorControlMemory {
+                background: ColorConfig::DEFAULT_BACKGROUND,
+                solid: None,
+                gradient: None,
+                hue_cycle: None,
+            });
     }
 
     fn sync_controls_from_base_config(&mut self) {
@@ -384,6 +607,12 @@ impl FractalApp {
             config.generation.angle = self.angle;
             config
         })
+    }
+
+    pub(super) fn effective_is_3d(&self) -> bool {
+        self.effective_config()
+            .map(|config| matches!(config.generation.dimensions, Dimensions::ThreeD))
+            .unwrap_or(false)
     }
 
     fn schedule_scene_generation(&mut self) -> Task<Message> {
@@ -482,4 +711,95 @@ fn load_presets() -> Vec<(String, String)> {
             Some((label, file.contents_utf8()?.to_string()))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_control_memory_uses_defaults_and_restores_edits() {
+        let solid = LineColorConfig::Solid {
+            color: [0.1, 0.2, 0.3],
+        };
+        let gradient = LineColorConfig::Gradient {
+            start: [0.4, 0.5, 0.6],
+            end: [0.7, 0.8, 0.9],
+        };
+
+        let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
+            background: Some([0.8, 0.8, 0.8]),
+            line: solid,
+        });
+
+        assert_eq!(memory.background(), [0.8, 0.8, 0.8]);
+        assert_eq!(memory.line_for(LineColorMode::Solid), solid);
+        assert_eq!(
+            memory.line_for(LineColorMode::Gradient),
+            LineColorConfig::DEFAULT_GRADIENT
+        );
+        assert_eq!(
+            memory.line_for(LineColorMode::HueCycle),
+            LineColorConfig::DEFAULT_HUE_CYCLE
+        );
+
+        memory.remember_background([0.9, 0.1, 0.2]);
+        memory.remember_line(gradient);
+
+        assert_eq!(memory.background(), [0.9, 0.1, 0.2]);
+        assert_eq!(memory.line_for(LineColorMode::Solid), solid);
+        assert_eq!(memory.line_for(LineColorMode::Gradient), gradient);
+    }
+
+    #[test]
+    fn clean_apply_preserves_inactive_line_color_memory() {
+        let (mut app, _) = FractalApp::new();
+        let gradient = LineColorConfig::Gradient {
+            start: [0.4, 0.5, 0.6],
+            end: [0.7, 0.8, 0.9],
+        };
+        app.color_memory.remember_line(gradient);
+
+        let _ = app.update(Message::ApplyConfig);
+
+        assert_eq!(app.color_memory.line_for(LineColorMode::Gradient), gradient);
+    }
+
+    #[test]
+    fn background_toggle_restores_last_selected_color() {
+        let (mut app, _) = FractalApp::new();
+        let background = [0.2, 0.3, 0.4];
+
+        let _ = app.update(Message::BackgroundColorChanged(background));
+        let _ = app.update(Message::BackgroundOverrideToggled(false));
+
+        assert_eq!(
+            app.base_config
+                .as_ref()
+                .and_then(|config| config.colors.background),
+            None
+        );
+
+        let _ = app.update(Message::BackgroundOverrideToggled(true));
+
+        assert_eq!(
+            app.base_config
+                .as_ref()
+                .and_then(|config| config.colors.background),
+            Some(background)
+        );
+    }
+
+    #[test]
+    fn effective_is_3d_uses_config_not_stale_scene() {
+        let (mut app, _) = FractalApp::new();
+        app.base_config
+            .as_mut()
+            .expect("app starts with a base config")
+            .generation
+            .dimensions = Dimensions::ThreeD;
+
+        assert!(!app.scene.is_3d());
+        assert!(app.effective_is_3d());
+    }
 }

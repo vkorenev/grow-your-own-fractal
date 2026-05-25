@@ -116,7 +116,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                config.colors.background,
+                config.colors.effective_background(),
                 |pass| {
                     pipeline.draw(pass);
                 },
@@ -146,7 +146,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                config.colors.background,
+                config.colors.effective_background(),
                 |pass| {
                     pipeline.draw(pass);
                 },

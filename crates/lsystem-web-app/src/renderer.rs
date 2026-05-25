@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lsystem_core::{Config, Dimensions};
+use lsystem_core::{ColorConfig, Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
@@ -22,6 +22,16 @@ enum ActiveScene {
         bounds_min: [f32; 3],
         bounds_max: [f32; 3],
     },
+}
+
+impl ActiveScene {
+    fn total_segments(&self) -> u32 {
+        let vertex_count = match self {
+            ActiveScene::TwoD { vertices, .. } => vertices.len(),
+            ActiveScene::ThreeD { vertices, .. } => vertices.len(),
+        };
+        (vertex_count / 2) as u32
+    }
 }
 
 pub struct CanvasRenderer {
@@ -69,7 +79,6 @@ impl CanvasRenderer {
         canvas: &web_sys::HtmlCanvasElement,
         config: &Config,
     ) -> RenderStatus {
-        let total_segments;
         match config.generation.dimensions {
             Dimensions::ThreeD => {
                 let VertexData3D {
@@ -77,7 +86,6 @@ impl CanvasRenderer {
                     bounds_min,
                     bounds_max,
                 } = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
-                total_segments = (vertices.len() / 2) as u32;
                 self.scene = ActiveScene::ThreeD {
                     vertices,
                     bounds_min,
@@ -90,7 +98,6 @@ impl CanvasRenderer {
                     bounds_min,
                     bounds_max,
                 } = geometry_to_vertices(lsystem_core::generate(&config.generation));
-                total_segments = (vertices.len() / 2) as u32;
                 self.scene = ActiveScene::TwoD {
                     vertices,
                     bounds_min,
@@ -99,8 +106,9 @@ impl CanvasRenderer {
             }
         }
 
-        self.color_params = color_params_from_config(&config.colors.line, total_segments);
-        let [r, g, b] = config.colors.background;
+        self.color_params =
+            color_params_from_config(&config.colors.line, self.scene.total_segments());
+        let [r, g, b] = config.colors.effective_background();
         self.background = wgpu::Color {
             r: r as f64,
             g: g as f64,
@@ -108,6 +116,23 @@ impl CanvasRenderer {
             a: 1.0,
         };
         self.camera.reset();
+        self.needs_upload = true;
+        self.render(canvas)
+    }
+
+    pub fn set_colors_and_render(
+        &mut self,
+        canvas: &web_sys::HtmlCanvasElement,
+        colors: &ColorConfig,
+    ) -> RenderStatus {
+        self.color_params = color_params_from_config(&colors.line, self.scene.total_segments());
+        let [r, g, b] = colors.effective_background();
+        self.background = wgpu::Color {
+            r: r as f64,
+            g: g as f64,
+            b: b as f64,
+            a: 1.0,
+        };
         self.needs_upload = true;
         self.render(canvas)
     }

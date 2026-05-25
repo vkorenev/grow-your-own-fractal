@@ -68,34 +68,52 @@ pub enum Dimensions {
 }
 
 /// Color mode for the fractal lines.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineColorConfig {
     Solid { color: [f32; 3] },
     Gradient { start: [f32; 3], end: [f32; 3] },
     HueCycle { initial: [f32; 3] },
 }
 
-impl Default for LineColorConfig {
-    fn default() -> Self {
-        Self::Solid {
-            color: [0.0, 0.9, 0.5],
+impl LineColorConfig {
+    pub const DEFAULT_SOLID: Self = Self::Solid {
+        color: [0.0, 0.9, 0.5],
+    };
+    pub const DEFAULT_GRADIENT: Self = Self::Gradient {
+        start: [0.05, 0.35, 0.05],
+        end: [0.6, 0.9, 0.1],
+    };
+    pub const DEFAULT_HUE_CYCLE: Self = Self::HueCycle {
+        initial: [0.9, 0.0, 0.0],
+    };
+
+    fn mode_key(&self) -> &'static str {
+        match self {
+            Self::Solid { .. } => "solid",
+            Self::Gradient { .. } => "gradient",
+            Self::HueCycle { .. } => "hue_cycle",
         }
     }
 }
 
+impl Default for LineColorConfig {
+    fn default() -> Self {
+        Self::DEFAULT_SOLID
+    }
+}
+
 /// Visual color settings for background and fractal lines.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ColorConfig {
-    pub background: [f32; 3],
+    pub background: Option<[f32; 3]>,
     pub line: LineColorConfig,
 }
 
-impl Default for ColorConfig {
-    fn default() -> Self {
-        Self {
-            background: [0.0, 0.0, 0.0],
-            line: LineColorConfig::default(),
-        }
+impl ColorConfig {
+    pub const DEFAULT_BACKGROUND: [f32; 3] = [0.0, 0.0, 0.0];
+
+    pub fn effective_background(&self) -> [f32; 3] {
+        self.background.unwrap_or(Self::DEFAULT_BACKGROUND)
     }
 }
 
@@ -192,8 +210,10 @@ impl ConfigSource {
             rules.insert(key, rhs);
         }
 
-        let background = required_color(colors_table, "colors.background")?;
-        validate_color(background, "colors.background")?;
+        let background = optional_color(colors_table, "colors.background")?;
+        if let Some(background) = background {
+            validate_color(background, "colors.background")?;
+        }
 
         let mode = required_str(line_table, "colors.line.mode")?;
         let line = match mode {
@@ -269,6 +289,42 @@ impl ConfigSource {
             &mut self.document["turtle"]["angle"],
             Value::from(f64::from(angle)),
         );
+    }
+
+    pub(crate) fn set_background(&mut self, background: Option<[f32; 3]>) {
+        match background {
+            Some(background) => {
+                set_color_value_preserving_decor(
+                    &mut self.document["colors"]["background"],
+                    background,
+                );
+            }
+            None => {
+                if let Some(colors) = self.document["colors"].as_table_mut() {
+                    colors.remove("background");
+                }
+            }
+        }
+    }
+
+    pub(crate) fn set_line_color(&mut self, line_color: &LineColorConfig) {
+        let line = line_table_mut(&mut self.document);
+        set_value_preserving_decor(&mut line["mode"], Value::from(line_color.mode_key()));
+        match line_color {
+            LineColorConfig::Solid { color } => {
+                remove_inactive_line_color_keys(line, &["color"]);
+                set_color_value_preserving_decor(&mut line["color"], *color);
+            }
+            LineColorConfig::Gradient { start, end } => {
+                remove_inactive_line_color_keys(line, &["start", "end"]);
+                set_color_value_preserving_decor(&mut line["start"], *start);
+                set_color_value_preserving_decor(&mut line["end"], *end);
+            }
+            LineColorConfig::HueCycle { initial } => {
+                remove_inactive_line_color_keys(line, &["initial"]);
+                set_color_value_preserving_decor(&mut line["initial"], *initial);
+            }
+        }
     }
 }
 
@@ -384,13 +440,73 @@ fn validate_keys(table: &impl TableLike, path: &str, allowed: &[&str]) -> Result
 
 fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
     debug_assert!(
-        item.as_value().is_some(),
-        "expected scalar Value item; decor will be lost for table/absent items"
+        item.as_value().is_some() || item.is_none(),
+        "expected scalar Value or absent item; decor will be lost for table items"
     );
     if let Some(current_value) = item.as_value() {
         *next_value.decor_mut() = current_value.decor().clone();
     }
     *item = Item::Value(next_value);
+}
+
+fn set_color_value_preserving_decor(item: &mut Item, color: [f32; 3]) {
+    let can_update_components = item.as_array().is_some_and(|array| {
+        array.len() == 3 && array.iter().all(|value| value_as_f32(value).is_some())
+    });
+
+    if can_update_components {
+        let array = item
+            .as_array_mut()
+            .expect("array shape was checked before mutation");
+        for (idx, component) in color.into_iter().enumerate() {
+            array.replace(idx, color_component_value(component));
+        }
+    } else {
+        set_value_preserving_decor(item, color_value(color));
+    }
+}
+
+fn color_value(color: [f32; 3]) -> Value {
+    color.into_iter().map(color_component_value).collect()
+}
+
+fn color_component_value(component: f32) -> Value {
+    let raw = if component.is_nan() {
+        "nan".to_string()
+    } else if component == f32::INFINITY {
+        "inf".to_string()
+    } else if component == f32::NEG_INFINITY {
+        "-inf".to_string()
+    } else {
+        component.to_string()
+    };
+    raw.parse()
+        .unwrap_or_else(|_| Value::from(f64::from(component)))
+}
+
+const LINE_COLOR_VALUE_KEYS: &[&str] = &["color", "start", "end", "initial"];
+
+fn remove_inactive_line_color_keys(line: &mut Table, active_keys: &[&str]) {
+    for key in LINE_COLOR_VALUE_KEYS {
+        if !active_keys.contains(key) {
+            line.remove(key);
+        }
+    }
+}
+
+fn line_table_mut(document: &mut DocumentMut) -> &mut Table {
+    if document.get("colors").is_none_or(|item| !item.is_table()) {
+        document["colors"] = Item::Table(Table::new());
+    }
+    let colors = document["colors"]
+        .as_table_mut()
+        .expect("colors table was just ensured");
+    if colors.get("line").is_none_or(|item| !item.is_table()) {
+        colors["line"] = Item::Table(Table::new());
+    }
+    colors["line"]
+        .as_table_mut()
+        .expect("colors.line table was just ensured")
 }
 
 fn required_item<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a Item, ConfigError> {
@@ -488,6 +604,14 @@ fn required_color(table: &impl TableLike, field: &str) -> Result<[f32; 3], Confi
         })?;
     }
     Ok(out)
+}
+
+fn optional_color(table: &impl TableLike, field: &str) -> Result<Option<[f32; 3]>, ConfigError> {
+    match required_color(table, field) {
+        Ok(color) => Ok(Some(color)),
+        Err(ConfigError::MissingField(_)) => Ok(None),
+        Err(err) => Err(err),
+    }
 }
 
 fn value_as_f32(value: &Value) -> Option<f32> {
@@ -653,11 +777,54 @@ end = [ 0.7, 0.8, 0.9 ]
         assert_eq!(cfg.generation.initial_heading, 0.0);
         assert_eq!(cfg.generation.iterations, 4);
         assert_eq!(cfg.generation.rules[&'F'], "F-F++F-F");
-        assert_eq!(cfg.colors.background, [0.0, 0.0, 0.0]);
+        assert_eq!(cfg.colors.background, Some([0.0, 0.0, 0.0]));
         match cfg.colors.line {
             LineColorConfig::HueCycle { initial } => assert_eq!(initial, [0.25, 0.5, 0.5]),
             other => panic!("expected hue cycle line color, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_missing_background_as_none() {
+        let toml = NESTED_KOCH_TOML.replace("background = [0.0, 0.0, 0.0]\n\n", "");
+        let cfg = parse_config(&toml).unwrap();
+
+        assert_eq!(cfg.colors.background, None);
+    }
+
+    #[test]
+    fn parses_present_background_as_some_rgb() {
+        let toml = NESTED_KOCH_TOML.replace(
+            "background = [0.0, 0.0, 0.0]",
+            "background = [0.2, 0.3, 0.4]",
+        );
+        let cfg = parse_config(&toml).unwrap();
+
+        assert_eq!(cfg.colors.background, Some([0.2, 0.3, 0.4]));
+    }
+
+    #[test]
+    fn line_color_config_exposes_mode_defaults() {
+        assert_eq!(
+            LineColorConfig::DEFAULT_SOLID,
+            LineColorConfig::Solid {
+                color: [0.0, 0.9, 0.5],
+            }
+        );
+        assert_eq!(LineColorConfig::default(), LineColorConfig::DEFAULT_SOLID);
+        assert_eq!(
+            LineColorConfig::DEFAULT_GRADIENT,
+            LineColorConfig::Gradient {
+                start: [0.05, 0.35, 0.05],
+                end: [0.6, 0.9, 0.1],
+            }
+        );
+        assert_eq!(
+            LineColorConfig::DEFAULT_HUE_CYCLE,
+            LineColorConfig::HueCycle {
+                initial: [0.9, 0.0, 0.0],
+            }
+        );
     }
 
     #[test]

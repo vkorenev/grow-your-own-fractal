@@ -83,7 +83,7 @@ initial_heading = 0.0   # starting direction in degrees (0 = east,
                         # counter-clockwise positive)
 
 [colors]
-background = [0.0, 0.0, 0.0]   # RGB 0-1
+background = [0.0, 0.0, 0.0]   # optional RGB 0-1; omit to use black
 
 [colors.line]
 # mode = "solid"          # single color; set with `color`
@@ -106,7 +106,8 @@ Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,
 `l-system.rules`, `turtle.*`, `colors.*`, and `colors.line.*`. Those paths may
 be written with explicit tables, dotted keys, or implicit parent tables. Older
 flat TOML with top-level `name`, `axiom`, `[rules]`, `background_color`, or
-`[line_color]` is rejected. All colors are RGB arrays with finite components in
+`[line_color]` is rejected. `colors.background` is optional and falls back to
+black when omitted. All present colors are RGB arrays with finite components in
 the 0-1 range, including `hue_cycle`'s RGB `initial` color.
 
 Config parsing is format-preserving: parsing and serializing an unchanged TOML
@@ -123,9 +124,10 @@ draft, **Revert** drops the unapplied draft, and **Reset** restores the bundled
 preset default after an applied preset has diverged from that default. Custom
 entries exist only for the current session and do not have a bundled default to
 reset to. While a draft differs from the last-applied TOML document,
-iteration/angle/export controls are hidden until the draft is applied or
-reverted. On a clean entry, changing the iteration or angle controls updates the
-last-applied TOML document as well as the rendered scene.
+config-affecting controls and export buttons are hidden until the draft is
+applied or reverted. On a clean entry, changing the iteration, angle,
+background, or line color controls updates the last-applied TOML document as
+well as the rendered scene.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.
