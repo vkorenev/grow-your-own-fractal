@@ -42,7 +42,8 @@ impl FractalApp {
         if is_dirty {
             controls = controls
                 .push(text("Apply or Revert the edited config before using controls.").size(13));
-        } else if let Some(config) = &self.base_config {
+        } else {
+            let config = self.selected_config();
             controls = controls
                 .push(text("Overrides").size(13))
                 .push(text(format!("Iterations: {}", self.iterations)))
@@ -51,8 +52,10 @@ impl FractalApp {
                     self.iterations,
                     Message::IterationsChanged,
                 ))
-                .push(text(format!("Angle: {:.1}", self.angle)))
-                .push(slider(1.0..=180.0, self.angle, Message::AngleChanged).step(0.5));
+                .push(text(format!("Angle: {:.1}", config.generation.angle)))
+                .push(
+                    slider(1.0..=180.0, config.generation.angle, Message::AngleChanged).step(0.5),
+                );
 
             controls = push_color_controls(controls, config);
 

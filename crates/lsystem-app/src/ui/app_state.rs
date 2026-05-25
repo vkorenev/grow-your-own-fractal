@@ -173,10 +173,8 @@ pub(super) enum Message {
 pub(super) struct FractalApp {
     pub(super) config_workspace: ConfigWorkspace,
     pub(super) toml: iced::widget::text_editor::Content,
-    pub(super) base_config: Option<Config>,
     pub(super) iterations: u32,
     pub(super) max_iterations: u32,
-    pub(super) angle: f32,
     pub(super) png_width: u32,
     pub(super) png_width_text: String,
     pub(super) error: Option<String>,
@@ -195,16 +193,13 @@ impl FractalApp {
             .expect("at least one bundled preset should parse");
         let selected_entry = config_workspace.selected();
         let toml_text = selected_entry.draft_text().into_owned();
-        let base_config = selected_entry.applied_config();
-        let color_memory = ColorControlMemory::from_colors(&base_config.colors);
+        let color_memory = ColorControlMemory::from_colors(&selected_entry.applied_config().colors);
 
         let mut app = Self {
             config_workspace,
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
-            base_config: Some(base_config),
             iterations: 1,
             max_iterations: 1,
-            angle: 60.0,
             png_width: 2048,
             png_width_text: "2048".to_string(),
             error: None,
@@ -216,7 +211,7 @@ impl FractalApp {
             color_memory,
             scene_generation: Arc::new(AtomicU64::new(0)),
         };
-        app.sync_controls_from_base_config();
+        app.sync_controls_from_workspace();
         let task = app.schedule_scene_generation();
         (app, task)
     }
@@ -282,11 +277,7 @@ impl FractalApp {
                 self.update_clean_config("angle slider", |clean| clean.set_angle(angle))
             }
             Message::BackgroundOverrideToggled(enabled) => {
-                if let Some(Some(background)) = self
-                    .base_config
-                    .as_ref()
-                    .map(|config| config.colors.background)
-                {
+                if let Some(background) = self.selected_config().colors.background {
                     self.color_memory.remember_background(background);
                 }
                 let background = if enabled {
@@ -305,11 +296,7 @@ impl FractalApp {
                 })
             }
             Message::LineColorModeSelected(mode) => {
-                let current = self
-                    .base_config
-                    .as_ref()
-                    .map(|config| config.colors.line)
-                    .unwrap_or_default();
+                let current = self.selected_config().colors.line;
                 self.color_memory.remember_line(current);
                 let line_color = self.color_memory.line_for(mode);
                 self.update_clean_color_config("line color mode select", |clean| {
@@ -350,9 +337,7 @@ impl FractalApp {
                 } = result
                     && self.is_current_generation(generation)
                 {
-                    if let Some(config) = &self.base_config {
-                        scene.update_colors(&config.colors);
-                    }
+                    scene.update_colors(&self.selected_config().colors);
                     self.scene = scene;
                     self.scene_pending = false;
                 }
@@ -477,10 +462,9 @@ impl FractalApp {
             return Task::none();
         }
         match self.config_workspace.apply() {
-            Ok(entry) => {
-                self.base_config = Some(entry.applied_config());
-                self.reset_color_memory_from_base_config();
-                self.sync_controls_from_base_config();
+            Ok(_) => {
+                self.reset_color_memory_from_workspace();
+                self.sync_controls_from_workspace();
                 self.error = None;
                 self.export_status = None;
                 self.schedule_scene_generation()
@@ -504,11 +488,10 @@ impl FractalApp {
         let entry = self.config_workspace.selected();
         let toml_text = entry.draft_text();
         self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
-        self.base_config = Some(entry.applied_config());
         if reset_color_memory {
-            self.reset_color_memory_from_base_config();
+            self.reset_color_memory_from_workspace();
         }
-        self.sync_controls_from_base_config();
+        self.sync_controls_from_workspace();
         self.error = None;
         self.export_status = None;
         self.schedule_scene_generation()
@@ -562,63 +545,47 @@ impl FractalApp {
     }
 
     fn refresh_after_clean_color_update(&mut self) -> Task<Message> {
-        let entry = self.config_workspace.selected();
-        let toml_text = entry.draft_text();
-        let config = entry.applied_config();
-        self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
-        self.scene.update_colors(&config.colors);
-        self.base_config = Some(config);
+        self.toml = iced::widget::text_editor::Content::with_text(
+            self.config_workspace.selected().draft_text().as_ref(),
+        );
+        self.scene
+            .update_colors(&self.config_workspace.selected().applied_config().colors);
         self.error = None;
         self.export_status = None;
         Task::none()
     }
 
-    fn reset_color_memory_from_base_config(&mut self) {
-        self.color_memory = self
-            .base_config
-            .as_ref()
-            .map(|config| ColorControlMemory::from_colors(&config.colors))
-            .unwrap_or(ColorControlMemory {
-                background: ColorConfig::DEFAULT_BACKGROUND,
-                solid: None,
-                gradient: None,
-                hue_cycle: None,
-            });
+    fn reset_color_memory_from_workspace(&mut self) {
+        self.color_memory = ColorControlMemory::from_colors(&self.selected_config().colors);
     }
 
-    fn sync_controls_from_base_config(&mut self) {
-        let Some(config) = &self.base_config else {
-            return;
-        };
-        let max_seg =
-            lsystem_renderer::line_renderer::max_segments_for(config.generation.dimensions);
-        self.max_iterations = lsystem_core::max_safe_iterations(
-            &config.generation.axiom,
-            &config.generation.rules,
-            max_seg,
-        ) as u32;
-        self.iterations = config.generation.iterations.min(self.max_iterations);
-        self.angle = config.generation.angle;
+    fn sync_controls_from_workspace(&mut self) {
+        let generation = &self.config_workspace.selected().applied_config().generation;
+        let max_seg = lsystem_renderer::line_renderer::max_segments_for(generation.dimensions);
+        self.max_iterations =
+            lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
+        self.iterations = generation.iterations.min(self.max_iterations);
     }
 
-    fn effective_config(&self) -> Option<Config> {
-        self.base_config.clone().map(|mut config| {
-            config.generation.iterations = self.iterations;
-            config.generation.angle = self.angle;
-            config
-        })
+    pub(super) fn selected_config(&self) -> &Config {
+        self.config_workspace.selected().applied_config()
+    }
+
+    fn effective_config(&self) -> Config {
+        let mut config = self.selected_config().clone();
+        config.generation.iterations = self.iterations;
+        config
     }
 
     pub(super) fn effective_is_3d(&self) -> bool {
-        self.effective_config()
-            .map(|config| matches!(config.generation.dimensions, Dimensions::ThreeD))
-            .unwrap_or(false)
+        matches!(
+            self.selected_config().generation.dimensions,
+            Dimensions::ThreeD
+        )
     }
 
     fn schedule_scene_generation(&mut self) -> Task<Message> {
-        let Some(config) = self.effective_config() else {
-            return Task::none();
-        };
+        let config = self.effective_config();
 
         let generation = self
             .scene_generation
@@ -640,9 +607,7 @@ impl FractalApp {
     }
 
     fn export(&mut self, kind: ExportKind) -> Task<Message> {
-        let Some(config) = self.effective_config() else {
-            return Task::none();
-        };
+        let config = self.effective_config();
         let png_width = if matches!(kind, ExportKind::Png) {
             match self.normalized_png_width() {
                 Ok(width) => width,
@@ -774,30 +739,72 @@ mod tests {
         let _ = app.update(Message::BackgroundOverrideToggled(false));
 
         assert_eq!(
-            app.base_config
-                .as_ref()
-                .and_then(|config| config.colors.background),
+            app.config_workspace
+                .selected()
+                .applied_config()
+                .colors
+                .background,
             None
         );
 
         let _ = app.update(Message::BackgroundOverrideToggled(true));
 
         assert_eq!(
-            app.base_config
-                .as_ref()
-                .and_then(|config| config.colors.background),
+            app.config_workspace
+                .selected()
+                .applied_config()
+                .colors
+                .background,
             Some(background)
         );
     }
 
     #[test]
+    fn angle_change_updates_effective_config_from_workspace() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::AngleChanged(45.0));
+
+        assert_eq!(app.effective_config().generation.angle, 45.0);
+        assert_eq!(app.selected_config().generation.angle, 45.0);
+    }
+
+    #[test]
+    fn angle_changed_while_dirty_is_ignored() {
+        let (mut app, _) = FractalApp::new();
+        let original_angle = app.selected_config().generation.angle;
+        let modified = format!("{} ", app.config_workspace.selected().draft_text());
+        app.config_workspace.selected_mut().set_draft_text(modified);
+
+        let _ = app.update(Message::AngleChanged(original_angle + 10.0));
+
+        assert_eq!(app.selected_config().generation.angle, original_angle);
+    }
+
+    #[test]
     fn effective_is_3d_uses_config_not_stale_scene() {
         let (mut app, _) = FractalApp::new();
-        app.base_config
-            .as_mut()
-            .expect("app starts with a base config")
-            .generation
-            .dimensions = Dimensions::ThreeD;
+        let three_d_config = r#"[metadata]
+name = "3D"
+
+[l-system]
+dimensions = 3
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "F"
+
+[turtle]
+angle = 60.0
+step = 1.0
+initial_heading = 0.0
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
+"#;
+        app.config_workspace =
+            ConfigWorkspace::from_presets(vec![("3d", three_d_config.to_string())]).unwrap();
 
         assert!(!app.scene.is_3d());
         assert!(app.effective_is_3d());

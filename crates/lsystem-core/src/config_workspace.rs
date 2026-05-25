@@ -226,8 +226,8 @@ impl ConfigEntry {
         self.last_applied.to_toml_string()
     }
 
-    pub fn applied_config(&self) -> Config {
-        self.last_applied.config().clone()
+    pub fn applied_config(&self) -> &Config {
+        self.last_applied.config()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -468,7 +468,7 @@ color = [0.0, 0.9, 0.5]
     fn failed_apply_preserves_last_applied_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        let previous_config = workspace.selected().applied_config();
+        let previous_config = workspace.selected().applied_config().clone();
 
         workspace
             .selected_mut()
@@ -479,7 +479,7 @@ color = [0.0, 0.9, 0.5]
             ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
         ));
 
-        assert_eq!(workspace.selected().applied_config(), previous_config);
+        assert_eq!(workspace.selected().applied_config(), &previous_config);
         assert!(workspace.selected().is_dirty());
     }
 
@@ -872,7 +872,7 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         let previous_text = workspace.selected().draft_text().into_owned();
-        let previous_config = workspace.selected().applied_config();
+        let previous_config = workspace.selected().applied_config().clone();
 
         let error = clean_mut(&mut workspace)
             .set_background(Some([0.1, 1.2, 0.3]))
@@ -888,7 +888,7 @@ color = [0.0, 0.9, 0.5]
         ));
         let entry = workspace.selected();
         assert_eq!(entry.draft_text(), previous_text);
-        assert_eq!(entry.applied_config(), previous_config);
+        assert_eq!(entry.applied_config(), &previous_config);
         assert!(!entry.is_dirty());
     }
 
@@ -941,7 +941,7 @@ color = [0.0, 0.9, 0.5]
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         let previous_text = workspace.selected().draft_text().into_owned();
-        let previous_config = workspace.selected().applied_config();
+        let previous_config = workspace.selected().applied_config().clone();
 
         let error = clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
@@ -960,7 +960,7 @@ color = [0.0, 0.9, 0.5]
         ));
         let entry = workspace.selected();
         assert_eq!(entry.draft_text(), previous_text);
-        assert_eq!(entry.applied_config(), previous_config);
+        assert_eq!(entry.applied_config(), &previous_config);
         assert!(!entry.is_dirty());
     }
 
@@ -1253,14 +1253,14 @@ end = [ 1.0, 1.0, 1.0 ]
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         let previous_text = workspace.selected().draft_text().into_owned();
-        let previous_config = workspace.selected().applied_config();
+        let previous_config = workspace.selected().applied_config().clone();
 
         let error = clean_mut(&mut workspace).set_angle(f32::NAN).unwrap_err();
 
         assert!(matches!(error, ConfigError::InvalidAngle(_)));
         let entry = workspace.selected();
         assert_eq!(entry.draft_text(), previous_text);
-        assert_eq!(entry.applied_config(), previous_config);
+        assert_eq!(entry.applied_config(), &previous_config);
         assert!(!entry.is_dirty());
     }
 

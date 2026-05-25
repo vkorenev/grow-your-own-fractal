@@ -133,7 +133,7 @@ pub(crate) fn App() -> impl IntoView {
         ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
     let initial_entry = initial_workspace.selected();
     let first_toml = initial_entry.draft_text().into_owned();
-    let initial_config = initial_entry.applied_config();
+    let initial_config = initial_entry.applied_config().clone();
     let initial_max_iterations = max_iterations_for_config(&initial_config.generation);
 
     let (config_workspace, set_config_workspace) = signal(initial_workspace);
@@ -322,7 +322,9 @@ pub(crate) fn App() -> impl IntoView {
                 workspace
                     .selected_mut()
                     .set_draft_text(toml_text.get_untracked());
-                workspace.apply().map(|entry| entry.applied_config())
+                workspace
+                    .apply()
+                    .map(|entry| entry.applied_config().clone())
             });
             match applied {
                 Some(Ok(config)) => {
@@ -354,8 +356,8 @@ pub(crate) fn App() -> impl IntoView {
         let render_current = Rc::clone(&render_current);
         let install_full_config = Rc::clone(&install_full_config);
         move || {
-            let config =
-                config_workspace.with_untracked(|workspace| workspace.selected().applied_config());
+            let config = config_workspace
+                .with_untracked(|workspace| workspace.selected().applied_config().clone());
             install_full_config(config);
             render_current();
         }
@@ -482,7 +484,7 @@ pub(crate) fn App() -> impl IntoView {
                         move |_| {
                             let copied = set_config_workspace.try_update(|workspace| {
                                 workspace.copy().map(|entry| {
-                                    (entry.draft_text().into_owned(), entry.applied_config())
+                                    (entry.draft_text().into_owned(), entry.applied_config().clone())
                                 })
                             });
                             match copied {
@@ -556,7 +558,7 @@ pub(crate) fn App() -> impl IntoView {
                                         }
                                     }
                                     let entry = workspace.selected();
-                                    (entry.draft_text().into_owned(), entry.applied_config())
+                                    (entry.draft_text().into_owned(), entry.applied_config().clone())
                                 });
                                 match reverted {
                                     Some((text, config)) => {
@@ -595,7 +597,7 @@ pub(crate) fn App() -> impl IntoView {
                                 let reset = set_config_workspace.try_update(|workspace| {
                                     workspace.reset().map(|opt| {
                                         opt.map(|entry| {
-                                            (entry.draft_text().into_owned(), entry.applied_config())
+                                            (entry.draft_text().into_owned(), entry.applied_config().clone())
                                         })
                                     })
                                 });
@@ -1287,7 +1289,7 @@ fn update_clean_config(
         }
         Ok(Some((
             entry.draft_text().into_owned(),
-            entry.applied_config(),
+            entry.applied_config().clone(),
         )))
     });
 
