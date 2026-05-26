@@ -18,5 +18,6 @@ initial_heading = 0.0
 background = [0.0, 0.0, 0.0]
 
 [colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
+mode = "depth_gradient"
+start = [0.9, 0.6, 1]
+end = [0.1, 0.5, 1]
