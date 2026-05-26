@@ -1,16 +1,23 @@
 use glam::{Quat, Vec3};
 
+use crate::Segment3DWithTopologicalDepth;
+
 /// Heading = `orientation * Vec3::X`, left = `* Vec3::Y`, up = `* Vec3::Z`.
 pub(crate) struct Segments3D<I: Iterator<Item = char>> {
+    inner: Segments3DWithTopologicalDepth<I>,
+}
+
+pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = char>> {
     chars: I,
     angle_rad: f32,
     step: f32,
     position: Vec3,
     orientation: Quat,
-    stack: Vec<(Vec3, Quat)>,
+    topological_depth: u32,
+    stack: Vec<(Vec3, Quat, u32)>,
 }
 
-impl<I: Iterator<Item = char>> Segments3D<I> {
+impl<I: Iterator<Item = char>> Segments3DWithTopologicalDepth<I> {
     pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         Self {
             chars,
@@ -18,23 +25,28 @@ impl<I: Iterator<Item = char>> Segments3D<I> {
             step,
             position: Vec3::ZERO,
             orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
+            topological_depth: 0,
             stack: Vec::new(),
         }
     }
 }
 
-impl<I: Iterator<Item = char>> Iterator for Segments3D<I> {
-    type Item = [Vec3; 2];
+impl<I: Iterator<Item = char>> Iterator for Segments3DWithTopologicalDepth<I> {
+    type Item = Segment3DWithTopologicalDepth;
 
-    fn next(&mut self) -> Option<[Vec3; 2]> {
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.chars.next()? {
                 'F' => {
                     let forward = self.orientation * Vec3::X;
                     let next = self.position + forward * self.step;
-                    let seg = [self.position, next];
+                    let segment = Segment3DWithTopologicalDepth {
+                        points: [self.position, next],
+                        topological_depth: self.topological_depth,
+                    };
                     self.position = next;
-                    return Some(seg);
+                    self.topological_depth = self.topological_depth.saturating_add(1);
+                    return Some(segment);
                 }
                 'f' => {
                     let forward = self.orientation * Vec3::X;
@@ -61,18 +73,37 @@ impl<I: Iterator<Item = char>> Iterator for Segments3D<I> {
                 '|' => {
                     self.orientation *= Quat::from_rotation_z(std::f32::consts::PI);
                 }
-                '[' => self.stack.push((self.position, self.orientation)),
+                '[' => self
+                    .stack
+                    .push((self.position, self.orientation, self.topological_depth)),
                 ']' => {
                     let state = self.stack.pop();
                     debug_assert!(state.is_some(), "unmatched ] in validated program");
-                    if let Some((pos, orient)) = state {
+                    if let Some((pos, orient, topological_depth)) = state {
                         self.position = pos;
                         self.orientation = orient;
+                        self.topological_depth = topological_depth;
                     }
                 }
                 _ => {}
             }
         }
+    }
+}
+
+impl<I: Iterator<Item = char>> Segments3D<I> {
+    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        Self {
+            inner: Segments3DWithTopologicalDepth::new(chars, angle_deg, step, initial_heading_deg),
+        }
+    }
+}
+
+impl<I: Iterator<Item = char>> Iterator for Segments3D<I> {
+    type Item = [Vec3; 2];
+
+    fn next(&mut self) -> Option<[Vec3; 2]> {
+        self.inner.next().map(|segment| segment.points)
     }
 }
 
@@ -154,5 +185,77 @@ mod tests {
         let [a, b] = segs[2];
         assert!(a.distance(Vec3::X) < 1e-5, "restored position: {a}");
         assert!(b.distance(Vec3::new(1.0, -1.0, 0.0)) < 1e-5, "end: {b}");
+    }
+
+    #[test]
+    fn topological_depth_starts_at_zero_and_increments_per_drawn_segment() {
+        let cfg = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "FF".to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        };
+        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1]);
+    }
+
+    #[test]
+    fn topological_depth_restores_across_branches() {
+        let cfg = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "F[+F]F".to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        };
+        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1, 1]);
+    }
+
+    #[test]
+    fn nested_branches_restore_topological_depth() {
+        let cfg = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "F[+F[+F]F]F".to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        };
+        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1, 2, 2, 1]);
+    }
+
+    #[test]
+    fn moves_and_rotations_do_not_increment_topological_depth() {
+        let cfg = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: r"Ff&^/\F".to_string(),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        };
+        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1]);
     }
 }

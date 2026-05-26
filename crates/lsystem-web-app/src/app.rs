@@ -22,6 +22,7 @@ enum LineColorMode {
     Solid,
     Gradient,
     HueCycle,
+    DepthGradient,
 }
 
 impl LineColorMode {
@@ -30,6 +31,7 @@ impl LineColorMode {
             LineColorConfig::Solid { .. } => Self::Solid,
             LineColorConfig::Gradient { .. } => Self::Gradient,
             LineColorConfig::HueCycle { .. } => Self::HueCycle,
+            LineColorConfig::DepthGradient { .. } => Self::DepthGradient,
         }
     }
 
@@ -38,6 +40,7 @@ impl LineColorMode {
             "solid" => Some(Self::Solid),
             "gradient" => Some(Self::Gradient),
             "hue_cycle" => Some(Self::HueCycle),
+            "depth_gradient" => Some(Self::DepthGradient),
             _ => None,
         }
     }
@@ -47,6 +50,7 @@ impl LineColorMode {
             Self::Solid => "solid",
             Self::Gradient => "gradient",
             Self::HueCycle => "hue_cycle",
+            Self::DepthGradient => "depth_gradient",
         }
     }
 
@@ -55,6 +59,7 @@ impl LineColorMode {
             Self::Solid => LineColorConfig::DEFAULT_SOLID,
             Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
             Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
+            Self::DepthGradient => LineColorConfig::DEFAULT_DEPTH_GRADIENT,
         }
     }
 }
@@ -65,6 +70,7 @@ struct ColorControlMemory {
     solid: Option<[f32; 3]>,
     gradient: Option<([f32; 3], [f32; 3])>,
     hue_cycle: Option<[f32; 3]>,
+    depth_gradient: Option<([f32; 3], [f32; 3])>,
 }
 
 impl ColorControlMemory {
@@ -74,6 +80,7 @@ impl ColorControlMemory {
             solid: None,
             gradient: None,
             hue_cycle: None,
+            depth_gradient: None,
         };
         memory.remember_line(colors.line);
         memory
@@ -92,6 +99,9 @@ impl ColorControlMemory {
             LineColorConfig::Solid { color } => self.solid = Some(color),
             LineColorConfig::Gradient { start, end } => self.gradient = Some((start, end)),
             LineColorConfig::HueCycle { initial } => self.hue_cycle = Some(initial),
+            LineColorConfig::DepthGradient { start, end } => {
+                self.depth_gradient = Some((start, end));
+            }
         }
     }
 
@@ -120,6 +130,16 @@ impl ColorControlMemory {
                     ..
                 },
             ) => LineColorConfig::HueCycle { initial: *initial },
+            (
+                LineColorMode::DepthGradient,
+                Self {
+                    depth_gradient: Some((start, end)),
+                    ..
+                },
+            ) => LineColorConfig::DepthGradient {
+                start: *start,
+                end: *end,
+            },
             _ => mode.default_line_color(),
         }
     }
@@ -147,8 +167,7 @@ pub(crate) fn App() -> impl IntoView {
     let toml_text =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().draft_text().into_owned()));
     let max_iterations = Memo::new(move |_| {
-        config_workspace
-            .with(|ws| max_iterations_for_config(&ws.selected().applied_config().generation))
+        config_workspace.with(|ws| max_iterations_for_config(ws.selected().applied_config()))
     });
     let iterations = Memo::new(move |_| {
         let max = max_iterations.get();
@@ -193,27 +212,35 @@ pub(crate) fn App() -> impl IntoView {
                     else {
                         return;
                     };
-                    match renderer_state
-                        .recover_surface_and_render(canvas.clone())
-                        .await
-                    {
-                        Ok(RenderStatus::Rendered)
-                        | Ok(RenderStatus::Skipped(
-                            FrameSkipReason::Timeout | FrameSkipReason::Occluded,
-                        )) => {
-                            gpu_error.set(None);
-                            renderer.update_value(|opt| *opt = Some(renderer_state));
-                        }
-                        Ok(RenderStatus::Skipped(reason)) => {
-                            log::error!("Skipped GPU frame after surface recovery: {reason}");
-                            gpu_error.set(None);
-                            renderer.update_value(|opt| *opt = Some(renderer_state));
-                        }
-                        Ok(RenderStatus::SurfaceLost) => {
-                            log::error!("GPU surface was lost again after recovery");
-                            gpu_error.set(Some(
-                                "GPU surface was lost again after recovery".to_string(),
-                            ));
+                    match renderer_state.recover_surface(canvas.clone()).await {
+                        Ok(_) => {
+                            let mut config = base_config.get_untracked();
+                            config.generation.iterations = iterations.get_untracked();
+                            config.generation.angle = angle.get_untracked();
+                            match renderer_state
+                                .set_config_preserving_camera_and_render(&canvas, &config)
+                            {
+                                RenderStatus::Rendered
+                                | RenderStatus::Skipped(
+                                    FrameSkipReason::Timeout | FrameSkipReason::Occluded,
+                                ) => {
+                                    gpu_error.set(None);
+                                    renderer.update_value(|opt| *opt = Some(renderer_state));
+                                }
+                                RenderStatus::Skipped(reason) => {
+                                    log::error!(
+                                        "Skipped GPU frame after surface recovery: {reason}"
+                                    );
+                                    gpu_error.set(None);
+                                    renderer.update_value(|opt| *opt = Some(renderer_state));
+                                }
+                                RenderStatus::SurfaceLost => {
+                                    log::error!("GPU surface was lost again after recovery");
+                                    gpu_error.set(Some(
+                                        "GPU surface was lost again after recovery".to_string(),
+                                    ));
+                                }
+                            }
                         }
                         Err(err) => {
                             log::error!("Failed to recover GPU surface: {err}");
@@ -242,7 +269,7 @@ pub(crate) fn App() -> impl IntoView {
         };
         let config = base_config.get_untracked();
         with_renderer(canvas, renderer, recover_after_render, |r, c| {
-            r.set_colors_and_render(c, &config.colors)
+            r.set_colors_and_render(c, &config)
         });
     };
 
@@ -696,6 +723,7 @@ pub(crate) fn App() -> impl IntoView {
                         <option value="solid">"Solid"</option>
                         <option value="gradient">"Gradient"</option>
                         <option value="hue_cycle">"Hue cycle"</option>
+                        <option value="depth_gradient">"Depth gradient"</option>
                     </select>
 
                     <div
@@ -729,6 +757,112 @@ pub(crate) fn App() -> impl IntoView {
                                     error,
                                     render_current_colors,
                                     "solid line color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
+                            }
+                        />
+                    </div>
+
+                    <div
+                        class="color-row"
+                        class:hidden=move || {
+                            !matches!(
+                                current_line_color(base_config),
+                                LineColorConfig::DepthGradient { .. }
+                            )
+                        }
+                    >
+                        <label for="line-depth-gradient-start">"Depth start"</label>
+                        <input
+                            id="line-depth-gradient-start"
+                            type="color"
+                            prop:value=move || {
+                                match line_color_for_mode(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::DepthGradient,
+                                ) {
+                                    LineColorConfig::DepthGradient { start, .. } => {
+                                        rgb_to_hex(start)
+                                    }
+                                    _ => unreachable!(
+                                        "depth-gradient mode must provide depth-gradient color"
+                                    ),
+                                }
+                            }
+                            on:input:target=move |ev| {
+                                let Some(start) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                let current = line_color_for_mode_untracked(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::DepthGradient,
+                                );
+                                let end = match current {
+                                    LineColorConfig::DepthGradient { end, .. } => end,
+                                    _ => unreachable!(
+                                        "depth-gradient mode must provide depth-gradient color"
+                                    ),
+                                };
+                                let line_color = LineColorConfig::DepthGradient { start, end };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "depth-gradient start color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
+                            }
+                        />
+
+                        <label for="line-depth-gradient-end">"Depth end"</label>
+                        <input
+                            id="line-depth-gradient-end"
+                            type="color"
+                            prop:value=move || {
+                                match line_color_for_mode(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::DepthGradient,
+                                ) {
+                                    LineColorConfig::DepthGradient { end, .. } => rgb_to_hex(end),
+                                    _ => unreachable!(
+                                        "depth-gradient mode must provide depth-gradient color"
+                                    ),
+                                }
+                            }
+                            on:input:target=move |ev| {
+                                let Some(end) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                let current = line_color_for_mode_untracked(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::DepthGradient,
+                                );
+                                let start = match current {
+                                    LineColorConfig::DepthGradient { start, .. } => start,
+                                    _ => unreachable!(
+                                        "depth-gradient mode must provide depth-gradient color"
+                                    ),
+                                };
+                                let line_color = LineColorConfig::DepthGradient { start, end };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "depth-gradient end color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
                                     color_memory.update(|memory| {
@@ -1264,6 +1398,7 @@ mod tests {
             LineColorMode::Solid,
             LineColorMode::Gradient,
             LineColorMode::HueCycle,
+            LineColorMode::DepthGradient,
         ] {
             assert_eq!(LineColorMode::from_key(mode.key()), Some(mode));
         }
@@ -1283,6 +1418,10 @@ mod tests {
         assert_eq!(
             LineColorMode::from_line_color(&LineColorConfig::DEFAULT_HUE_CYCLE),
             LineColorMode::HueCycle
+        );
+        assert_eq!(
+            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_DEPTH_GRADIENT),
+            LineColorMode::DepthGradient
         );
     }
 
@@ -1319,6 +1458,10 @@ mod tests {
         assert_eq!(
             memory.line_for(LineColorMode::HueCycle),
             LineColorMode::HueCycle.default_line_color()
+        );
+        assert_eq!(
+            memory.line_for(LineColorMode::DepthGradient),
+            LineColorMode::DepthGradient.default_line_color()
         );
     }
 

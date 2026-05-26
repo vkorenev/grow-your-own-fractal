@@ -73,6 +73,7 @@ pub enum LineColorConfig {
     Solid { color: [f32; 3] },
     Gradient { start: [f32; 3], end: [f32; 3] },
     HueCycle { initial: [f32; 3] },
+    DepthGradient { start: [f32; 3], end: [f32; 3] },
 }
 
 impl LineColorConfig {
@@ -86,13 +87,22 @@ impl LineColorConfig {
     pub const DEFAULT_HUE_CYCLE: Self = Self::HueCycle {
         initial: [0.9, 0.0, 0.0],
     };
+    pub const DEFAULT_DEPTH_GRADIENT: Self = Self::DepthGradient {
+        start: [0.05, 0.35, 0.05],
+        end: [0.6, 0.9, 0.1],
+    };
 
     fn mode_key(&self) -> &'static str {
         match self {
             Self::Solid { .. } => "solid",
             Self::Gradient { .. } => "gradient",
             Self::HueCycle { .. } => "hue_cycle",
+            Self::DepthGradient { .. } => "depth_gradient",
         }
+    }
+
+    pub fn needs_topological_depth(&self) -> bool {
+        matches!(self, Self::DepthGradient { .. })
     }
 }
 
@@ -237,10 +247,18 @@ impl ConfigSource {
                 validate_color(initial, "colors.line.initial")?;
                 LineColorConfig::HueCycle { initial }
             }
+            "depth_gradient" => {
+                validate_keys(line_table, "colors.line", &["mode", "start", "end"])?;
+                let start = required_color(line_table, "colors.line.start")?;
+                let end = required_color(line_table, "colors.line.end")?;
+                validate_color(start, "colors.line.start")?;
+                validate_color(end, "colors.line.end")?;
+                LineColorConfig::DepthGradient { start, end }
+            }
             _ => {
                 return Err(ConfigError::InvalidField {
                     field: "colors.line.mode".to_string(),
-                    expected: "\"solid\", \"gradient\", or \"hue_cycle\"",
+                    expected: "\"solid\", \"gradient\", \"hue_cycle\", or \"depth_gradient\"",
                 });
             }
         };
@@ -323,6 +341,11 @@ impl ConfigSource {
             LineColorConfig::HueCycle { initial } => {
                 remove_inactive_line_color_keys(line, &["initial"]);
                 set_color_value_preserving_decor(&mut line["initial"], *initial);
+            }
+            LineColorConfig::DepthGradient { start, end } => {
+                remove_inactive_line_color_keys(line, &["start", "end"]);
+                set_color_value_preserving_decor(&mut line["start"], *start);
+                set_color_value_preserving_decor(&mut line["end"], *end);
             }
         }
     }
@@ -825,6 +848,68 @@ end = [ 0.7, 0.8, 0.9 ]
                 initial: [0.9, 0.0, 0.0],
             }
         );
+        assert_eq!(
+            LineColorConfig::DEFAULT_DEPTH_GRADIENT,
+            LineColorConfig::DepthGradient {
+                start: [0.05, 0.35, 0.05],
+                end: [0.6, 0.9, 0.1],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_depth_gradient_line_color() {
+        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "").replace(
+            r#"mode = "solid"
+color = [0.0, 0.9, 0.5]"#,
+            r#"mode = "depth_gradient"
+start = [0.1, 0.2, 0.3]
+end = [0.7, 0.8, 0.9]"#,
+        );
+
+        let cfg = parse_config(&toml).unwrap();
+
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::DepthGradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_missing_depth_gradient_keys() {
+        let cases = [
+            (
+                r#"mode = "depth_gradient"
+start = [0.1, 0.2, 0.3]"#,
+                "colors.line.end",
+            ),
+            (
+                r#"mode = "depth_gradient"
+end = [0.7, 0.8, 0.9]"#,
+                "colors.line.start",
+            ),
+        ];
+
+        for (replacement, missing_field) in cases {
+            let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "").replace(
+                r#"mode = "solid"
+color = [0.0, 0.9, 0.5]"#,
+                replacement,
+            );
+
+            let err = parse_config(&toml).unwrap_err();
+
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::MissingField(ref field) if field == missing_field
+                ),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -1008,6 +1093,42 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
+    fn rejects_out_of_range_depth_gradient_color_component() {
+        for (field, replacement) in [
+            (
+                "colors.line.start",
+                r#"mode = "depth_gradient"
+start = [0.0, 1.2, 0.0]
+end = [1.0, 1.0, 1.0]"#,
+            ),
+            (
+                "colors.line.end",
+                r#"mode = "depth_gradient"
+start = [0.0, 0.0, 0.0]
+end = [1.0, 1.2, 1.0]"#,
+            ),
+        ] {
+            let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "").replace(
+                r#"mode = "solid"
+color = [0.0, 0.9, 0.5]"#,
+                replacement,
+            );
+            let err = parse_config(&toml).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ConfigError::InvalidColorComponent {
+                        field: ref error_field,
+                        component: 1,
+                        value
+                    } if error_field == field && value == 1.2
+                ),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_non_finite_line_color_component() {
         let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
         let toml = toml.replace("color = [0.0, 0.9, 0.5]", "color = [0.0, nan, 0.5]");
@@ -1053,6 +1174,14 @@ start = [0.0, 0.0, 0.0]"#,
             (
                 "gradient",
                 r#"mode = "gradient"
+start = [0.0, 0.0, 0.0]
+end = [1.0, 1.0, 1.0]
+color = [0.0, 0.9, 0.5]"#,
+                "colors.line.color",
+            ),
+            (
+                "depth_gradient",
+                r#"mode = "depth_gradient"
 start = [0.0, 0.0, 0.0]
 end = [1.0, 1.0, 1.0]
 color = [0.0, 0.9, 0.5]"#,

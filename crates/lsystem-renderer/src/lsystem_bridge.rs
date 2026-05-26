@@ -1,30 +1,36 @@
 use glam::{Vec2, Vec3};
-use lsystem_core::{LineColorConfig, color_util::rgb_to_hsv};
+use lsystem_core::{
+    LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
+    color_util::rgb_to_hsv,
+};
 
-use crate::line_renderer::{ColorParams, Transform, Vertex2D, Vertex3D};
+use crate::line_renderer::{
+    ColorParams, Segment2D, Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D,
+    Transform,
+};
 
-pub struct VertexData {
-    pub vertices: Vec<Vertex2D>,
+pub struct SegmentData {
+    pub segments: Vec<Segment2D>,
     pub bounds_min: [f32; 2],
     pub bounds_max: [f32; 2],
 }
 
-pub struct VertexDataBuilder {
+pub struct SegmentDataBuilder {
     min_x: f32,
     min_y: f32,
     max_x: f32,
     max_y: f32,
-    vertices: Vec<Vertex2D>,
+    segments: Vec<Segment2D>,
 }
 
-impl VertexDataBuilder {
+impl SegmentDataBuilder {
     pub fn new() -> Self {
         Self {
             min_x: f32::INFINITY,
             min_y: f32::INFINITY,
             max_x: f32::NEG_INFINITY,
             max_y: f32::NEG_INFINITY,
-            vertices: Vec::new(),
+            segments: Vec::new(),
         }
     }
 
@@ -33,60 +39,132 @@ impl VertexDataBuilder {
         self.min_y = self.min_y.min(a.y).min(b.y);
         self.max_x = self.max_x.max(a.x).max(b.x);
         self.max_y = self.max_y.max(a.y).max(b.y);
-        self.vertices.push(Vertex2D {
-            position: [a.x, a.y],
-        });
-        self.vertices.push(Vertex2D {
-            position: [b.x, b.y],
+        self.segments.push(Segment2D {
+            start: [a.x, a.y],
+            end: [b.x, b.y],
         });
     }
 
-    pub fn finish(self) -> VertexData {
+    pub fn finish(self) -> SegmentData {
         let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
             ([-1.0, -1.0], [1.0, 1.0])
         } else {
             ([self.min_x, self.min_y], [self.max_x, self.max_y])
         };
 
-        VertexData {
-            vertices: self.vertices,
+        SegmentData {
+            segments: self.segments,
             bounds_min,
             bounds_max,
         }
     }
 }
 
-impl Default for VertexDataBuilder {
+impl Default for SegmentDataBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub fn geometry_to_vertices(segments: impl Iterator<Item = [Vec2; 2]>) -> VertexData {
-    let mut builder = VertexDataBuilder::new();
+pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> SegmentData {
+    let mut builder = SegmentDataBuilder::new();
     for segment in segments {
         builder.push_segment(segment);
     }
     builder.finish()
 }
 
-pub struct VertexData3D {
-    pub vertices: Vec<Vertex3D>,
+pub struct TopologicalDepthSegmentData {
+    pub segments: Vec<TopologicalDepthSegment2D>,
+    pub bounds_min: [f32; 2],
+    pub bounds_max: [f32; 2],
+    pub max_topological_depth: u32,
+}
+
+pub struct TopologicalDepthSegmentDataBuilder {
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    max_topological_depth: u32,
+    segments: Vec<TopologicalDepthSegment2D>,
+}
+
+impl TopologicalDepthSegmentDataBuilder {
+    pub fn new() -> Self {
+        Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+            max_topological_depth: 0,
+            segments: Vec::new(),
+        }
+    }
+
+    pub fn push_segment(&mut self, segment: Segment2DWithTopologicalDepth) {
+        let [a, b] = segment.points;
+        self.min_x = self.min_x.min(a.x).min(b.x);
+        self.min_y = self.min_y.min(a.y).min(b.y);
+        self.max_x = self.max_x.max(a.x).max(b.x);
+        self.max_y = self.max_y.max(a.y).max(b.y);
+        self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
+        self.segments.push(TopologicalDepthSegment2D {
+            start: [a.x, a.y],
+            end: [b.x, b.y],
+            topological_depth: segment.topological_depth,
+        });
+    }
+
+    pub fn finish(self) -> TopologicalDepthSegmentData {
+        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
+            ([-1.0, -1.0], [1.0, 1.0])
+        } else {
+            ([self.min_x, self.min_y], [self.max_x, self.max_y])
+        };
+
+        TopologicalDepthSegmentData {
+            segments: self.segments,
+            bounds_min,
+            bounds_max,
+            max_topological_depth: self.max_topological_depth,
+        }
+    }
+}
+
+impl Default for TopologicalDepthSegmentDataBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn geometry_to_depth_segments(
+    segments: impl Iterator<Item = Segment2DWithTopologicalDepth>,
+) -> TopologicalDepthSegmentData {
+    let mut builder = TopologicalDepthSegmentDataBuilder::new();
+    for segment in segments {
+        builder.push_segment(segment);
+    }
+    builder.finish()
+}
+
+pub struct SegmentData3D {
+    pub segments: Vec<Segment3D>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
 }
 
-pub struct VertexDataBuilder3D {
+pub struct SegmentDataBuilder3D {
     min_x: f32,
     min_y: f32,
     min_z: f32,
     max_x: f32,
     max_y: f32,
     max_z: f32,
-    vertices: Vec<Vertex3D>,
+    segments: Vec<Segment3D>,
 }
 
-impl VertexDataBuilder3D {
+impl SegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
             min_x: f32::INFINITY,
@@ -95,7 +173,7 @@ impl VertexDataBuilder3D {
             max_x: f32::NEG_INFINITY,
             max_y: f32::NEG_INFINITY,
             max_z: f32::NEG_INFINITY,
-            vertices: Vec::new(),
+            segments: Vec::new(),
         }
     }
 
@@ -106,15 +184,13 @@ impl VertexDataBuilder3D {
         self.max_x = self.max_x.max(a.x).max(b.x);
         self.max_y = self.max_y.max(a.y).max(b.y);
         self.max_z = self.max_z.max(a.z).max(b.z);
-        self.vertices.push(Vertex3D {
-            position: [a.x, a.y, a.z],
-        });
-        self.vertices.push(Vertex3D {
-            position: [b.x, b.y, b.z],
+        self.segments.push(Segment3D {
+            start: [a.x, a.y, a.z],
+            end: [b.x, b.y, b.z],
         });
     }
 
-    pub fn finish(self) -> VertexData3D {
+    pub fn finish(self) -> SegmentData3D {
         let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
             ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
         } else {
@@ -124,39 +200,128 @@ impl VertexDataBuilder3D {
             )
         };
 
-        VertexData3D {
-            vertices: self.vertices,
+        SegmentData3D {
+            segments: self.segments,
             bounds_min,
             bounds_max,
         }
     }
 }
 
-impl Default for VertexDataBuilder3D {
+impl Default for SegmentDataBuilder3D {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub fn geometry_to_vertices_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> VertexData3D {
-    let mut builder = VertexDataBuilder3D::new();
+pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> SegmentData3D {
+    let mut builder = SegmentDataBuilder3D::new();
     for segment in segments {
         builder.push_segment(segment);
     }
     builder.finish()
 }
 
-pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> ColorParams {
+pub struct TopologicalDepthSegmentData3D {
+    pub segments: Vec<TopologicalDepthSegment3D>,
+    pub bounds_min: [f32; 3],
+    pub bounds_max: [f32; 3],
+    pub max_topological_depth: u32,
+}
+
+pub struct TopologicalDepthSegmentDataBuilder3D {
+    min_x: f32,
+    min_y: f32,
+    min_z: f32,
+    max_x: f32,
+    max_y: f32,
+    max_z: f32,
+    max_topological_depth: u32,
+    segments: Vec<TopologicalDepthSegment3D>,
+}
+
+impl TopologicalDepthSegmentDataBuilder3D {
+    pub fn new() -> Self {
+        Self {
+            min_x: f32::INFINITY,
+            min_y: f32::INFINITY,
+            min_z: f32::INFINITY,
+            max_x: f32::NEG_INFINITY,
+            max_y: f32::NEG_INFINITY,
+            max_z: f32::NEG_INFINITY,
+            max_topological_depth: 0,
+            segments: Vec::new(),
+        }
+    }
+
+    pub fn push_segment(&mut self, segment: Segment3DWithTopologicalDepth) {
+        let [a, b] = segment.points;
+        self.min_x = self.min_x.min(a.x).min(b.x);
+        self.min_y = self.min_y.min(a.y).min(b.y);
+        self.min_z = self.min_z.min(a.z).min(b.z);
+        self.max_x = self.max_x.max(a.x).max(b.x);
+        self.max_y = self.max_y.max(a.y).max(b.y);
+        self.max_z = self.max_z.max(a.z).max(b.z);
+        self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
+        self.segments.push(TopologicalDepthSegment3D {
+            start: [a.x, a.y, a.z],
+            end: [b.x, b.y, b.z],
+            topological_depth: segment.topological_depth,
+        });
+    }
+
+    pub fn finish(self) -> TopologicalDepthSegmentData3D {
+        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
+            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
+        } else {
+            (
+                [self.min_x, self.min_y, self.min_z],
+                [self.max_x, self.max_y, self.max_z],
+            )
+        };
+
+        TopologicalDepthSegmentData3D {
+            segments: self.segments,
+            bounds_min,
+            bounds_max,
+            max_topological_depth: self.max_topological_depth,
+        }
+    }
+}
+
+impl Default for TopologicalDepthSegmentDataBuilder3D {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn geometry_to_depth_segments_3d(
+    segments: impl Iterator<Item = Segment3DWithTopologicalDepth>,
+) -> TopologicalDepthSegmentData3D {
+    let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
+    for segment in segments {
+        builder.push_segment(segment);
+    }
+    builder.finish()
+}
+
+pub fn color_params_from_config(
+    line: &LineColorConfig,
+    total_segments: u32,
+    max_topological_depth: u32,
+) -> ColorParams {
     match *line {
         LineColorConfig::Solid { color: c } => ColorParams {
             mode: 0,
             total_segments,
+            max_topological_depth: 0,
             color_start: [c[0], c[1], c[2], 1.0],
             ..Default::default()
         },
         LineColorConfig::Gradient { start, end } => ColorParams {
             mode: 1,
             total_segments,
+            max_topological_depth: 0,
             color_start: [start[0], start[1], start[2], 1.0],
             color_end: [end[0], end[1], end[2], 1.0],
             ..Default::default()
@@ -166,12 +331,21 @@ pub fn color_params_from_config(line: &LineColorConfig, total_segments: u32) -> 
             ColorParams {
                 mode: 2,
                 total_segments,
+                max_topological_depth: 0,
                 hue_start,
                 saturation,
                 value,
                 ..Default::default()
             }
         }
+        LineColorConfig::DepthGradient { start, end } => ColorParams {
+            mode: 3,
+            total_segments,
+            max_topological_depth,
+            color_start: [start[0], start[1], start[2], 1.0],
+            color_end: [end[0], end[1], end[2], 1.0],
+            ..Default::default()
+        },
     }
 }
 
@@ -225,6 +399,7 @@ mod tests {
                 initial: [0.25, 0.5, 0.5],
             },
             9,
+            0,
         );
 
         assert_eq!(params.mode, 2);
@@ -232,6 +407,39 @@ mod tests {
         assert!(close(params.hue_start, 180.0));
         assert!(close(params.saturation, 0.5));
         assert!(close(params.value, 0.5));
+    }
+
+    #[test]
+    fn depth_gradient_maps_to_mode_three_with_max_topological_depth() {
+        let params = color_params_from_config(
+            &LineColorConfig::DepthGradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            },
+            5,
+            3,
+        );
+
+        assert_eq!(params.mode, 3);
+        assert_eq!(params.total_segments, 5);
+        assert_eq!(params.max_topological_depth, 3);
+        assert_eq!(params.color_start, [0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(params.color_end, [0.7, 0.8, 0.9, 1.0]);
+    }
+
+    #[test]
+    fn depth_gradient_preserves_zero_max_topological_depth() {
+        let params = color_params_from_config(
+            &LineColorConfig::DepthGradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            },
+            1,
+            0,
+        );
+
+        assert_eq!(params.mode, 3);
+        assert_eq!(params.max_topological_depth, 0);
     }
 
     fn cfg(axiom: &str) -> GenerationConfig {
@@ -248,40 +456,110 @@ mod tests {
 
     #[test]
     fn empty_geometry_uses_fallback_bounds() {
-        let VertexData {
-            vertices,
+        let SegmentData {
+            segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg("A")));
-        assert!(vertices.is_empty());
+        } = geometry_to_segments(generate(&cfg("A")));
+        assert!(segments.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
     }
 
     #[test]
-    fn single_segment_produces_two_vertices_and_tight_bounds() {
-        let VertexData {
-            vertices,
+    fn empty_depth_geometry_uses_fallback_bounds_and_zero_max_depth() {
+        let data =
+            geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(&cfg("A")));
+
+        assert!(data.segments.is_empty());
+        assert_eq!(data.max_topological_depth, 0);
+        assert!(close(data.bounds_min[0], -1.0) && close(data.bounds_min[1], -1.0));
+        assert!(close(data.bounds_max[0], 1.0) && close(data.bounds_max[1], 1.0));
+    }
+
+    #[test]
+    fn empty_depth_geometry_3d_uses_fallback_bounds_and_zero_max_depth() {
+        let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
+            &GenerationConfig {
+                dimensions: Dimensions::ThreeD,
+                axiom: "A".to_string(),
+                iterations: 0,
+                angle: 90.0,
+                step: 1.0,
+                initial_heading: 0.0,
+                rules: BTreeMap::new(),
+            },
+        ));
+
+        assert!(data.segments.is_empty());
+        assert_eq!(data.max_topological_depth, 0);
+        assert_eq!(data.bounds_min, [-1.0, -1.0, -1.0]);
+        assert_eq!(data.bounds_max, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn single_segment_produces_one_segment_record_and_tight_bounds() {
+        let SegmentData {
+            segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg("F")));
-        assert_eq!(vertices.len(), 2);
-        assert!(close(vertices[0].position[0], 0.0) && close(vertices[0].position[1], 0.0));
-        assert!(close(vertices[1].position[0], 1.0) && close(vertices[1].position[1], 0.0));
+        } = geometry_to_segments(generate(&cfg("F")));
+        assert_eq!(segments.len(), 1);
+        assert!(close(segments[0].start[0], 0.0) && close(segments[0].start[1], 0.0));
+        assert!(close(segments[0].end[0], 1.0) && close(segments[0].end[1], 0.0));
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 0.0));
     }
 
     #[test]
     fn bounds_are_tight_over_all_segments() {
-        let VertexData {
-            vertices,
+        let SegmentData {
+            segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_vertices(generate(&cfg("F+F-F")));
-        assert_eq!(vertices.len(), 6);
+        } = geometry_to_segments(generate(&cfg("F+F-F")));
+        assert_eq!(segments.len(), 3);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
+    }
+
+    #[test]
+    fn topological_depth_segments_preserve_depth_and_compute_max() {
+        let data = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(&cfg(
+            "F[+F]F",
+        )));
+
+        assert_eq!(data.segments.len(), 3);
+        assert_eq!(data.segments[0].topological_depth, 0);
+        assert_eq!(data.segments[1].topological_depth, 1);
+        assert_eq!(data.segments[2].topological_depth, 1);
+        assert_eq!(data.max_topological_depth, 1);
+        assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
+        assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
+    }
+
+    #[test]
+    fn topological_depth_segments_3d_preserve_depth_and_compute_max() {
+        let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
+            &GenerationConfig {
+                dimensions: Dimensions::ThreeD,
+                axiom: "F[+F]F".to_string(),
+                iterations: 0,
+                angle: 90.0,
+                step: 1.0,
+                initial_heading: 0.0,
+                rules: BTreeMap::new(),
+            },
+        ));
+
+        assert_eq!(data.segments.len(), 3);
+        assert_eq!(data.segments[0].topological_depth, 0);
+        assert_eq!(data.segments[1].topological_depth, 1);
+        assert_eq!(data.segments[2].topological_depth, 1);
+        assert_eq!(data.max_topological_depth, 1);
+        assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
+        assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
+        assert!(close(data.bounds_min[2], 0.0) && close(data.bounds_max[2], 0.0));
     }
 
     #[test]

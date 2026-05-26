@@ -3,21 +3,39 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use lsystem_core::Dimensions;
+use lsystem_core::{Dimensions, LineColorConfig};
 use wgpu::util::DeviceExt;
 
 use crate::wgpu_util;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-pub struct Vertex2D {
-    pub position: [f32; 2],
+pub struct Segment2D {
+    pub start: [f32; 2],
+    pub end: [f32; 2],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
-pub struct Vertex3D {
-    pub position: [f32; 3],
+pub struct Segment3D {
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct TopologicalDepthSegment2D {
+    pub start: [f32; 2],
+    pub end: [f32; 2],
+    pub topological_depth: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct TopologicalDepthSegment3D {
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+    pub topological_depth: u32,
 }
 
 #[repr(C)]
@@ -47,13 +65,25 @@ impl Default for Mvp {
     }
 }
 
+const GUARANTEED_VERTEX_BUFFER_BYTES: u64 = 268_435_456;
+
 /// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
-/// Each 2D segment occupies 2 vertices × `size_of::<Vertex2D>()` bytes.
-const MAX_SEGMENTS_2D: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex2D>() as u64);
+/// Each 2D segment occupies one `Segment2D` instance record.
+const MAX_SEGMENTS_2D: u64 =
+    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<Segment2D>() as u64;
+
+/// Maximum number of topological-depth 2D line segments that fit in a 256 MiB vertex buffer.
+const MAX_DEPTH_SEGMENTS_2D: u64 =
+    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<TopologicalDepthSegment2D>() as u64;
 
 /// Maximum number of 3D line segments that fit in a 256 MiB vertex buffer.
-/// Each 3D segment occupies 2 vertices × `size_of::<Vertex3D>()` bytes.
-const MAX_SEGMENTS_3D: u64 = 268_435_456 / (2 * std::mem::size_of::<Vertex3D>() as u64);
+/// Each 3D segment occupies one `Segment3D` instance record.
+const MAX_SEGMENTS_3D: u64 =
+    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<Segment3D>() as u64;
+
+/// Maximum number of topological-depth 3D line segments that fit in a 256 MiB vertex buffer.
+const MAX_DEPTH_SEGMENTS_3D: u64 =
+    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<TopologicalDepthSegment3D>() as u64;
 
 /// Returns the segment cap appropriate for the given dimensions.
 pub fn max_segments_for(dimensions: Dimensions) -> u64 {
@@ -63,15 +93,25 @@ pub fn max_segments_for(dimensions: Dimensions) -> u64 {
     }
 }
 
+/// Returns the segment cap appropriate for the dimensions and active line color mode.
+pub fn max_segments_for_line_color(dimensions: Dimensions, line: &LineColorConfig) -> u64 {
+    match dimensions {
+        Dimensions::TwoD if line.needs_topological_depth() => MAX_DEPTH_SEGMENTS_2D,
+        Dimensions::ThreeD if line.needs_topological_depth() => MAX_DEPTH_SEGMENTS_3D,
+        _ => max_segments_for(dimensions),
+    }
+}
+
 /// Per-frame color parameters written to the GPU as a uniform.
 /// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
 #[repr(C)]
 #[derive(Copy, Clone, Default, Pod, Zeroable)]
 pub struct ColorParams {
-    /// 0 = solid, 1 = gradient, 2 = hue_cycle
+    /// 0 = solid, 1 = gradient, 2 = hue_cycle, 3 = depth_gradient
     pub mode: u32,
     pub total_segments: u32,
-    pub _pad: [u32; 2],
+    pub max_topological_depth: u32,
+    pub _pad: u32,
     pub color_start: [f32; 4],
     pub color_end: [f32; 4],
     pub hue_start: f32,
@@ -99,10 +139,10 @@ impl GrowableVertexBuffer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        vertices: &[V],
+        segments: &[V],
         label: &str,
     ) {
-        let required = std::mem::size_of_val(vertices) as u64;
+        let required = std::mem::size_of_val(segments) as u64;
         if required > 0 {
             if self.capacity < required {
                 self.capacity = required.next_power_of_two();
@@ -114,11 +154,17 @@ impl GrowableVertexBuffer {
                 }));
             }
             if let Some(buffer) = &self.buffer {
-                queue.write_buffer(buffer, 0, bytemuck::cast_slice(vertices));
+                queue.write_buffer(buffer, 0, bytemuck::cast_slice(segments));
             }
         }
-        self.count = vertices.len() as u32;
+        self.count = segments.len() as u32;
     }
+}
+
+#[derive(Clone, Copy)]
+enum ActiveSegmentBuffer {
+    Normal,
+    TopologicalDepth,
 }
 
 fn draw_line_list(
@@ -135,17 +181,68 @@ fn draw_line_list(
         && let Some(buf) = &vertex_buffer.buffer
     {
         render_pass.set_vertex_buffer(0, buf.slice(..));
-        render_pass.draw(0..vertex_buffer.count, 0..1);
+        render_pass.draw(0..2, 0..vertex_buffer.count);
     }
     render_pass.pop_debug_group();
 }
 
+struct LinePipelineDescriptor<'a> {
+    format: wgpu::TextureFormat,
+    label: &'static str,
+    vertex_entry_point: &'static str,
+    array_stride: wgpu::BufferAddress,
+    attributes: &'a [wgpu::VertexAttribute],
+}
+
+fn create_line_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    descriptor: LinePipelineDescriptor<'_>,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(descriptor.label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some(descriptor.vertex_entry_point),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: descriptor.array_stride,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: descriptor.attributes,
+            }],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: descriptor.format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 pub struct LinePipeline2D {
     pipeline: wgpu::RenderPipeline,
+    depth_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    vertex_buffer: GrowableVertexBuffer,
+    segment_buffer: GrowableVertexBuffer,
+    depth_segment_buffer: GrowableVertexBuffer,
+    active_segment_buffer: ActiveSegmentBuffer,
 }
 
 impl LinePipeline2D {
@@ -221,45 +318,43 @@ impl LinePipeline2D {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("lsystem_2d_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex2D>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x2],
-                }],
-                compilation_options: Default::default(),
+        let normal_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
+        let depth_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+        let pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            LinePipelineDescriptor {
+                format,
+                label: "lsystem_2d_pipeline",
+                vertex_entry_point: "vs_main",
+                array_stride: std::mem::size_of::<Segment2D>() as wgpu::BufferAddress,
+                attributes: &normal_attrs,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
+        );
+        let depth_pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            LinePipelineDescriptor {
+                format,
+                label: "lsystem_2d_depth_pipeline",
+                vertex_entry_point: "vs_depth_main",
+                array_stride: std::mem::size_of::<TopologicalDepthSegment2D>()
+                    as wgpu::BufferAddress,
+                attributes: &depth_attrs,
             },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         Self {
             pipeline,
+            depth_pipeline,
             uniform_buffer,
             color_params_buffer,
             bind_group,
-            vertex_buffer: GrowableVertexBuffer::new(),
+            segment_buffer: GrowableVertexBuffer::new(),
+            depth_segment_buffer: GrowableVertexBuffer::new(),
+            active_segment_buffer: ActiveSegmentBuffer::Normal,
         }
     }
 
@@ -267,11 +362,33 @@ impl LinePipeline2D {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        vertices: &[Vertex2D],
+        segments: &[Segment2D],
         color_params: ColorParams,
     ) {
-        self.vertex_buffer
-            .upload(device, queue, vertices, "lsystem_2d_vertices");
+        self.segment_buffer
+            .upload(device, queue, segments, "lsystem_2d_segments");
+        self.active_segment_buffer = ActiveSegmentBuffer::Normal;
+        queue.write_buffer(
+            &self.color_params_buffer,
+            0,
+            bytemuck::bytes_of(&color_params),
+        );
+    }
+
+    pub fn upload_with_topological_depth(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        segments: &[TopologicalDepthSegment2D],
+        color_params: ColorParams,
+    ) {
+        self.depth_segment_buffer.upload(
+            device,
+            queue,
+            segments,
+            "lsystem_2d_topological_depth_segments",
+        );
+        self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
         queue.write_buffer(
             &self.color_params_buffer,
             0,
@@ -284,22 +401,34 @@ impl LinePipeline2D {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        draw_line_list(
-            render_pass,
-            &self.pipeline,
-            &self.bind_group,
-            &self.vertex_buffer,
-            "lsystem_2d_line_draw",
-        );
+        match self.active_segment_buffer {
+            ActiveSegmentBuffer::Normal => draw_line_list(
+                render_pass,
+                &self.pipeline,
+                &self.bind_group,
+                &self.segment_buffer,
+                "lsystem_2d_line_draw",
+            ),
+            ActiveSegmentBuffer::TopologicalDepth => draw_line_list(
+                render_pass,
+                &self.depth_pipeline,
+                &self.bind_group,
+                &self.depth_segment_buffer,
+                "lsystem_2d_depth_line_draw",
+            ),
+        }
     }
 }
 
 pub struct LinePipeline3D {
     pipeline: wgpu::RenderPipeline,
+    depth_pipeline: wgpu::RenderPipeline,
     mvp_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    vertex_buffer: GrowableVertexBuffer,
+    segment_buffer: GrowableVertexBuffer,
+    depth_segment_buffer: GrowableVertexBuffer,
+    active_segment_buffer: ActiveSegmentBuffer,
 }
 
 impl LinePipeline3D {
@@ -370,45 +499,43 @@ impl LinePipeline3D {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("lsystem_3d_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex3D>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                }],
-                compilation_options: Default::default(),
+        let normal_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        let depth_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32];
+        let pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            LinePipelineDescriptor {
+                format,
+                label: "lsystem_3d_pipeline",
+                vertex_entry_point: "vs_main",
+                array_stride: std::mem::size_of::<Segment3D>() as wgpu::BufferAddress,
+                attributes: &normal_attrs,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
+        );
+        let depth_pipeline = create_line_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            LinePipelineDescriptor {
+                format,
+                label: "lsystem_3d_depth_pipeline",
+                vertex_entry_point: "vs_depth_main",
+                array_stride: std::mem::size_of::<TopologicalDepthSegment3D>()
+                    as wgpu::BufferAddress,
+                attributes: &depth_attrs,
             },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        );
 
         Self {
             pipeline,
+            depth_pipeline,
             mvp_buffer,
             color_params_buffer,
             bind_group,
-            vertex_buffer: GrowableVertexBuffer::new(),
+            segment_buffer: GrowableVertexBuffer::new(),
+            depth_segment_buffer: GrowableVertexBuffer::new(),
+            active_segment_buffer: ActiveSegmentBuffer::Normal,
         }
     }
 
@@ -416,11 +543,33 @@ impl LinePipeline3D {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        vertices: &[Vertex3D],
+        segments: &[Segment3D],
         color_params: ColorParams,
     ) {
-        self.vertex_buffer
-            .upload(device, queue, vertices, "lsystem_3d_vertices");
+        self.segment_buffer
+            .upload(device, queue, segments, "lsystem_3d_segments");
+        self.active_segment_buffer = ActiveSegmentBuffer::Normal;
+        queue.write_buffer(
+            &self.color_params_buffer,
+            0,
+            bytemuck::bytes_of(&color_params),
+        );
+    }
+
+    pub fn upload_with_topological_depth(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        segments: &[TopologicalDepthSegment3D],
+        color_params: ColorParams,
+    ) {
+        self.depth_segment_buffer.upload(
+            device,
+            queue,
+            segments,
+            "lsystem_3d_topological_depth_segments",
+        );
+        self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
         queue.write_buffer(
             &self.color_params_buffer,
             0,
@@ -433,13 +582,22 @@ impl LinePipeline3D {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        draw_line_list(
-            render_pass,
-            &self.pipeline,
-            &self.bind_group,
-            &self.vertex_buffer,
-            "lsystem_3d_line_draw",
-        );
+        match self.active_segment_buffer {
+            ActiveSegmentBuffer::Normal => draw_line_list(
+                render_pass,
+                &self.pipeline,
+                &self.bind_group,
+                &self.segment_buffer,
+                "lsystem_3d_line_draw",
+            ),
+            ActiveSegmentBuffer::TopologicalDepth => draw_line_list(
+                render_pass,
+                &self.depth_pipeline,
+                &self.bind_group,
+                &self.depth_segment_buffer,
+                "lsystem_3d_depth_line_draw",
+            ),
+        }
     }
 }
 
@@ -654,5 +812,34 @@ impl GpuContext {
         if reconfigure_after {
             self.surface.configure(&self.device, &self.surface_config);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn depth_gradient_segment_caps_use_depth_record_sizes() {
+        let depth_line = LineColorConfig::DepthGradient {
+            start: [0.0, 0.0, 0.0],
+            end: [1.0, 1.0, 1.0],
+        };
+        let solid_line = LineColorConfig::DEFAULT_SOLID;
+
+        assert_eq!(
+            max_segments_for_line_color(Dimensions::TwoD, &depth_line),
+            GUARANTEED_VERTEX_BUFFER_BYTES
+                / std::mem::size_of::<TopologicalDepthSegment2D>() as u64
+        );
+        assert_eq!(
+            max_segments_for_line_color(Dimensions::ThreeD, &depth_line),
+            GUARANTEED_VERTEX_BUFFER_BYTES
+                / std::mem::size_of::<TopologicalDepthSegment3D>() as u64
+        );
+        assert_eq!(
+            max_segments_for_line_color(Dimensions::TwoD, &solid_line),
+            max_segments_for(Dimensions::TwoD)
+        );
     }
 }

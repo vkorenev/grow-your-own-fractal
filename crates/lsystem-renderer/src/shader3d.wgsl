@@ -5,7 +5,7 @@ struct Mvp {
 struct ColorParams {
     mode: u32,
     total_segments: u32,
-    _pad0: u32,
+    max_topological_depth: u32,
     _pad1: u32,
     color_start: vec4<f32>,
     color_end: vec4<f32>,
@@ -43,34 +43,66 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
 }
 
-@vertex
-fn vs_main(
-    @builtin(vertex_index) vi: u32,
-    @location(0) position: vec3<f32>,
-) -> VertexOutput {
+fn color_for_traversal(instance_index: u32) -> vec4<f32> {
     let denom = max(color_params.total_segments, 2u) - 1u;
-    let t = f32(vi / 2u) / f32(denom);
+    let t = f32(instance_index) / f32(denom);
 
-    var color: vec4<f32>;
     switch color_params.mode {
         case 1u: {
-            color = mix(color_params.color_start, color_params.color_end, t);
+            return mix(color_params.color_start, color_params.color_end, t);
         }
         case 2u: {
             let hue = color_params.hue_start + t * 360.0;
-            color = vec4<f32>(
+            return vec4<f32>(
                 hsv_to_rgb(hue, color_params.saturation, color_params.value),
                 1.0,
             );
         }
         default: {
-            color = color_params.color_start;
+            return color_params.color_start;
         }
     }
+}
+
+fn color_for_depth(topological_depth: u32) -> vec4<f32> {
+    let t = f32(topological_depth) / f32(max(color_params.max_topological_depth, 1u));
+    return mix(color_params.color_start, color_params.color_end, t);
+}
+
+fn segment_position(vi: u32, start: vec3<f32>, end: vec3<f32>) -> vec3<f32> {
+    if vi == 0u {
+        return start;
+    }
+    return end;
+}
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vi: u32,
+    @builtin(instance_index) ii: u32,
+    @location(0) start: vec3<f32>,
+    @location(1) end: vec3<f32>,
+) -> VertexOutput {
+    let position = segment_position(vi, start, end);
 
     var out: VertexOutput;
     out.clip_position = mvp.matrix * vec4<f32>(position, 1.0);
-    out.color = color;
+    out.color = color_for_traversal(ii);
+    return out;
+}
+
+@vertex
+fn vs_depth_main(
+    @builtin(vertex_index) vi: u32,
+    @location(0) start: vec3<f32>,
+    @location(1) end: vec3<f32>,
+    @location(2) topological_depth: u32,
+) -> VertexOutput {
+    let position = segment_position(vi, start, end);
+
+    var out: VertexOutput;
+    out.clip_position = mvp.matrix * vec4<f32>(position, 1.0);
+    out.color = color_for_depth(topological_depth);
     return out;
 }
 

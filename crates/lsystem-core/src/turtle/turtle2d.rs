@@ -1,15 +1,22 @@
 use glam::Vec2;
 
+use crate::Segment2DWithTopologicalDepth;
+
 pub(crate) struct Segments2D<I: Iterator<Item = char>> {
+    inner: Segments2DWithTopologicalDepth<I>,
+}
+
+pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = char>> {
     chars: I,
     angle_rad: f32,
     step: f32,
     position: Vec2,
     heading: f32,
-    stack: Vec<(Vec2, f32)>,
+    topological_depth: u32,
+    stack: Vec<(Vec2, f32, u32)>,
 }
 
-impl<I: Iterator<Item = char>> Segments2D<I> {
+impl<I: Iterator<Item = char>> Segments2DWithTopologicalDepth<I> {
     pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         Self {
             chars,
@@ -17,7 +24,57 @@ impl<I: Iterator<Item = char>> Segments2D<I> {
             step,
             position: Vec2::ZERO,
             heading: initial_heading_deg.to_radians(),
+            topological_depth: 0,
             stack: Vec::new(),
+        }
+    }
+}
+
+impl<I: Iterator<Item = char>> Iterator for Segments2DWithTopologicalDepth<I> {
+    type Item = Segment2DWithTopologicalDepth;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.chars.next()? {
+                'F' => {
+                    let next = self.position
+                        + Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
+                    let segment = Segment2DWithTopologicalDepth {
+                        points: [self.position, next],
+                        topological_depth: self.topological_depth,
+                    };
+                    self.position = next;
+                    self.topological_depth = self.topological_depth.saturating_add(1);
+                    return Some(segment);
+                }
+                'f' => {
+                    self.position += Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
+                }
+                '+' => self.heading += self.angle_rad,
+                '-' => self.heading -= self.angle_rad,
+                '|' => self.heading += std::f32::consts::PI,
+                '[' => self
+                    .stack
+                    .push((self.position, self.heading, self.topological_depth)),
+                ']' => {
+                    let state = self.stack.pop();
+                    debug_assert!(state.is_some(), "unmatched ] in validated program");
+                    if let Some((pos, head, topological_depth)) = state {
+                        self.position = pos;
+                        self.heading = head;
+                        self.topological_depth = topological_depth;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<I: Iterator<Item = char>> Segments2D<I> {
+    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        Self {
+            inner: Segments2DWithTopologicalDepth::new(chars, angle_deg, step, initial_heading_deg),
         }
     }
 }
@@ -26,33 +83,7 @@ impl<I: Iterator<Item = char>> Iterator for Segments2D<I> {
     type Item = [Vec2; 2];
 
     fn next(&mut self) -> Option<[Vec2; 2]> {
-        loop {
-            match self.chars.next()? {
-                'F' => {
-                    let next = self.position
-                        + Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
-                    let seg = [self.position, next];
-                    self.position = next;
-                    return Some(seg);
-                }
-                'f' => {
-                    self.position += Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
-                }
-                '+' => self.heading += self.angle_rad,
-                '-' => self.heading -= self.angle_rad,
-                '|' => self.heading += std::f32::consts::PI,
-                '[' => self.stack.push((self.position, self.heading)),
-                ']' => {
-                    let state = self.stack.pop();
-                    debug_assert!(state.is_some(), "unmatched ] in validated program");
-                    if let Some((pos, head)) = state {
-                        self.position = pos;
-                        self.heading = head;
-                    }
-                }
-                _ => {}
-            }
-        }
+        self.inner.next().map(|segment| segment.points)
     }
 }
 
@@ -131,5 +162,45 @@ mod tests {
             let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
             assert_eq!(segments.len(), expected, "iter {iters}");
         }
+    }
+
+    #[test]
+    fn topological_depth_starts_at_zero_and_increments_per_drawn_segment() {
+        let cfg = gen_config("FF");
+        let depths: Vec<u32> = crate::generate_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1]);
+    }
+
+    #[test]
+    fn topological_depth_restores_across_branches() {
+        let cfg = gen_config("F[+F]F");
+        let depths: Vec<u32> = crate::generate_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1, 1]);
+    }
+
+    #[test]
+    fn nested_branches_restore_topological_depth() {
+        let cfg = gen_config("F[+F[+F]F]F");
+        let depths: Vec<u32> = crate::generate_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1, 2, 2, 1]);
+    }
+
+    #[test]
+    fn non_drawing_forward_does_not_increment_topological_depth() {
+        let cfg = gen_config("FfF");
+        let depths: Vec<u32> = crate::generate_with_topological_depth(&cfg)
+            .map(|segment| segment.topological_depth)
+            .collect();
+
+        assert_eq!(depths, [0, 1]);
     }
 }
