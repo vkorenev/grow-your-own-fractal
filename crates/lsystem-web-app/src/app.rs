@@ -1,6 +1,3 @@
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_core::{
@@ -13,11 +10,12 @@ use wasm_bindgen::closure::Closure;
 
 use crate::color_input::{hex_to_rgb, rgb_to_hex};
 use crate::export::{export_png, export_svg};
-use crate::presets::{effective_config, load_presets, max_iterations_for_config};
+use crate::presets::{load_presets, max_iterations_for_config};
 use crate::renderer::{CanvasRenderer, RenderStatus};
 
+type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
+
 const ROTATION_STEP_DEG: f32 = 5.0;
-const AUTO_ROTATE_DT_MS: f32 = 16.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LineColorMode {
@@ -131,51 +129,56 @@ impl ColorControlMemory {
 pub(crate) fn App() -> impl IntoView {
     let initial_workspace =
         ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
-    let initial_entry = initial_workspace.selected();
-    let first_toml = initial_entry.draft_text().into_owned();
-    let initial_config = initial_entry.applied_config().clone();
-    let initial_max_iterations = max_iterations_for_config(&initial_config.generation);
+    let initial_config = initial_workspace.selected().applied_config().clone();
 
-    let (config_workspace, set_config_workspace) = signal(initial_workspace);
-    let (toml_text, set_toml_text) = signal(first_toml);
-    let (base_config, set_base_config) = signal(Some(initial_config.clone()));
-    let (color_memory, set_color_memory) =
-        signal(ColorControlMemory::from_colors(&initial_config.colors));
-    let (error, set_error) = signal(None::<String>);
-    let (iterations, set_iterations) = signal(
-        initial_config
-            .generation
-            .iterations
-            .min(initial_max_iterations),
-    );
-    let (max_iterations, set_max_iterations) = signal(initial_max_iterations);
-    let (angle, set_angle) = signal(initial_config.generation.angle);
-    let (png_width, set_png_width) = signal(2048u32);
-    let (gpu_error, set_gpu_error) = signal(None::<String>);
-    let (auto_rotate, set_auto_rotate) = signal(false);
-    let (auto_rotate_speed, set_auto_rotate_speed) = signal(45.0f32);
+    let config_workspace = RwSignal::new(initial_workspace);
+    let color_memory = RwSignal::new(ColorControlMemory::from_colors(&initial_config.colors));
+    let error = RwSignal::new(None::<String>);
+    let png_width = RwSignal::new(2048u32);
+    let gpu_error = RwSignal::new(None::<String>);
+    let auto_rotate = RwSignal::new(false);
+    let auto_rotate_speed = RwSignal::new(45.0f32);
+    // Generation counter: bumped on each toggle-on so older rAF loops detect
+    // they have been superseded and exit.
+    let auto_rotate_token = RwSignal::new(0u32);
 
-    let is_3d = move || {
-        base_config
-            .get()
-            .map(|c| matches!(c.generation.dimensions, Dimensions::ThreeD))
-            .unwrap_or(false)
-    };
+    let base_config =
+        Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_config().clone()));
+    let toml_text =
+        Memo::new(move |_| config_workspace.with(|ws| ws.selected().draft_text().into_owned()));
+    let max_iterations = Memo::new(move |_| {
+        config_workspace
+            .with(|ws| max_iterations_for_config(&ws.selected().applied_config().generation))
+    });
+    let iterations = Memo::new(move |_| {
+        let max = max_iterations.get();
+        config_workspace.with(|ws| {
+            ws.selected()
+                .applied_config()
+                .generation
+                .iterations
+                .min(max)
+        })
+    });
+    let angle = Memo::new(move |_| {
+        config_workspace.with(|ws| ws.selected().applied_config().generation.angle)
+    });
+
+    let renderer: RendererState = StoredValue::new_local(None::<CanvasRenderer>);
+    let last_pointer = StoredValue::new(None::<(i32, f64, f64)>);
+
+    let is_3d = move || matches!(base_config.get().generation.dimensions, Dimensions::ThreeD);
     let is_3d_untracked = move || {
-        base_config
-            .get_untracked()
-            .map(|c| matches!(c.generation.dimensions, Dimensions::ThreeD))
-            .unwrap_or(false)
+        matches!(
+            base_config.get_untracked().generation.dimensions,
+            Dimensions::ThreeD
+        )
     };
     let is_dirty = move || config_workspace.with(|workspace| workspace.selected().is_dirty());
 
     let canvas_ref = NodeRef::<Canvas>::new();
-    let renderer = Rc::new(RefCell::new(None::<CanvasRenderer>));
-    let last_pointer = Rc::new(RefCell::new(None::<(i32, f64, f64)>));
-    let interval_id: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
 
-    let recover_after_render = {
-        let renderer = Rc::clone(&renderer);
+    let recover_after_render =
         move |status: RenderStatus, canvas: web_sys::HtmlCanvasElement| match status {
             RenderStatus::Rendered
             | RenderStatus::Skipped(FrameSkipReason::Timeout | FrameSkipReason::Occluded) => {}
@@ -184,12 +187,12 @@ pub(crate) fn App() -> impl IntoView {
             }
             RenderStatus::SurfaceLost => {
                 log::error!("GPU surface was lost; attempting to recreate it");
-                let renderer = Rc::clone(&renderer);
                 wasm_bindgen_futures::spawn_local(async move {
-                    let Some(mut renderer_state) = renderer.borrow_mut().take() else {
+                    let Some(Some(mut renderer_state)) =
+                        renderer.try_update_value(|opt| opt.take())
+                    else {
                         return;
                     };
-
                     match renderer_state
                         .recover_surface_and_render(canvas.clone())
                         .await
@@ -198,224 +201,151 @@ pub(crate) fn App() -> impl IntoView {
                         | Ok(RenderStatus::Skipped(
                             FrameSkipReason::Timeout | FrameSkipReason::Occluded,
                         )) => {
-                            set_gpu_error.set(None);
-                            *renderer.borrow_mut() = Some(renderer_state);
+                            gpu_error.set(None);
+                            renderer.update_value(|opt| *opt = Some(renderer_state));
                         }
                         Ok(RenderStatus::Skipped(reason)) => {
                             log::error!("Skipped GPU frame after surface recovery: {reason}");
-                            set_gpu_error.set(None);
-                            *renderer.borrow_mut() = Some(renderer_state);
+                            gpu_error.set(None);
+                            renderer.update_value(|opt| *opt = Some(renderer_state));
                         }
                         Ok(RenderStatus::SurfaceLost) => {
                             log::error!("GPU surface was lost again after recovery");
-                            set_gpu_error.set(Some(
+                            gpu_error.set(Some(
                                 "GPU surface was lost again after recovery".to_string(),
                             ));
                         }
                         Err(err) => {
                             log::error!("Failed to recover GPU surface: {err}");
-                            set_gpu_error.set(Some(err.to_string()));
+                            gpu_error.set(Some(err.to_string()));
                         }
                     }
                 });
             }
-        }
+        };
+
+    let render_current = move || {
+        let Some(canvas) = canvas_ref.get_untracked() else {
+            return;
+        };
+        let mut config = base_config.get_untracked();
+        config.generation.iterations = iterations.get_untracked();
+        config.generation.angle = angle.get_untracked();
+        with_renderer(canvas, renderer, recover_after_render, |r, c| {
+            r.set_config_and_render(c, &config)
+        });
     };
-    let recover_after_render = Rc::new(recover_after_render);
 
-    let render_current = {
-        let renderer = Rc::clone(&renderer);
-        let recover_after_render = Rc::clone(&recover_after_render);
-        move || {
-            let Some(canvas) = canvas_ref.get_untracked() else {
-                return;
-            };
-            let Some(config) = effective_config(
-                base_config.get_untracked(),
-                iterations.get_untracked(),
-                angle.get_untracked(),
-            ) else {
-                return;
-            };
-            with_renderer(
-                canvas,
-                &renderer,
-                &recover_after_render,
-                |renderer, canvas| renderer.set_config_and_render(canvas, &config),
-            );
-        }
+    let render_current_colors = move || {
+        let Some(canvas) = canvas_ref.get_untracked() else {
+            return;
+        };
+        let config = base_config.get_untracked();
+        with_renderer(canvas, renderer, recover_after_render, |r, c| {
+            r.set_colors_and_render(c, &config.colors)
+        });
     };
-    let render_current = Rc::new(render_current);
 
-    let render_current_colors = {
-        let renderer = Rc::clone(&renderer);
-        let recover_after_render = Rc::clone(&recover_after_render);
-        move || {
-            let Some(canvas) = canvas_ref.get_untracked() else {
-                return;
-            };
-            let Some(config) = base_config.get_untracked() else {
-                return;
-            };
-            with_renderer(
-                canvas,
-                &renderer,
-                &recover_after_render,
-                |renderer, canvas| renderer.set_colors_and_render(canvas, &config.colors),
-            );
-        }
-    };
-    let render_current_colors = Rc::new(render_current_colors);
-
-    canvas_ref.on_load({
-        let renderer = Rc::clone(&renderer);
-        let render_current = Rc::clone(&render_current);
-        move |canvas| {
-            wasm_bindgen_futures::spawn_local(async move {
-                match CanvasRenderer::new(canvas.clone()).await {
-                    Ok(new_renderer) => {
-                        set_gpu_error.set(None);
-                        *renderer.borrow_mut() = Some(new_renderer);
-                        render_current();
-                    }
-                    Err(err) => {
-                        log::error!("Failed to initialize GPU renderer: {err}");
-                        set_gpu_error.set(Some(err.to_string()));
-                    }
-                }
-            });
-        }
-    });
-
-    install_resize_listener(
-        canvas_ref,
-        Rc::clone(&renderer),
-        Rc::clone(&recover_after_render),
-    );
-
-    let install_config = Rc::new(move |config: Config| {
-        let max = max_iterations_for_config(&config.generation);
-        set_max_iterations.set(max);
-        set_iterations.set(config.generation.iterations.min(max));
-        set_angle.set(config.generation.angle);
-        set_base_config.set(Some(config));
-        set_error.set(None);
-    });
-
-    let install_full_config = Rc::new({
-        let install_config = Rc::clone(&install_config);
-        move |config: Config| {
-            set_color_memory.set(ColorControlMemory::from_colors(&config.colors));
-            install_config(config);
-        }
-    });
-
-    let apply_current = {
-        let render_current = Rc::clone(&render_current);
-        let interval_id = Rc::clone(&interval_id);
-        let install_full_config = Rc::clone(&install_full_config);
-        move || {
-            if !config_workspace.with_untracked(|workspace| workspace.selected().is_dirty()) {
-                return;
-            }
-            let applied = set_config_workspace.try_update(|workspace| {
-                workspace
-                    .selected_mut()
-                    .set_draft_text(toml_text.get_untracked());
-                workspace
-                    .apply()
-                    .map(|entry| entry.applied_config().clone())
-            });
-            match applied {
-                Some(Ok(config)) => {
-                    let new_is_3d = matches!(config.generation.dimensions, Dimensions::ThreeD);
-                    install_full_config(config);
-                    if !new_is_3d && auto_rotate.get_untracked() {
-                        if let Some(id) = interval_id.take()
-                            && let Some(window) = web_sys::window()
-                        {
-                            window.clear_interval_with_handle(id);
-                        }
-                        set_auto_rotate.set(false);
-                    }
+    canvas_ref.on_load(move |canvas| {
+        wasm_bindgen_futures::spawn_local(async move {
+            match CanvasRenderer::new(canvas.clone()).await {
+                Ok(new_renderer) => {
+                    gpu_error.set(None);
+                    renderer.update_value(|opt| *opt = Some(new_renderer));
                     render_current();
                 }
-                Some(Err(err)) => {
-                    set_error.set(Some(err.to_string()));
+                Err(err) => {
+                    log::error!("Failed to initialize GPU renderer: {err}");
+                    gpu_error.set(Some(err.to_string()));
                 }
-                None => {
-                    log::error!("apply: config_workspace signal was unavailable");
-                    set_error.set(Some("Internal error: could not apply config.".to_string()));
+            }
+        });
+    });
+
+    install_resize_listener(canvas_ref, renderer, recover_after_render);
+
+    let refresh_color_memory = move || {
+        color_memory.set(ColorControlMemory::from_colors(
+            &base_config.get_untracked().colors,
+        ));
+    };
+
+    let apply_current = move || {
+        if !config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
+            return;
+        }
+        let result = config_workspace
+            .try_update(|workspace| workspace.apply().map(|_| ()).map_err(|e| e.to_string()));
+        match result {
+            Some(Ok(())) => {
+                error.set(None);
+                refresh_color_memory();
+                if !is_3d_untracked() && auto_rotate.get_untracked() {
+                    auto_rotate.set(false);
                 }
+                render_current();
+            }
+            Some(Err(msg)) => error.set(Some(msg)),
+            None => {
+                log::error!("apply: config_workspace signal was unavailable");
+                error.set(Some("Internal error: could not apply config.".to_string()));
             }
         }
     };
-    let apply_current = Rc::new(apply_current);
 
-    let select_current_config = {
-        let render_current = Rc::clone(&render_current);
-        let install_full_config = Rc::clone(&install_full_config);
-        move || {
-            let config = config_workspace
-                .with_untracked(|workspace| workspace.selected().applied_config().clone());
-            install_full_config(config);
-            render_current();
+    let stop_auto_rotate_if_2d = move || {
+        if !is_3d_untracked() && auto_rotate.get_untracked() {
+            auto_rotate.set(false);
         }
     };
-    let select_current_config = Rc::new(select_current_config);
 
-    let toggle_auto_rotate = {
-        let renderer = Rc::clone(&renderer);
-        let recover_after_render = Rc::clone(&recover_after_render);
-        let interval_id = Rc::clone(&interval_id);
-        move |_: web_sys::MouseEvent| {
-            if auto_rotate.get_untracked() {
-                if let Some(id) = interval_id.take()
-                    && let Some(window) = web_sys::window()
-                {
-                    window.clear_interval_with_handle(id);
-                }
-                set_auto_rotate.set(false);
-            } else {
-                set_auto_rotate.set(true);
-                let renderer = Rc::clone(&renderer);
-                let recover_after_render = Rc::clone(&recover_after_render);
-                let interval_id_store = Rc::clone(&interval_id);
-                let interval_id_cancel = Rc::clone(&interval_id);
-                let closure = Closure::<dyn FnMut()>::new(move || {
-                    let degrees = auto_rotate_speed.get_untracked() * (AUTO_ROTATE_DT_MS / 1000.0);
+    let select_current_config = move || {
+        error.set(None);
+        stop_auto_rotate_if_2d();
+        refresh_color_memory();
+        render_current();
+    };
+
+    let toggle_auto_rotate = move |_: web_sys::MouseEvent| {
+        if auto_rotate.get_untracked() {
+            auto_rotate.set(false);
+        } else {
+            auto_rotate.set(true);
+            auto_rotate_token.update(|t| *t = t.wrapping_add(1));
+            let token = auto_rotate_token.get_untracked();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut prev_ts: Option<f64> = None;
+                loop {
+                    let ts = match next_animation_frame().await {
+                        Ok(ts) => ts,
+                        Err(reason) => {
+                            log::error!(
+                                "requestAnimationFrame failed ({reason}); stopping auto-rotate"
+                            );
+                            auto_rotate.set(false);
+                            error.set(Some(
+                                "Auto-rotate stopped unexpectedly. Try toggling it again."
+                                    .to_string(),
+                            ));
+                            break;
+                        }
+                    };
+                    if !auto_rotate.get_untracked() || auto_rotate_token.get_untracked() != token {
+                        break;
+                    }
+                    // Clamp dt to 100 ms to prevent a large rotation jump after the tab was backgrounded.
+                    let dt = prev_ts
+                        .map_or(1.0_f32 / 60.0, |p| ((ts - p) / 1000.0) as f32)
+                        .min(1.0 / 10.0);
+                    prev_ts = Some(ts);
+                    let degrees = auto_rotate_speed.get_untracked() * dt;
                     if let Some(canvas) = canvas_ref.get_untracked() {
-                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| {
+                        with_renderer(canvas, renderer, recover_after_render, |r, c| {
                             r.auto_rotate_and_render(c, degrees)
                         });
                     }
-                    // Stop if auto_rotate signal was turned off from outside.
-                    if !auto_rotate.get_untracked()
-                        && let Some(id) = interval_id_cancel.take()
-                        && let Some(window) = web_sys::window()
-                    {
-                        window.clear_interval_with_handle(id);
-                    }
-                });
-                if let Some(window) = web_sys::window() {
-                    match window.set_interval_with_callback_and_timeout_and_arguments_0(
-                        closure.as_ref().unchecked_ref(),
-                        AUTO_ROTATE_DT_MS as i32,
-                    ) {
-                        Ok(id) => {
-                            interval_id_store.set(Some(id));
-                            closure.forget();
-                        }
-                        Err(err) => {
-                            log::error!("Failed to start auto-rotate interval: {err:?}");
-                            set_auto_rotate.set(false);
-                        }
-                    }
-                } else {
-                    log::error!("Failed to start auto-rotate interval: window is unavailable");
-                    set_auto_rotate.set(false);
                 }
-            }
+            });
         }
     };
 
@@ -430,32 +360,26 @@ pub(crate) fn App() -> impl IntoView {
                     prop:value=move || {
                         config_workspace.with(|workspace| workspace.selected_index().to_string())
                     }
-                    on:change:target={
-                        let select_current_config = Rc::clone(&select_current_config);
-                        move |ev| {
-                            let idx = ev.target().value().parse::<usize>().unwrap_or(0);
-                            let selected = set_config_workspace.try_update(|workspace| {
-                                workspace
-                                    .select(idx)
-                                    .map(|_| workspace.selected().draft_text().into_owned())
-                            });
-                            match selected {
-                                Some(Ok(text)) => {
-                                    set_toml_text.set(text);
-                                    select_current_config();
-                                }
-                                Some(Err(err)) => {
-                                    log::error!("select preset: rejected index {idx}: {err}");
-                                    set_error.set(Some(err.to_string()));
-                                }
-                                None => {
-                                    log::error!(
-                                        "select preset: config_workspace signal was unavailable"
-                                    );
-                                    set_error.set(Some(
-                                        "Internal error: could not select config.".to_string(),
-                                    ));
-                                }
+                    on:change:target=move |ev| {
+                        let idx = ev.target().value().parse::<usize>().unwrap_or(0);
+                        let selected = config_workspace.try_update(|workspace| {
+                            workspace.select(idx).map(|_| ()).map_err(|e| e.to_string())
+                        });
+                        match selected {
+                            Some(Ok(())) => {
+                                select_current_config();
+                            }
+                            Some(Err(err)) => {
+                                log::error!("select preset: rejected index {idx}: {err}");
+                                error.set(Some(err));
+                            }
+                            None => {
+                                log::error!(
+                                    "select preset: config_workspace signal was unavailable"
+                                );
+                                error.set(Some(
+                                    "Internal error: could not select config.".to_string(),
+                                ));
                             }
                         }
                     }
@@ -478,32 +402,23 @@ pub(crate) fn App() -> impl IntoView {
 
                 <button
                     type="button"
-                    on:click={
-                        let render_current = Rc::clone(&render_current);
-                        let install_full_config = Rc::clone(&install_full_config);
-                        move |_| {
-                            let copied = set_config_workspace.try_update(|workspace| {
-                                workspace.copy().map(|entry| {
-                                    (entry.draft_text().into_owned(), entry.applied_config().clone())
-                                })
-                            });
-                            match copied {
-                                Some(Ok((text, config))) => {
-                                    set_toml_text.set(text);
-                                    install_full_config(config);
-                                    render_current();
-                                }
-                                Some(Err(err)) => {
-                                    set_error.set(Some(err.to_string()));
-                                }
-                                None => {
-                                    log::error!(
-                                        "copy: config_workspace signal was unavailable"
-                                    );
-                                    set_error.set(Some(
-                                        "Internal error: could not copy config.".to_string(),
-                                    ));
-                                }
+                    on:click=move |_| {
+                        let result = config_workspace.try_update(|workspace| {
+                            workspace.copy().map(|_| ()).map_err(|e| e.to_string())
+                        });
+                        match result {
+                            Some(Ok(())) => {
+                                error.set(None);
+                                stop_auto_rotate_if_2d();
+                                refresh_color_memory();
+                                render_current();
+                            }
+                            Some(Err(msg)) => error.set(Some(msg)),
+                            None => {
+                                log::error!("copy: config_workspace signal was unavailable");
+                                error.set(Some(
+                                    "Internal error: could not copy config.".to_string(),
+                                ));
                             }
                         }
                     }
@@ -518,14 +433,14 @@ pub(crate) fn App() -> impl IntoView {
                     prop:value=move || toml_text.get()
                     on:input:target=move |ev| {
                         let text = ev.target().value();
-                        set_toml_text.set(text.clone());
-                        let updated = set_config_workspace.try_update(|workspace| {
+                        let updated = config_workspace.try_update(|workspace| {
                             workspace.selected_mut().set_draft_text(text);
                         });
                         if updated.is_none() {
                             log::error!("textarea input: config_workspace signal was unavailable");
-                            set_error
-                                .set(Some("Internal error: could not update config.".to_string()));
+                            error.set(Some(
+                                "Internal error: could not update config.".to_string(),
+                            ));
                         }
                     }
                 />
@@ -534,47 +449,34 @@ pub(crate) fn App() -> impl IntoView {
                     <button
                         type="button"
                         disabled=move || !is_dirty()
-                        on:click={
-                            let apply_current = Rc::clone(&apply_current);
-                            move |_| apply_current()
-                        }
+                        on:click=move |_| apply_current()
                     >
                         "Apply"
                     </button>
                     <button
                         type="button"
                         disabled=move || !is_dirty()
-                        on:click={
-                            let render_current = Rc::clone(&render_current);
-                            let install_full_config = Rc::clone(&install_full_config);
-                            move |_| {
-                                let reverted = set_config_workspace.try_update(|workspace| {
-                                    match workspace.selected_mut().view_mut() {
-                                        EntryViewMut::Dirty(dirty) => dirty.revert(),
-                                        EntryViewMut::Clean(_) => {
-                                            log::error!(
-                                                "revert fired while entry is clean; UI guards bypassed"
-                                            );
-                                        }
-                                    }
-                                    let entry = workspace.selected();
-                                    (entry.draft_text().into_owned(), entry.applied_config().clone())
-                                });
-                                match reverted {
-                                    Some((text, config)) => {
-                                        set_toml_text.set(text);
-                                        install_full_config(config);
-                                        render_current();
-                                    }
-                                    None => {
+                        on:click=move |_| {
+                            let ok = config_workspace.try_update(|workspace| {
+                                match workspace.selected_mut().view_mut() {
+                                    EntryViewMut::Dirty(dirty) => dirty.revert(),
+                                    EntryViewMut::Clean(_) => {
                                         log::error!(
-                                            "revert: config_workspace signal was unavailable"
+                                            "revert fired while entry is clean; UI guards bypassed"
                                         );
-                                        set_error.set(Some(
-                                            "Internal error: could not revert config.".to_string(),
-                                        ));
                                     }
                                 }
+                            });
+                            if ok.is_some() {
+                                error.set(None);
+                                stop_auto_rotate_if_2d();
+                                refresh_color_memory();
+                                render_current();
+                            } else {
+                                log::error!("revert: config_workspace signal was unavailable");
+                                error.set(Some(
+                                    "Internal error: could not revert config.".to_string(),
+                                ));
                             }
                         }
                     >
@@ -587,40 +489,36 @@ pub(crate) fn App() -> impl IntoView {
                                 workspace.selected().is_dirty() || !workspace.can_reset()
                             })
                         }
-                        on:click={
-                            let render_current = Rc::clone(&render_current);
-                            let install_full_config = Rc::clone(&install_full_config);
-                            move |_| {
-                                if is_dirty() {
-                                    return;
+                        on:click=move |_| {
+                            if is_dirty() {
+                                return;
+                            }
+                            let result = config_workspace.try_update(|workspace| {
+                                workspace
+                                    .reset()
+                                    .map(|opt| opt.is_some())
+                                    .map_err(|e| e.to_string())
+                            });
+                            match result {
+                                Some(Ok(true)) => {
+                                    error.set(None);
+                                    stop_auto_rotate_if_2d();
+                                    refresh_color_memory();
+                                    render_current();
                                 }
-                                let reset = set_config_workspace.try_update(|workspace| {
-                                    workspace.reset().map(|opt| {
-                                        opt.map(|entry| {
-                                            (entry.draft_text().into_owned(), entry.applied_config().clone())
-                                        })
-                                    })
-                                });
-                                match reset {
-                                    Some(Ok(Some((text, config)))) => {
-                                        set_toml_text.set(text);
-                                        install_full_config(config);
-                                        render_current();
-                                    }
-                                    Some(Ok(None)) => {
-                                        log::warn!("reset: no-op for entry without a bundled default; button guard may have been bypassed");
-                                    }
-                                    Some(Err(err)) => {
-                                        set_error.set(Some(err.to_string()));
-                                    }
-                                    None => {
-                                        log::error!(
-                                            "reset: config_workspace signal was unavailable"
-                                        );
-                                        set_error.set(Some(
-                                            "Internal error: could not reset config.".to_string(),
-                                        ));
-                                    }
+                                Some(Ok(false)) => {
+                                    log::warn!(
+                                        "reset: no-op for entry without a bundled default; button guard may have been bypassed"
+                                    );
+                                }
+                                Some(Err(msg)) => error.set(Some(msg)),
+                                None => {
+                                    log::error!(
+                                        "reset: config_workspace signal was unavailable"
+                                    );
+                                    error.set(Some(
+                                        "Internal error: could not reset config.".to_string(),
+                                    ));
                                 }
                             }
                         }
@@ -637,7 +535,7 @@ pub(crate) fn App() -> impl IntoView {
                     "Apply or Revert the edited config before using controls."
                 </p>
 
-                <div class="group" class:hidden=move || base_config.get().is_none() || is_dirty()>
+                <div class="group" class:hidden=move || is_dirty()>
                     <label for="iterations">"Iterations"</label>
                     <div class="row">
                         <input
@@ -646,24 +544,20 @@ pub(crate) fn App() -> impl IntoView {
                             min="0"
                             max=move || max_iterations.get().to_string()
                             prop:value=move || iterations.get().to_string()
-                            on:input:target={
-                                let render_current = Rc::clone(&render_current);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let next = ev.target().value()
-                                        .parse::<u32>()
-                                        .unwrap_or(0)
-                                        .clamp(0, max_iterations.get_untracked());
-                                    update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current,
-                                        "iterations input",
-                                        move |clean| clean.set_iterations(next),
-                                    );
-                                }
+                            on:input:target=move |ev| {
+                                let next = ev
+                                    .target()
+                                    .value()
+                                    .parse::<u32>()
+                                    .unwrap_or(0)
+                                    .clamp(0, max_iterations.get_untracked());
+                                update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current,
+                                    "iterations input",
+                                    move |clean| clean.set_iterations(next),
+                                );
                             }
                         />
                         <output>{move || iterations.get()}</output>
@@ -678,24 +572,20 @@ pub(crate) fn App() -> impl IntoView {
                             max="180"
                             step="0.5"
                             prop:value=move || angle.get().to_string()
-                            on:input:target={
-                                let render_current = Rc::clone(&render_current);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let next = ev.target().value()
-                                        .parse::<f32>()
-                                        .unwrap_or(60.0)
-                                        .clamp(1.0, 180.0);
-                                    update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current,
-                                        "angle input",
-                                        move |clean| clean.set_angle(next),
-                                    );
-                                }
+                            on:input:target=move |ev| {
+                                let next = ev
+                                    .target()
+                                    .value()
+                                    .parse::<f32>()
+                                    .unwrap_or(60.0)
+                                    .clamp(1.0, 180.0);
+                                update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current,
+                                    "angle input",
+                                    move |clean| clean.set_angle(next),
+                                );
                             }
                         />
                         <output>{move || format!("{:.1}", angle.get())}</output>
@@ -705,85 +595,59 @@ pub(crate) fn App() -> impl IntoView {
                         <input
                             id="background-override"
                             type="checkbox"
-                            prop:checked=move || {
-                                base_config
-                                    .get()
-                                    .and_then(|config| config.colors.background)
-                                    .is_some()
-                            }
-                            on:change:target={
-                                let render_current_colors = Rc::clone(&render_current_colors);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    base_config.with_untracked(|config| {
-                                        if let Some(Some(background)) =
-                                            config.as_ref().map(|config| config.colors.background)
-                                        {
-                                            set_color_memory.update(|memory| {
-                                                memory.remember_background(background);
-                                            });
-                                        }
+                            prop:checked=move || base_config.with(|c| c.colors.background.is_some())
+                            on:change:target=move |ev| {
+                                let current_bg =
+                                    base_config.with_untracked(|c| c.colors.background);
+                                if let Some(background) = current_bg {
+                                    color_memory.update(|memory| {
+                                        memory.remember_background(background);
                                     });
-                                    let enabled = ev.target().checked();
-                                    let background = if enabled {
-                                        Some(color_memory.get_untracked().background())
-                                    } else {
-                                        None
-                                    };
-                                    update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current_colors,
-                                        "background checkbox",
-                                        move |clean| clean.set_background(background),
-                                    );
                                 }
+                                let enabled = ev.target().checked();
+                                let background = if enabled {
+                                    Some(color_memory.get_untracked().background())
+                                } else {
+                                    None
+                                };
+                                update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "background checkbox",
+                                    move |clean| clean.set_background(background),
+                                );
                             }
                         />
                         <span>"Background"</span>
                     </label>
 
-                    <div class="color-row" class:hidden=move || {
-                        base_config
-                            .get()
-                            .and_then(|config| config.colors.background)
-                            .is_none()
-                    }>
+                    <div
+                        class="color-row"
+                        class:hidden=move || base_config.with(|c| c.colors.background.is_none())
+                    >
                         <label for="background-color">"Background color"</label>
                         <input
                             id="background-color"
                             type="color"
                             prop:value=move || {
-                                rgb_to_hex(
-                                    base_config
-                                        .get()
-                                        .map(|config| config.colors.effective_background())
-                                        .unwrap_or(ColorConfig::DEFAULT_BACKGROUND),
-                                )
+                                rgb_to_hex(base_config.with(|c| c.colors.effective_background()))
                             }
-                            on:input:target={
-                                let render_current_colors = Rc::clone(&render_current_colors);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let Some(color) = hex_to_rgb(&ev.target().value()) else {
-                                        set_error.set(Some("Invalid color value.".to_string()));
-                                        return;
-                                    };
-                                    if update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current_colors,
-                                        "background color input",
-                                        move |clean| clean.set_background(Some(color)),
-                                    ) {
-                                        set_color_memory.update(|memory| {
-                                            memory.remember_background(color);
-                                        });
-                                    }
+                            on:input:target=move |ev| {
+                                let Some(color) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "background color input",
+                                    move |clean| clean.set_background(Some(color)),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_background(color);
+                                    });
                                 }
                             }
                         />
@@ -797,43 +661,35 @@ pub(crate) fn App() -> impl IntoView {
                                 .key()
                                 .to_string()
                         }
-                        on:change:target={
-                            let render_current_colors = Rc::clone(&render_current_colors);
-                            let install_config = Rc::clone(&install_config);
-                            move |ev| {
-                                let mode_key = ev.target().value();
-                                let Some(mode) = LineColorMode::from_key(&mode_key) else {
-                                    log::error!("unknown line color mode selected: {mode_key}");
-                                    return;
-                                };
-                                let current = base_config.with_untracked(line_color_of);
-                                let Some(line_color) =
-                                    set_color_memory.try_update(|memory| {
-                                        memory.remember_line(current);
-                                        memory.line_for(mode)
-                                    })
-                                else {
-                                    log::error!(
-                                        "line color mode select: line color memory signal was unavailable"
-                                    );
-                                    set_error.set(Some(
-                                        "Internal error: could not update line color.".to_string(),
-                                    ));
-                                    return;
-                                };
-                                if update_clean_config(
-                                    set_config_workspace,
-                                    set_toml_text,
-                                    set_error,
-                                    &install_config,
-                                    &render_current_colors,
-                                    "line color mode select",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    set_color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                        on:change:target=move |ev| {
+                            let mode_key = ev.target().value();
+                            let Some(mode) = LineColorMode::from_key(&mode_key) else {
+                                log::error!("unknown line color mode selected: {mode_key}");
+                                return;
+                            };
+                            let current = base_config.with_untracked(line_color_of);
+                            let Some(line_color) = color_memory.try_update(|memory| {
+                                memory.remember_line(current);
+                                memory.line_for(mode)
+                            }) else {
+                                log::error!(
+                                    "line color mode select: line color memory signal was unavailable"
+                                );
+                                error.set(Some(
+                                    "Internal error: could not update line color.".to_string(),
+                                ));
+                                return;
+                            };
+                            if update_clean_config(
+                                config_workspace,
+                                error,
+                                render_current_colors,
+                                "line color mode select",
+                                move |clean| clean.set_line_color(line_color),
+                            ) {
+                                color_memory.update(|memory| {
+                                    memory.remember_line(line_color);
+                                });
                             }
                         }
                     >
@@ -842,12 +698,12 @@ pub(crate) fn App() -> impl IntoView {
                         <option value="hue_cycle">"Hue cycle"</option>
                     </select>
 
-                    <div class="color-row" class:hidden=move || {
-                        !matches!(
-                            Some(current_line_color(base_config)),
-                            Some(LineColorConfig::Solid { .. })
-                        )
-                    }>
+                    <div
+                        class="color-row"
+                        class:hidden=move || {
+                            !matches!(current_line_color(base_config), LineColorConfig::Solid { .. })
+                        }
+                    >
                         <label for="line-solid-color">"Line color"</label>
                         <input
                             id="line-solid-color"
@@ -862,39 +718,36 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("solid mode must provide solid color"),
                                 }
                             }
-                            on:input:target={
-                                let render_current_colors = Rc::clone(&render_current_colors);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let Some(color) = hex_to_rgb(&ev.target().value()) else {
-                                        set_error.set(Some("Invalid color value.".to_string()));
-                                        return;
-                                    };
-                                    let line_color = LineColorConfig::Solid { color };
-                                    if update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current_colors,
-                                        "solid line color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        set_color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
+                            on:input:target=move |ev| {
+                                let Some(color) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                let line_color = LineColorConfig::Solid { color };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "solid line color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
                                 }
                             }
                         />
                     </div>
 
-                    <div class="color-row" class:hidden=move || {
-                        !matches!(
-                            Some(current_line_color(base_config)),
-                            Some(LineColorConfig::Gradient { .. })
-                        )
-                    }>
+                    <div
+                        class="color-row"
+                        class:hidden=move || {
+                            !matches!(
+                                current_line_color(base_config),
+                                LineColorConfig::Gradient { .. }
+                            )
+                        }
+                    >
                         <label for="line-gradient-start">"Gradient start"</label>
                         <input
                             id="line-gradient-start"
@@ -909,40 +762,31 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 }
                             }
-                            on:input:target={
-                                let render_current_colors = Rc::clone(&render_current_colors);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let Some(start) = hex_to_rgb(&ev.target().value()) else {
-                                        set_error.set(Some("Invalid color value.".to_string()));
-                                        return;
-                                    };
-                                    let current = line_color_for_mode_untracked(
-                                        base_config,
-                                        color_memory,
-                                        LineColorMode::Gradient,
-                                    );
-                                    let end = match current {
-                                        LineColorConfig::Gradient { end, .. } => end,
-                                        _ => unreachable!("gradient mode must provide gradient color"),
-                                    };
-                                    let line_color = LineColorConfig::Gradient {
-                                        start,
-                                        end,
-                                    };
-                                    if update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current_colors,
-                                        "gradient start color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        set_color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
+                            on:input:target=move |ev| {
+                                let Some(start) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                let current = line_color_for_mode_untracked(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::Gradient,
+                                );
+                                let end = match current {
+                                    LineColorConfig::Gradient { end, .. } => end,
+                                    _ => unreachable!("gradient mode must provide gradient color"),
+                                };
+                                let line_color = LineColorConfig::Gradient { start, end };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "gradient start color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
                                 }
                             }
                         />
@@ -961,51 +805,45 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 }
                             }
-                            on:input:target={
-                                let render_current_colors = Rc::clone(&render_current_colors);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let Some(end) = hex_to_rgb(&ev.target().value()) else {
-                                        set_error.set(Some("Invalid color value.".to_string()));
-                                        return;
-                                    };
-                                    let current = line_color_for_mode_untracked(
-                                        base_config,
-                                        color_memory,
-                                        LineColorMode::Gradient,
-                                    );
-                                    let start = match current {
-                                        LineColorConfig::Gradient { start, .. } => start,
-                                        _ => unreachable!("gradient mode must provide gradient color"),
-                                    };
-                                    let line_color = LineColorConfig::Gradient {
-                                        start,
-                                        end,
-                                    };
-                                    if update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current_colors,
-                                        "gradient end color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        set_color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
+                            on:input:target=move |ev| {
+                                let Some(end) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                let current = line_color_for_mode_untracked(
+                                    base_config,
+                                    color_memory,
+                                    LineColorMode::Gradient,
+                                );
+                                let start = match current {
+                                    LineColorConfig::Gradient { start, .. } => start,
+                                    _ => unreachable!("gradient mode must provide gradient color"),
+                                };
+                                let line_color = LineColorConfig::Gradient { start, end };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "gradient end color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
                                 }
                             }
                         />
                     </div>
 
-                    <div class="color-row" class:hidden=move || {
-                        !matches!(
-                            Some(current_line_color(base_config)),
-                            Some(LineColorConfig::HueCycle { .. })
-                        )
-                    }>
+                    <div
+                        class="color-row"
+                        class:hidden=move || {
+                            !matches!(
+                                current_line_color(base_config),
+                                LineColorConfig::HueCycle { .. }
+                            )
+                        }
+                    >
                         <label for="line-hue-cycle-initial">"Initial color"</label>
                         <input
                             id="line-hue-cycle-initial"
@@ -1020,28 +858,22 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("hue-cycle mode must provide hue-cycle color"),
                                 }
                             }
-                            on:input:target={
-                                let render_current_colors = Rc::clone(&render_current_colors);
-                                let install_config = Rc::clone(&install_config);
-                                move |ev| {
-                                    let Some(initial) = hex_to_rgb(&ev.target().value()) else {
-                                        set_error.set(Some("Invalid color value.".to_string()));
-                                        return;
-                                    };
-                                    let line_color = LineColorConfig::HueCycle { initial };
-                                    if update_clean_config(
-                                        set_config_workspace,
-                                        set_toml_text,
-                                        set_error,
-                                        &install_config,
-                                        &render_current_colors,
-                                        "hue-cycle initial color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        set_color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
+                            on:input:target=move |ev| {
+                                let Some(initial) = hex_to_rgb(&ev.target().value()) else {
+                                    error.set(Some("Invalid color value.".to_string()));
+                                    return;
+                                };
+                                let line_color = LineColorConfig::HueCycle { initial };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "hue-cycle initial color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
                                 }
                             }
                         />
@@ -1057,7 +889,7 @@ pub(crate) fn App() -> impl IntoView {
                         prop:value=move || png_width.get().to_string()
                         on:input:target=move |ev| {
                             let next = ev.target().value().parse::<u32>().unwrap_or(2048);
-                            set_png_width.set(next.clamp(256, 4096));
+                            png_width.set(next.clamp(256, 4096));
                         }
                     />
 
@@ -1066,29 +898,43 @@ pub(crate) fn App() -> impl IntoView {
                             type="button"
                             class:hidden=move || is_3d()
                             on:click=move |_| {
-                                export_svg(
-                                    base_config.get_untracked(),
-                                    iterations.get_untracked(),
-                                    angle.get_untracked(),
-                                )
+                                let mut config = base_config.get_untracked();
+                                config.generation.iterations = iterations.get_untracked();
+                                config.generation.angle = angle.get_untracked();
+                                export_svg(config);
                             }
                         >
                             "Export SVG"
                         </button>
                         <button
                             type="button"
-                            on:click={
-                                let renderer = Rc::clone(&renderer);
-                                move |_| {
-                                    export_png(
-                                        Rc::clone(&renderer),
-                                        base_config.get_untracked(),
-                                        iterations.get_untracked(),
-                                        angle.get_untracked(),
-                                        png_width.get_untracked(),
-                                        move |error| set_gpu_error.set(Some(error)),
-                                    );
-                                }
+                            on:click=move |_| {
+                                let Some(Some((device, queue, camera))) =
+                                    renderer.try_with_value(|opt| {
+                                        opt.as_ref().map(|r| {
+                                            let (d, q) = r.device_queue();
+                                            (d, q, r.camera())
+                                        })
+                                    })
+                                else {
+                                    log::error!("PNG export: renderer not initialized");
+                                    error.set(Some(
+                                        "Cannot export PNG: GPU renderer is not ready yet."
+                                            .to_string(),
+                                    ));
+                                    return;
+                                };
+                                let mut config = base_config.get_untracked();
+                                config.generation.iterations = iterations.get_untracked();
+                                config.generation.angle = angle.get_untracked();
+                                export_png(
+                                    device,
+                                    queue,
+                                    camera,
+                                    config,
+                                    png_width.get_untracked(),
+                                    move |e| error.set(Some(e)),
+                                );
                             }
                         >
                             "Export PNG"
@@ -1096,11 +942,14 @@ pub(crate) fn App() -> impl IntoView {
                     </div>
 
                     <div class:hidden=move || !is_3d()>
-                        <button
-                            type="button"
-                            on:click=toggle_auto_rotate
-                        >
-                            {move || if auto_rotate.get() { "Auto-rotate: On" } else { "Auto-rotate: Off" }}
+                        <button type="button" on:click=toggle_auto_rotate>
+                            {move || {
+                                if auto_rotate.get() {
+                                    "Auto-rotate: On"
+                                } else {
+                                    "Auto-rotate: Off"
+                                }
+                            }}
                         </button>
                         <label for="auto-rotate-speed">"Speed (°/s)"</label>
                         <div class="row">
@@ -1112,8 +961,9 @@ pub(crate) fn App() -> impl IntoView {
                                 step="10"
                                 prop:value=move || auto_rotate_speed.get().to_string()
                                 on:input:target=move |ev| {
-                                    let next = ev.target().value().parse::<f32>().unwrap_or(45.0);
-                                    set_auto_rotate_speed.set(next.clamp(10.0, 360.0));
+                                    let next =
+                                        ev.target().value().parse::<f32>().unwrap_or(45.0);
+                                    auto_rotate_speed.set(next.clamp(10.0, 360.0));
                                 }
                             />
                             <output>{move || format!("{:.0}", auto_rotate_speed.get())}</output>
@@ -1127,131 +977,120 @@ pub(crate) fn App() -> impl IntoView {
                     node_ref=canvas_ref
                     class="fractal-canvas"
                     tabindex="0"
-                    on:pointerdown={
-                        let last_pointer = Rc::clone(&last_pointer);
-                        move |ev: web_sys::PointerEvent| {
-                            if let Some(canvas) = canvas_ref.get_untracked() {
-                                let _ = canvas.focus();
-                                let _ = canvas.set_pointer_capture(ev.pointer_id());
-                            }
-                            *last_pointer.borrow_mut() = Some((
+                    on:pointerdown=move |ev: web_sys::PointerEvent| {
+                        if let Some(canvas) = canvas_ref.get_untracked() {
+                            let _ = canvas.focus();
+                            let _ = canvas.set_pointer_capture(ev.pointer_id());
+                        }
+                        last_pointer.update_value(|p| {
+                            *p = Some((
                                 ev.pointer_id(),
                                 ev.client_x() as f64,
                                 ev.client_y() as f64,
                             ));
+                        });
+                    }
+                    on:pointermove=move |ev: web_sys::PointerEvent| {
+                        let Some((id, last_x, last_y)) = last_pointer.with_value(|p| *p) else {
+                            return;
+                        };
+                        if id != ev.pointer_id() {
+                            return;
+                        }
+                        let x = ev.client_x() as f64;
+                        let y = ev.client_y() as f64;
+                        let dx = x - last_x;
+                        let dy = y - last_y;
+                        last_pointer.update_value(|p| *p = Some((id, x, y)));
+                        if let Some(canvas) = canvas_ref.get_untracked() {
+                            with_renderer(
+                                canvas,
+                                renderer,
+                                recover_after_render,
+                                |r, c| r.drag_and_render(c, dx as f32, dy as f32),
+                            );
                         }
                     }
-                    on:pointermove={
-                        let renderer = Rc::clone(&renderer);
-                        let last_pointer = Rc::clone(&last_pointer);
-                        let recover_after_render = Rc::clone(&recover_after_render);
-                        move |ev: web_sys::PointerEvent| {
-                            let mut last = last_pointer.borrow_mut();
-                            let Some((id, last_x, last_y)) = *last else {
-                                return;
-                            };
-                            if id != ev.pointer_id() {
-                                return;
-                            }
-                            let x = ev.client_x() as f64;
-                            let y = ev.client_y() as f64;
-                            let dx = x - last_x;
-                            let dy = y - last_y;
-                            *last = Some((id, x, y));
-                            if let Some(canvas) = canvas_ref.get_untracked() {
-                                with_renderer(
-                                    canvas,
-                                    &renderer,
-                                    &recover_after_render,
-                                    |renderer, canvas| {
-                                        renderer.drag_and_render(canvas, dx as f32, dy as f32)
-                                    },
-                                );
-                            }
+                    on:pointerup=move |ev: web_sys::PointerEvent| {
+                        if let Some(canvas) = canvas_ref.get_untracked() {
+                            let _ = canvas.release_pointer_capture(ev.pointer_id());
+                        }
+                        last_pointer.update_value(|p| *p = None);
+                    }
+                    on:pointercancel=move |_| last_pointer.update_value(|p| *p = None)
+                    on:wheel=move |ev: web_sys::WheelEvent| {
+                        ev.prevent_default();
+                        if let Some(canvas) = canvas_ref.get_untracked() {
+                            with_renderer(
+                                canvas,
+                                renderer,
+                                recover_after_render,
+                                |r, c| {
+                                    r.zoom_and_render(
+                                        c,
+                                        ev.delta_y() as f32,
+                                        ev.delta_mode(),
+                                        ev.client_x() as f32,
+                                        ev.client_y() as f32,
+                                    )
+                                },
+                            );
                         }
                     }
-                    on:pointerup={
-                        let last_pointer = Rc::clone(&last_pointer);
-                        move |ev: web_sys::PointerEvent| {
-                            if let Some(canvas) = canvas_ref.get_untracked() {
-                                let _ = canvas.release_pointer_capture(ev.pointer_id());
-                            }
-                            *last_pointer.borrow_mut() = None;
-                        }
-                    }
-                    on:pointercancel={
-                        let last_pointer = Rc::clone(&last_pointer);
-                        move |_| *last_pointer.borrow_mut() = None
-                    }
-                    on:wheel={
-                        let renderer = Rc::clone(&renderer);
-                        let recover_after_render = Rc::clone(&recover_after_render);
-                        move |ev: web_sys::WheelEvent| {
-                            ev.prevent_default();
-                            if let Some(canvas) = canvas_ref.get_untracked() {
-                                with_renderer(
-                                    canvas,
-                                    &renderer,
-                                    &recover_after_render,
-                                    |renderer, canvas| {
-                                        renderer.zoom_and_render(
-                                            canvas,
-                                            ev.delta_y() as f32,
-                                            ev.delta_mode(),
-                                            ev.client_x() as f32,
-                                            ev.client_y() as f32,
-                                        )
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    on:keydown={
-                        let renderer = Rc::clone(&renderer);
-                        let recover_after_render = Rc::clone(&recover_after_render);
-                        move |ev: web_sys::KeyboardEvent| {
-                            let Some(canvas) = canvas_ref.get_untracked() else {
-                                return;
-                            };
-                            let key = ev.key();
-                            if key.eq_ignore_ascii_case("f") {
-                                with_renderer(
-                                    canvas,
-                                    &renderer,
-                                    &recover_after_render,
-                                    |renderer, canvas| renderer.reset_and_render(canvas),
-                                );
-                            } else if is_3d_untracked() {
-                                let handled = match key.as_str() {
-                                    "ArrowLeft" => {
-                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, -ROTATION_STEP_DEG, 0.0));
-                                        true
-                                    }
-                                    "ArrowRight" => {
-                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, ROTATION_STEP_DEG, 0.0));
-                                        true
-                                    }
-                                    "ArrowUp" => {
-                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, 0.0, ROTATION_STEP_DEG));
-                                        true
-                                    }
-                                    "ArrowDown" => {
-                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.orbit_and_render(c, 0.0, -ROTATION_STEP_DEG));
-                                        true
-                                    }
-                                    "q" | "Q" => {
-                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.roll_and_render(c, -ROTATION_STEP_DEG));
-                                        true
-                                    }
-                                    "e" | "E" => {
-                                        with_renderer(canvas, &renderer, &recover_after_render, |r, c| r.roll_and_render(c, ROTATION_STEP_DEG));
-                                        true
-                                    }
-                                    _ => false,
-                                };
-                                if handled {
-                                    ev.prevent_default();
+                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                        let Some(canvas) = canvas_ref.get_untracked() else {
+                            return;
+                        };
+                        let key = ev.key();
+                        if key.eq_ignore_ascii_case("f") {
+                            with_renderer(
+                                canvas,
+                                renderer,
+                                recover_after_render,
+                                |r, c| r.reset_and_render(c),
+                            );
+                        } else if is_3d_untracked() {
+                            let handled = match key.as_str() {
+                                "ArrowLeft" => {
+                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                                        r.orbit_and_render(c, -ROTATION_STEP_DEG, 0.0)
+                                    });
+                                    true
                                 }
+                                "ArrowRight" => {
+                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                                        r.orbit_and_render(c, ROTATION_STEP_DEG, 0.0)
+                                    });
+                                    true
+                                }
+                                "ArrowUp" => {
+                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                                        r.orbit_and_render(c, 0.0, ROTATION_STEP_DEG)
+                                    });
+                                    true
+                                }
+                                "ArrowDown" => {
+                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                                        r.orbit_and_render(c, 0.0, -ROTATION_STEP_DEG)
+                                    });
+                                    true
+                                }
+                                "q" | "Q" => {
+                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                                        r.roll_and_render(c, -ROTATION_STEP_DEG)
+                                    });
+                                    true
+                                }
+                                "e" | "E" => {
+                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                                        r.roll_and_render(c, ROTATION_STEP_DEG)
+                                    });
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if handled {
+                                ev.prevent_default();
                             }
                         }
                     }
@@ -1259,7 +1098,15 @@ pub(crate) fn App() -> impl IntoView {
                 <div class:hidden=move || gpu_error.get().is_none() class="unsupported">
                     <div>
                         <h2>"GPU rendering is not available in this browser."</h2>
-                        <p>{move || gpu_error.get().unwrap_or_else(|| "Try a browser with WebGPU or WebGL2 enabled.".to_string())}</p>
+                        <p>
+                            {move || {
+                                gpu_error
+                                    .get()
+                                    .unwrap_or_else(|| {
+                                        "Try a browser with WebGPU or WebGL2 enabled.".to_string()
+                                    })
+                            }}
+                        </p>
                     </div>
                 </div>
             </section>
@@ -1268,129 +1115,225 @@ pub(crate) fn App() -> impl IntoView {
 }
 
 fn update_clean_config(
-    set_config_workspace: WriteSignal<ConfigWorkspace>,
-    set_toml_text: WriteSignal<String>,
-    set_error: WriteSignal<Option<String>>,
-    install_config: &Rc<impl Fn(Config)>,
-    render_after_update: &Rc<impl Fn()>,
+    config_workspace: RwSignal<ConfigWorkspace>,
+    error: RwSignal<Option<String>>,
+    render_after_update: impl Fn(),
     event: &'static str,
     update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
 ) -> bool {
-    let updated = set_config_workspace.try_update(|workspace| {
+    let result = config_workspace.try_update(|workspace| {
         let entry = workspace.selected_mut();
         match entry.view_mut() {
             EntryViewMut::Clean(mut clean) => {
-                update(&mut clean).map_err(|error| error.to_string())?;
+                update(&mut clean).map_err(|e| e.to_string())?;
+                Ok(true)
             }
             EntryViewMut::Dirty(_) => {
                 log::error!("{event} fired while entry is dirty; UI guards bypassed");
-                return Ok(None);
+                Ok(false)
             }
         }
-        Ok(Some((
-            entry.draft_text().into_owned(),
-            entry.applied_config().clone(),
-        )))
     });
-
-    match updated {
-        Some(Ok(Some((text, config)))) => {
-            set_toml_text.set(text);
-            install_config(config);
+    match result {
+        Some(Ok(true)) => {
+            error.set(None);
             render_after_update();
             true
         }
-        Some(Ok(None)) => false,
-        Some(Err(message)) => {
-            set_error.set(Some(message));
+        Some(Ok(false)) => false,
+        Some(Err(msg)) => {
+            error.set(Some(msg));
             false
         }
         None => {
             log::error!("{event}: config_workspace signal was unavailable");
-            set_error.set(Some("Internal error: could not update config.".to_string()));
+            error.set(Some("Internal error: could not update config.".to_string()));
             false
         }
     }
 }
 
-/// Reads the line color out of an optional config, falling back to the default.
-fn line_color_of(config: &Option<Config>) -> LineColorConfig {
-    config
-        .as_ref()
-        .map(|config| config.colors.line)
-        .unwrap_or_default()
+fn line_color_of(config: &Config) -> LineColorConfig {
+    config.colors.line
 }
 
-fn current_line_color(base_config: ReadSignal<Option<Config>>) -> LineColorConfig {
-    base_config.with(line_color_of)
+fn current_line_color(base_config: Memo<Config>) -> LineColorConfig {
+    base_config.with(|c| c.colors.line)
 }
 
 fn line_color_for_mode(
-    base_config: ReadSignal<Option<Config>>,
-    memory: ReadSignal<ColorControlMemory>,
+    base_config: Memo<Config>,
+    memory: RwSignal<ColorControlMemory>,
     mode: LineColorMode,
 ) -> LineColorConfig {
     let current = current_line_color(base_config);
     if LineColorMode::from_line_color(&current) == mode {
         current
     } else {
-        memory.with(|memory| memory.line_for(mode))
+        memory.with(|m| m.line_for(mode))
     }
 }
 
 fn line_color_for_mode_untracked(
-    base_config: ReadSignal<Option<Config>>,
-    memory: ReadSignal<ColorControlMemory>,
+    base_config: Memo<Config>,
+    memory: RwSignal<ColorControlMemory>,
     mode: LineColorMode,
 ) -> LineColorConfig {
-    let current = base_config.with_untracked(line_color_of);
+    let current = base_config.with_untracked(|c| c.colors.line);
     if LineColorMode::from_line_color(&current) == mode {
         current
     } else {
-        memory.with_untracked(|memory| memory.line_for(mode))
+        memory.with_untracked(|m| m.line_for(mode))
     }
 }
 
 fn with_renderer<F, H>(
     canvas: web_sys::HtmlCanvasElement,
-    renderer: &Rc<RefCell<Option<CanvasRenderer>>>,
-    recover_after_render: &Rc<H>,
+    renderer: RendererState,
+    recover_after_render: H,
     render: F,
 ) where
     F: FnOnce(&mut CanvasRenderer, &web_sys::HtmlCanvasElement) -> RenderStatus,
-    H: Fn(RenderStatus, web_sys::HtmlCanvasElement) + 'static,
+    H: Fn(RenderStatus, web_sys::HtmlCanvasElement),
 {
-    let status = renderer
-        .borrow_mut()
-        .as_mut()
-        .map(|renderer| render(renderer, &canvas));
-    if let Some(status) = status {
+    let status = renderer.try_update_value(|opt| opt.as_mut().map(|r| render(r, &canvas)));
+    if let Some(Some(status)) = status {
         recover_after_render(status, canvas);
     }
 }
 
 fn install_resize_listener<H>(
     canvas_ref: NodeRef<Canvas>,
-    renderer: Rc<RefCell<Option<CanvasRenderer>>>,
-    recover_after_render: Rc<H>,
+    renderer: RendererState,
+    recover_after_render: H,
 ) where
-    H: Fn(RenderStatus, web_sys::HtmlCanvasElement) + 'static,
+    H: Fn(RenderStatus, web_sys::HtmlCanvasElement) + Copy + 'static,
 {
     let Some(window) = web_sys::window() else {
+        log::error!("Failed to install resize listener: window unavailable");
         return;
     };
     let closure = Closure::<dyn FnMut()>::new(move || {
         if let Some(canvas) = canvas_ref.get_untracked() {
-            with_renderer(
-                canvas,
-                &renderer,
-                &recover_after_render,
-                |renderer, canvas| renderer.render(canvas),
-            );
+            with_renderer(canvas, renderer, recover_after_render, |r, c| r.render(c));
         }
     });
     match window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref()) {
         Ok(()) => closure.forget(),
         Err(err) => log::error!("Failed to install resize listener: {err:?}"),
+    }
+}
+
+async fn next_animation_frame() -> Result<f64, &'static str> {
+    let mut resolve_fn: Option<js_sys::Function> = None;
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        resolve_fn = Some(resolve);
+    });
+    let resolve_fn = resolve_fn.ok_or("Promise constructor did not run synchronously")?;
+    // once_into_js transfers ownership to the JS GC — no forget() needed.
+    // The callback receives the DOMHighResTimeStamp from rAF and resolves the
+    // Promise with it so the caller gets the actual frame timestamp.
+    // call1 failure would leave the Promise unresolved; in practice a JS
+    // resolve function never throws, so the result is intentionally ignored.
+    let cb = Closure::once_into_js(move |ts: f64| {
+        let _ = resolve_fn.call1(
+            &wasm_bindgen::JsValue::UNDEFINED,
+            &wasm_bindgen::JsValue::from_f64(ts),
+        );
+    });
+    web_sys::window()
+        .ok_or("window unavailable")?
+        .request_animation_frame(cb.unchecked_ref())
+        .map_err(|_| "request_animation_frame rejected")?;
+    wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .ok()
+        .and_then(|v| v.as_f64())
+        .ok_or("animation frame timestamp was not a number")
+}
+
+#[cfg(test)]
+mod tests {
+    use lsystem_core::{ColorConfig, LineColorConfig};
+
+    use super::{ColorControlMemory, LineColorMode};
+
+    #[test]
+    fn line_color_mode_key_round_trip() {
+        for mode in [
+            LineColorMode::Solid,
+            LineColorMode::Gradient,
+            LineColorMode::HueCycle,
+        ] {
+            assert_eq!(LineColorMode::from_key(mode.key()), Some(mode));
+        }
+        assert_eq!(LineColorMode::from_key("unknown"), None);
+    }
+
+    #[test]
+    fn line_color_mode_from_line_color() {
+        assert_eq!(
+            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_SOLID),
+            LineColorMode::Solid
+        );
+        assert_eq!(
+            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_GRADIENT),
+            LineColorMode::Gradient
+        );
+        assert_eq!(
+            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_HUE_CYCLE),
+            LineColorMode::HueCycle
+        );
+    }
+
+    #[test]
+    fn color_memory_remembers_solid_across_mode_switch() {
+        let solid = LineColorConfig::Solid {
+            color: [1.0, 0.0, 0.0],
+        };
+        let colors = ColorConfig {
+            background: None,
+            line: solid,
+        };
+        let mut memory = ColorControlMemory::from_colors(&colors);
+
+        // switch to gradient — solid is remembered
+        memory.remember_line(LineColorConfig::DEFAULT_GRADIENT);
+        assert_eq!(memory.line_for(LineColorMode::Solid), solid);
+        // switch back — gradient default is returned, solid still intact
+        assert_eq!(memory.line_for(LineColorMode::Solid), solid);
+    }
+
+    #[test]
+    fn color_memory_falls_back_to_default_when_slot_unset() {
+        let colors = ColorConfig {
+            background: None,
+            line: LineColorConfig::DEFAULT_SOLID,
+        };
+        let memory = ColorControlMemory::from_colors(&colors);
+        // gradient and hue_cycle slots were never set
+        assert_eq!(
+            memory.line_for(LineColorMode::Gradient),
+            LineColorMode::Gradient.default_line_color()
+        );
+        assert_eq!(
+            memory.line_for(LineColorMode::HueCycle),
+            LineColorMode::HueCycle.default_line_color()
+        );
+    }
+
+    #[test]
+    fn color_memory_background_remembered() {
+        let bg = [0.1, 0.2, 0.3];
+        let colors = ColorConfig {
+            background: Some(bg),
+            line: LineColorConfig::DEFAULT_SOLID,
+        };
+        let mut memory = ColorControlMemory::from_colors(&colors);
+        assert_eq!(memory.background(), bg);
+
+        let new_bg = [0.9, 0.8, 0.7];
+        memory.remember_background(new_bg);
+        assert_eq!(memory.background(), new_bg);
     }
 }
