@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use bytemuck::{Pod, Zeroable};
+use bytemuck::{NoUninit, Pod, Zeroable};
 use lsystem_core::{Dimensions, LineColorConfig};
 use wgpu::util::DeviceExt;
 
@@ -102,13 +102,24 @@ pub fn max_segments_for_line_color(dimensions: Dimensions, line: &LineColorConfi
     }
 }
 
+/// Discriminant values are matched by literal in `shader.wgsl` and `shader3d.wgsl`;
+/// keep them in sync when adding or renumbering variants.
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, NoUninit, Zeroable)]
+pub enum ColorMode {
+    #[default]
+    Solid = 0,
+    Gradient = 1,
+    HueCycle = 2,
+    DepthGradient = 3,
+}
+
 /// Per-frame color parameters written to the GPU as a uniform.
 /// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
 #[repr(C)]
-#[derive(Copy, Clone, Default, Pod, Zeroable)]
+#[derive(Copy, Clone, Default, NoUninit, Zeroable)]
 pub struct ColorParams {
-    /// 0 = solid, 1 = gradient, 2 = hue_cycle, 3 = depth_gradient
-    pub mode: u32,
+    pub mode: ColorMode,
     pub total_segments: u32,
     pub max_topological_depth: u32,
     pub _pad: u32,
