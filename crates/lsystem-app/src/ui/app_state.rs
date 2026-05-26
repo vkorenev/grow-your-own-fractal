@@ -28,16 +28,23 @@ pub(super) enum LineColorMode {
     Solid,
     Gradient,
     HueCycle,
+    DepthGradient,
 }
 
 impl LineColorMode {
-    pub(super) const ALL: &'static [Self] = &[Self::Solid, Self::Gradient, Self::HueCycle];
+    pub(super) const ALL: &'static [Self] = &[
+        Self::Solid,
+        Self::Gradient,
+        Self::HueCycle,
+        Self::DepthGradient,
+    ];
 
     pub(super) fn from_line_color(line_color: &LineColorConfig) -> Self {
         match line_color {
             LineColorConfig::Solid { .. } => Self::Solid,
             LineColorConfig::Gradient { .. } => Self::Gradient,
             LineColorConfig::HueCycle { .. } => Self::HueCycle,
+            LineColorConfig::DepthGradient { .. } => Self::DepthGradient,
         }
     }
 
@@ -46,6 +53,7 @@ impl LineColorMode {
             Self::Solid => LineColorConfig::DEFAULT_SOLID,
             Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
             Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
+            Self::DepthGradient => LineColorConfig::DEFAULT_DEPTH_GRADIENT,
         }
     }
 }
@@ -56,6 +64,7 @@ impl std::fmt::Display for LineColorMode {
             Self::Solid => "Solid",
             Self::Gradient => "Gradient",
             Self::HueCycle => "Hue cycle",
+            Self::DepthGradient => "Depth gradient",
         })
     }
 }
@@ -66,6 +75,7 @@ struct ColorControlMemory {
     solid: Option<[f32; 3]>,
     gradient: Option<([f32; 3], [f32; 3])>,
     hue_cycle: Option<[f32; 3]>,
+    depth_gradient: Option<([f32; 3], [f32; 3])>,
 }
 
 impl ColorControlMemory {
@@ -75,6 +85,7 @@ impl ColorControlMemory {
             solid: None,
             gradient: None,
             hue_cycle: None,
+            depth_gradient: None,
         };
         memory.remember_line(colors.line);
         memory
@@ -93,6 +104,9 @@ impl ColorControlMemory {
             LineColorConfig::Solid { color } => self.solid = Some(color),
             LineColorConfig::Gradient { start, end } => self.gradient = Some((start, end)),
             LineColorConfig::HueCycle { initial } => self.hue_cycle = Some(initial),
+            LineColorConfig::DepthGradient { start, end } => {
+                self.depth_gradient = Some((start, end));
+            }
         }
     }
 
@@ -121,6 +135,16 @@ impl ColorControlMemory {
                     ..
                 },
             ) => LineColorConfig::HueCycle { initial: *initial },
+            (
+                LineColorMode::DepthGradient,
+                Self {
+                    depth_gradient: Some((start, end)),
+                    ..
+                },
+            ) => LineColorConfig::DepthGradient {
+                start: *start,
+                end: *end,
+            },
             _ => mode.default_line_color(),
         }
     }
@@ -548,8 +572,26 @@ impl FractalApp {
         self.toml = iced::widget::text_editor::Content::with_text(
             self.config_workspace.selected().draft_text().as_ref(),
         );
-        self.scene
-            .update_colors(&self.config_workspace.selected().applied_config().colors);
+        let current_iterations = self.iterations;
+        self.recompute_max_iterations();
+        self.iterations = current_iterations.min(self.max_iterations);
+
+        let colors = self
+            .config_workspace
+            .selected()
+            .applied_config()
+            .colors
+            .clone();
+        let wants_topological_depth = colors.line.needs_topological_depth();
+        if self.scene.uses_topological_depth() != wants_topological_depth {
+            self.error = None;
+            self.export_status = None;
+            return self.schedule_scene_generation();
+        }
+        if self.scene_pending {
+            self.cancel_pending_scene_generation();
+        }
+        self.scene.update_colors(&colors);
         self.error = None;
         self.export_status = None;
         Task::none()
@@ -560,11 +602,25 @@ impl FractalApp {
     }
 
     fn sync_controls_from_workspace(&mut self) {
-        let generation = &self.config_workspace.selected().applied_config().generation;
-        let max_seg = lsystem_renderer::line_renderer::max_segments_for(generation.dimensions);
+        let iterations = self
+            .config_workspace
+            .selected()
+            .applied_config()
+            .generation
+            .iterations;
+        self.recompute_max_iterations();
+        self.iterations = iterations.min(self.max_iterations);
+    }
+
+    fn recompute_max_iterations(&mut self) {
+        let config = self.config_workspace.selected().applied_config();
+        let generation = &config.generation;
+        let max_seg = lsystem_renderer::line_renderer::max_segments_for_line_color(
+            generation.dimensions,
+            &config.colors.line,
+        );
         self.max_iterations =
             lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
-        self.iterations = generation.iterations.min(self.max_iterations);
     }
 
     pub(super) fn selected_config(&self) -> &Config {
@@ -600,6 +656,11 @@ impl FractalApp {
             build_scene(config, generation, token, prev_camera),
             Message::SceneGenerated,
         )
+    }
+
+    fn cancel_pending_scene_generation(&mut self) {
+        self.scene_generation.fetch_add(1, Ordering::AcqRel);
+        self.scene_pending = false;
     }
 
     fn is_current_generation(&self, generation: u64) -> bool {
@@ -691,6 +752,10 @@ mod tests {
             start: [0.4, 0.5, 0.6],
             end: [0.7, 0.8, 0.9],
         };
+        let depth_gradient = LineColorConfig::DepthGradient {
+            start: [0.2, 0.3, 0.4],
+            end: [0.5, 0.6, 0.7],
+        };
 
         let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
             background: Some([0.8, 0.8, 0.8]),
@@ -707,13 +772,22 @@ mod tests {
             memory.line_for(LineColorMode::HueCycle),
             LineColorConfig::DEFAULT_HUE_CYCLE
         );
+        assert_eq!(
+            memory.line_for(LineColorMode::DepthGradient),
+            LineColorConfig::DEFAULT_DEPTH_GRADIENT
+        );
 
         memory.remember_background([0.9, 0.1, 0.2]);
         memory.remember_line(gradient);
+        memory.remember_line(depth_gradient);
 
         assert_eq!(memory.background(), [0.9, 0.1, 0.2]);
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(memory.line_for(LineColorMode::Gradient), gradient);
+        assert_eq!(
+            memory.line_for(LineColorMode::DepthGradient),
+            depth_gradient
+        );
     }
 
     #[test]
@@ -728,6 +802,26 @@ mod tests {
         let _ = app.update(Message::ApplyConfig);
 
         assert_eq!(app.color_memory.line_for(LineColorMode::Gradient), gradient);
+    }
+
+    #[test]
+    fn switching_back_from_depth_gradient_cancels_pending_depth_scene() {
+        let (mut app, _) = FractalApp::new();
+        app.scene_generation.store(0, Ordering::Release);
+        app.scene_pending = false;
+
+        let _ = app.update(Message::LineColorModeSelected(LineColorMode::DepthGradient));
+        assert!(app.scene_pending);
+        let depth_generation = app.scene_generation.load(Ordering::Acquire);
+
+        let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
+
+        assert!(!app.scene_pending);
+        assert!(app.scene_generation.load(Ordering::Acquire) > depth_generation);
+        assert!(matches!(
+            app.selected_config().colors.line,
+            LineColorConfig::Solid { .. }
+        ));
     }
 
     #[test]

@@ -1,34 +1,59 @@
 use glam::Vec2;
 
-use crate::{Config, LineColorConfig, color_util::rgb_to_hsv, generate};
+use crate::{
+    Config, LineColorConfig, Segment2DWithTopologicalDepth, color_util::rgb_to_hsv, generate,
+    generate_with_topological_depth,
+};
 
 /// Generate an SVG string for the given config.
 ///
 /// The SVG uses the natural turtle coordinate system, scaled to fit the fractal.
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> String {
-    let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
-
-    if segments.is_empty() {
-        let bg = to_hex(config.colors.effective_background());
-        return format!(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
+    if config.colors.line.needs_topological_depth() {
+        let segments: Vec<Segment2DWithTopologicalDepth> =
+            generate_with_topological_depth(&config.generation).collect();
+        return export_svg_with_segments(
+            config,
+            segments.iter().map(|segment| segment.points),
+            build_depth_body(&segments, &config.colors.line),
         );
     }
 
+    let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
+    export_svg_with_segments(
+        config,
+        segments.iter().copied(),
+        build_body(&segments, &config.colors.line),
+    )
+}
+
+fn export_svg_with_segments(
+    config: &Config,
+    segments: impl IntoIterator<Item = [Vec2; 2]>,
+    body: String,
+) -> String {
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (
         f32::INFINITY,
         f32::INFINITY,
         f32::NEG_INFINITY,
         f32::NEG_INFINITY,
     );
-    for [a, b] in &segments {
+    let mut has_segments = false;
+    for [a, b] in segments {
+        has_segments = true;
         for p in [a, b] {
             min_x = min_x.min(p.x);
             min_y = min_y.min(p.y);
             max_x = max_x.max(p.x);
             max_y = max_y.max(p.y);
         }
+    }
+    if !has_segments {
+        let bg = to_hex(config.colors.effective_background());
+        return format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
+        );
     }
 
     // Pad degenerate (zero-width or zero-height) bounding boxes.
@@ -60,8 +85,6 @@ pub fn export_svg(config: &Config) -> String {
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
     let neg_max_y = -max_y;
-
-    let body = build_body(&segments, &config.colors.line);
 
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{min_x:.3} {neg_max_y:.3} {w:.3} {h:.3}\">\n\
@@ -119,7 +142,38 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             }
             out
         }
+        LineColorConfig::DepthGradient { .. } => {
+            unreachable!("depth-gradient SVG is built from topological-depth segments")
+        }
     }
+}
+
+fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColorConfig) -> String {
+    let LineColorConfig::DepthGradient { start, end } = *line else {
+        unreachable!("depth body requires depth-gradient line color")
+    };
+    let max_topological_depth = segments
+        .iter()
+        .map(|segment| segment.topological_depth)
+        .max()
+        .unwrap_or(0)
+        .max(1) as f32;
+    let mut out = String::new();
+    for segment in segments {
+        let [a, b] = segment.points;
+        let t = segment.topological_depth as f32 / max_topological_depth;
+        let rgb = [
+            start[0] + (end[0] - start[0]) * t,
+            start[1] + (end[1] - start[1]) * t,
+            start[2] + (end[2] - start[2]) * t,
+        ];
+        let color = to_hex(rgb);
+        out.push_str(&format!(
+            "<line x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\" stroke=\"{color}\"/>\n",
+            a.x, a.y, b.x, b.y
+        ));
+    }
+    out
 }
 
 /// Port of the WGSL `hsv_to_rgb` in `shader.wgsl`. Inputs must match the shader's
@@ -153,13 +207,17 @@ mod tests {
     use crate::{ConfigDocument, ConfigSource};
 
     fn make_config(extra_toml: &str) -> Config {
+        make_config_with_axiom("F+F", extra_toml)
+    }
+
+    fn make_config_with_axiom(axiom: &str, extra_toml: &str) -> Config {
         let toml = format!(
             r#"[metadata]
 name = "Test"
 
 [l-system]
 dimensions = 2
-axiom = "F+F"
+axiom = "{axiom}"
 iterations = 1
 
 [l-system.rules]
@@ -280,9 +338,56 @@ color = [1.0, 0.0, 0.0]
     }
 
     #[test]
+    fn depth_gradient_colors_equal_topological_depth_equally() {
+        let cfg = make_config_with_axiom(
+            "F[+F]F",
+            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+        );
+        let svg = export_svg(&cfg);
+
+        assert!(
+            svg.contains("#FF0000"),
+            "missing depth-gradient start color"
+        );
+        assert_eq!(
+            svg.matches("#0000FF").count(),
+            2,
+            "two depth-1 segments should use the same end color"
+        );
+    }
+
+    #[test]
+    fn depth_gradient_single_segment_uses_start_color() {
+        let cfg = make_config_with_axiom(
+            "F",
+            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+        );
+        let svg = export_svg(&cfg);
+
+        assert!(svg.contains("#FF0000"), "missing depth-0 start color");
+        assert!(
+            !svg.contains("#0000FF"),
+            "single depth-0 segment should not use end color"
+        );
+    }
+
+    #[test]
     fn empty_geometry_returns_minimal_svg() {
         let cfg = make_empty_config();
         let svg = export_svg(&cfg);
+        assert!(svg.contains("<svg"), "missing <svg tag");
+        assert!(!svg.contains("<path"), "unexpected <path in empty SVG");
+        assert!(!svg.contains("<line"), "unexpected <line in empty SVG");
+    }
+
+    #[test]
+    fn depth_gradient_empty_geometry_returns_minimal_svg() {
+        let cfg = make_config_with_axiom(
+            "+",
+            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+        );
+        let svg = export_svg(&cfg);
+
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(!svg.contains("<path"), "unexpected <path in empty SVG");
         assert!(!svg.contains("<line"), "unexpected <line in empty SVG");

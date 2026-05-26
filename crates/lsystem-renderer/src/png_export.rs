@@ -7,7 +7,8 @@ use lsystem_core::{Config, Dimensions};
 use crate::camera::Camera;
 use crate::line_renderer::{LinePipeline2D, LinePipeline3D};
 use crate::lsystem_bridge::{
-    color_params_from_config, geometry_to_vertices, geometry_to_vertices_3d, viewport_transform,
+    color_params_from_config, geometry_to_depth_segments, geometry_to_depth_segments_3d,
+    geometry_to_segments, geometry_to_segments_3d, viewport_transform,
 };
 use crate::wgpu_util;
 
@@ -101,15 +102,29 @@ pub async fn render_png(
 
     match config.generation.dimensions {
         Dimensions::ThreeD => {
-            let data = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
             let height = width; // square viewport for perspective
-            let total_segments = (data.vertices.len() / 2) as u32;
-            let color_params = color_params_from_config(&config.colors.line, total_segments);
             let mut pipeline = LinePipeline3D::new(device, FORMAT);
-            pipeline.upload(device, queue, &data.vertices, color_params);
+            let (bounds_min, bounds_max) = if config.colors.line.needs_topological_depth() {
+                let data = geometry_to_depth_segments_3d(
+                    lsystem_core::generate_3d_with_topological_depth(&config.generation),
+                );
+                let color_params = color_params_from_config(
+                    &config.colors.line,
+                    data.segments.len() as u32,
+                    data.max_topological_depth,
+                );
+                pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
+                (data.bounds_min, data.bounds_max)
+            } else {
+                let data = geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
+                let color_params =
+                    color_params_from_config(&config.colors.line, data.segments.len() as u32, 0);
+                pipeline.upload(device, queue, &data.segments, color_params);
+                (data.bounds_min, data.bounds_max)
+            };
             pipeline.write_mvp(
                 queue,
-                camera.compute_mvp_3d(data.bounds_min, data.bounds_max, width, height),
+                camera.compute_mvp_3d(bounds_min, bounds_max, width, height),
             );
             finish_render(
                 device,
@@ -124,22 +139,29 @@ pub async fn render_png(
             .await
         }
         Dimensions::TwoD => {
-            let data = geometry_to_vertices(lsystem_core::generate(&config.generation));
-            let height = derive_height(width, data.bounds_min, data.bounds_max)?;
-            let total_segments = (data.vertices.len() / 2) as u32;
-            let color_params = color_params_from_config(&config.colors.line, total_segments);
             let mut pipeline = LinePipeline2D::new(device, FORMAT);
-            pipeline.upload(device, queue, &data.vertices, color_params);
+            let (bounds_min, bounds_max) = if config.colors.line.needs_topological_depth() {
+                let data = geometry_to_depth_segments(
+                    lsystem_core::generate_with_topological_depth(&config.generation),
+                );
+                let color_params = color_params_from_config(
+                    &config.colors.line,
+                    data.segments.len() as u32,
+                    data.max_topological_depth,
+                );
+                pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
+                (data.bounds_min, data.bounds_max)
+            } else {
+                let data = geometry_to_segments(lsystem_core::generate(&config.generation));
+                let color_params =
+                    color_params_from_config(&config.colors.line, data.segments.len() as u32, 0);
+                pipeline.upload(device, queue, &data.segments, color_params);
+                (data.bounds_min, data.bounds_max)
+            };
+            let height = derive_height(width, bounds_min, bounds_max)?;
             pipeline.write_transform(
                 queue,
-                viewport_transform(
-                    data.bounds_min,
-                    data.bounds_max,
-                    width,
-                    height,
-                    [0.0, 0.0],
-                    1.0,
-                ),
+                viewport_transform(bounds_min, bounds_max, width, height, [0.0, 0.0], 1.0),
             );
             finish_render(
                 device,

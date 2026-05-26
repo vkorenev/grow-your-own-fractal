@@ -1,36 +1,74 @@
 use std::sync::Arc;
 
-use lsystem_core::{ColorConfig, Config, Dimensions};
+use lsystem_core::{Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
-    LinePipeline3D, SurfaceFrame, Vertex2D, Vertex3D,
+    LinePipeline3D, Segment2D, Segment3D, SurfaceFrame, TopologicalDepthSegment2D,
+    TopologicalDepthSegment3D,
 };
 use lsystem_renderer::lsystem_bridge::{
-    VertexData, VertexData3D, color_params_from_config, geometry_to_vertices,
-    geometry_to_vertices_3d,
+    SegmentData, SegmentData3D, TopologicalDepthSegmentData, TopologicalDepthSegmentData3D,
+    color_params_from_config, geometry_to_depth_segments, geometry_to_depth_segments_3d,
+    geometry_to_segments, geometry_to_segments_3d,
 };
 
 enum ActiveScene {
     TwoD {
-        vertices: Vec<Vertex2D>,
+        segments: Vec<Segment2D>,
         bounds_min: [f32; 2],
         bounds_max: [f32; 2],
     },
+    TwoDWithTopologicalDepth {
+        segments: Vec<TopologicalDepthSegment2D>,
+        bounds_min: [f32; 2],
+        bounds_max: [f32; 2],
+        max_topological_depth: u32,
+    },
     ThreeD {
-        vertices: Vec<Vertex3D>,
+        segments: Vec<Segment3D>,
         bounds_min: [f32; 3],
         bounds_max: [f32; 3],
+    },
+    ThreeDWithTopologicalDepth {
+        segments: Vec<TopologicalDepthSegment3D>,
+        bounds_min: [f32; 3],
+        bounds_max: [f32; 3],
+        max_topological_depth: u32,
     },
 }
 
 impl ActiveScene {
     fn total_segments(&self) -> u32 {
-        let vertex_count = match self {
-            ActiveScene::TwoD { vertices, .. } => vertices.len(),
-            ActiveScene::ThreeD { vertices, .. } => vertices.len(),
+        let segment_count = match self {
+            ActiveScene::TwoD { segments, .. } => segments.len(),
+            ActiveScene::TwoDWithTopologicalDepth { segments, .. } => segments.len(),
+            ActiveScene::ThreeD { segments, .. } => segments.len(),
+            ActiveScene::ThreeDWithTopologicalDepth { segments, .. } => segments.len(),
         };
-        (vertex_count / 2) as u32
+        segment_count as u32
+    }
+
+    fn max_topological_depth(&self) -> u32 {
+        match self {
+            ActiveScene::TwoDWithTopologicalDepth {
+                max_topological_depth,
+                ..
+            }
+            | ActiveScene::ThreeDWithTopologicalDepth {
+                max_topological_depth,
+                ..
+            } => *max_topological_depth,
+            ActiveScene::TwoD { .. } | ActiveScene::ThreeD { .. } => 0,
+        }
+    }
+
+    fn uses_topological_depth(&self) -> bool {
+        matches!(
+            self,
+            ActiveScene::TwoDWithTopologicalDepth { .. }
+                | ActiveScene::ThreeDWithTopologicalDepth { .. }
+        )
     }
 }
 
@@ -64,7 +102,7 @@ impl CanvasRenderer {
             pipeline_3d,
             camera: Camera::new(),
             scene: ActiveScene::TwoD {
-                vertices: Vec::new(),
+                segments: Vec::new(),
                 bounds_min: [-1.0, -1.0],
                 bounds_max: [1.0, 1.0],
             },
@@ -79,35 +117,87 @@ impl CanvasRenderer {
         canvas: &web_sys::HtmlCanvasElement,
         config: &Config,
     ) -> RenderStatus {
+        self.rebuild_scene(config);
+        self.camera.reset();
+        self.render(canvas)
+    }
+
+    pub fn set_config_preserving_camera_and_render(
+        &mut self,
+        canvas: &web_sys::HtmlCanvasElement,
+        config: &Config,
+    ) -> RenderStatus {
+        self.rebuild_scene(config);
+        self.render(canvas)
+    }
+
+    fn rebuild_scene(&mut self, config: &Config) {
         match config.generation.dimensions {
             Dimensions::ThreeD => {
-                let VertexData3D {
-                    vertices,
-                    bounds_min,
-                    bounds_max,
-                } = geometry_to_vertices_3d(lsystem_core::generate_3d(&config.generation));
-                self.scene = ActiveScene::ThreeD {
-                    vertices,
-                    bounds_min,
-                    bounds_max,
-                };
+                if config.colors.line.needs_topological_depth() {
+                    let TopologicalDepthSegmentData3D {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                        max_topological_depth,
+                    } = geometry_to_depth_segments_3d(
+                        lsystem_core::generate_3d_with_topological_depth(&config.generation),
+                    );
+                    self.scene = ActiveScene::ThreeDWithTopologicalDepth {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                        max_topological_depth,
+                    };
+                } else {
+                    let SegmentData3D {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                    } = geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
+                    self.scene = ActiveScene::ThreeD {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                    };
+                }
             }
             Dimensions::TwoD => {
-                let VertexData {
-                    vertices,
-                    bounds_min,
-                    bounds_max,
-                } = geometry_to_vertices(lsystem_core::generate(&config.generation));
-                self.scene = ActiveScene::TwoD {
-                    vertices,
-                    bounds_min,
-                    bounds_max,
-                };
+                if config.colors.line.needs_topological_depth() {
+                    let TopologicalDepthSegmentData {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                        max_topological_depth,
+                    } = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
+                        &config.generation,
+                    ));
+                    self.scene = ActiveScene::TwoDWithTopologicalDepth {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                        max_topological_depth,
+                    };
+                } else {
+                    let SegmentData {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                    } = geometry_to_segments(lsystem_core::generate(&config.generation));
+                    self.scene = ActiveScene::TwoD {
+                        segments,
+                        bounds_min,
+                        bounds_max,
+                    };
+                }
             }
         }
 
-        self.color_params =
-            color_params_from_config(&config.colors.line, self.scene.total_segments());
+        self.color_params = color_params_from_config(
+            &config.colors.line,
+            self.scene.total_segments(),
+            self.scene.max_topological_depth(),
+        );
         let [r, g, b] = config.colors.effective_background();
         self.background = wgpu::Color {
             r: r as f64,
@@ -115,17 +205,25 @@ impl CanvasRenderer {
             b: b as f64,
             a: 1.0,
         };
-        self.camera.reset();
         self.needs_upload = true;
-        self.render(canvas)
     }
 
     pub fn set_colors_and_render(
         &mut self,
         canvas: &web_sys::HtmlCanvasElement,
-        colors: &ColorConfig,
+        config: &Config,
     ) -> RenderStatus {
-        self.color_params = color_params_from_config(&colors.line, self.scene.total_segments());
+        let colors = &config.colors;
+        let wants_topological_depth = colors.line.needs_topological_depth();
+        if self.scene.uses_topological_depth() != wants_topological_depth {
+            self.rebuild_scene(config);
+            return self.render(canvas);
+        }
+        self.color_params = color_params_from_config(
+            &colors.line,
+            self.scene.total_segments(),
+            self.scene.max_topological_depth(),
+        );
         let [r, g, b] = colors.effective_background();
         self.background = wgpu::Color {
             r: r as f64,
@@ -148,6 +246,11 @@ impl CanvasRenderer {
                 bounds_min,
                 bounds_max,
                 ..
+            }
+            | ActiveScene::TwoDWithTopologicalDepth {
+                bounds_min,
+                bounds_max,
+                ..
             } => {
                 let (_, _, dpr) = sync_canvas_size(canvas);
                 let width = canvas.width().max(1);
@@ -161,7 +264,7 @@ impl CanvasRenderer {
                     height,
                 );
             }
-            ActiveScene::ThreeD { .. } => {
+            ActiveScene::ThreeD { .. } | ActiveScene::ThreeDWithTopologicalDepth { .. } => {
                 let (_, _, dpr) = sync_canvas_size(canvas);
                 self.camera.orbit_by_pixels(css_dx * dpr, css_dy * dpr);
             }
@@ -186,6 +289,11 @@ impl CanvasRenderer {
                 bounds_min,
                 bounds_max,
                 ..
+            }
+            | ActiveScene::TwoDWithTopologicalDepth {
+                bounds_min,
+                bounds_max,
+                ..
             } => {
                 let cursor = [
                     (client_x as f64 - rect.left()) as f32 * dpr,
@@ -200,7 +308,7 @@ impl CanvasRenderer {
                     canvas.height().max(1),
                 );
             }
-            ActiveScene::ThreeD { .. } => {
+            ActiveScene::ThreeD { .. } | ActiveScene::ThreeDWithTopologicalDepth { .. } => {
                 self.camera.zoom_3d(factor);
             }
         }
@@ -256,10 +364,10 @@ impl CanvasRenderer {
         }
     }
 
-    pub async fn recover_surface_and_render(
+    pub async fn recover_surface(
         &mut self,
         canvas: web_sys::HtmlCanvasElement,
-    ) -> Result<RenderStatus, GpuInitError> {
+    ) -> Result<(), GpuInitError> {
         let (width, height, _) = sync_canvas_size(&canvas);
         let gpu =
             GpuContext::new(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height).await?;
@@ -267,7 +375,7 @@ impl CanvasRenderer {
         self.pipeline_3d = LinePipeline3D::new(&gpu.device, gpu.surface_format());
         self.gpu = gpu;
         self.needs_upload = true;
-        Ok(self.render(&canvas))
+        Ok(())
     }
 
     pub fn device_queue(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
@@ -288,7 +396,7 @@ impl CanvasRenderer {
 
         match &self.scene {
             ActiveScene::TwoD {
-                vertices,
+                segments,
                 bounds_min,
                 bounds_max,
             } => {
@@ -296,7 +404,32 @@ impl CanvasRenderer {
                     self.pipeline_2d.upload(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        vertices,
+                        segments,
+                        self.color_params,
+                    );
+                    self.needs_upload = false;
+                }
+                self.pipeline_2d.write_transform(
+                    &self.gpu.queue,
+                    self.camera.compute_transform(
+                        *bounds_min,
+                        *bounds_max,
+                        width.max(1),
+                        height.max(1),
+                    ),
+                );
+            }
+            ActiveScene::TwoDWithTopologicalDepth {
+                segments,
+                bounds_min,
+                bounds_max,
+                ..
+            } => {
+                if self.needs_upload {
+                    self.pipeline_2d.upload_with_topological_depth(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        segments,
                         self.color_params,
                     );
                     self.needs_upload = false;
@@ -312,7 +445,7 @@ impl CanvasRenderer {
                 );
             }
             ActiveScene::ThreeD {
-                vertices,
+                segments,
                 bounds_min,
                 bounds_max,
             } => {
@@ -320,7 +453,32 @@ impl CanvasRenderer {
                     self.pipeline_3d.upload(
                         &self.gpu.device,
                         &self.gpu.queue,
-                        vertices,
+                        segments,
+                        self.color_params,
+                    );
+                    self.needs_upload = false;
+                }
+                self.pipeline_3d.write_mvp(
+                    &self.gpu.queue,
+                    self.camera.compute_mvp_3d(
+                        *bounds_min,
+                        *bounds_max,
+                        width.max(1),
+                        height.max(1),
+                    ),
+                );
+            }
+            ActiveScene::ThreeDWithTopologicalDepth {
+                segments,
+                bounds_min,
+                bounds_max,
+                ..
+            } => {
+                if self.needs_upload {
+                    self.pipeline_3d.upload_with_topological_depth(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        segments,
                         self.color_params,
                     );
                     self.needs_upload = false;
@@ -355,8 +513,12 @@ impl CanvasRenderer {
                 multiview_mask: None,
             });
             match &self.scene {
-                ActiveScene::TwoD { .. } => self.pipeline_2d.draw(&mut pass),
-                ActiveScene::ThreeD { .. } => self.pipeline_3d.draw(&mut pass),
+                ActiveScene::TwoD { .. } | ActiveScene::TwoDWithTopologicalDepth { .. } => {
+                    self.pipeline_2d.draw(&mut pass)
+                }
+                ActiveScene::ThreeD { .. } | ActiveScene::ThreeDWithTopologicalDepth { .. } => {
+                    self.pipeline_3d.draw(&mut pass)
+                }
             }
         }
 

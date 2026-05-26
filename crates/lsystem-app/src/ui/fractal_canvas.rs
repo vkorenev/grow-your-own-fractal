@@ -4,10 +4,13 @@ use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Th
 use lsystem_core::{ColorConfig, Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
-    ColorParams, LinePipeline2D, LinePipeline3D, Vertex2D, Vertex3D,
+    ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
+    TopologicalDepthSegment3D,
 };
 use lsystem_renderer::lsystem_bridge::{
-    VertexData, VertexData3D, VertexDataBuilder, VertexDataBuilder3D, color_params_from_config,
+    SegmentData, SegmentData3D, SegmentDataBuilder, SegmentDataBuilder3D,
+    TopologicalDepthSegmentData, TopologicalDepthSegmentData3D, TopologicalDepthSegmentDataBuilder,
+    TopologicalDepthSegmentDataBuilder3D, color_params_from_config,
 };
 use std::fmt;
 use std::sync::{
@@ -22,24 +25,60 @@ const CANCELLATION_CHECK_INTERVAL: usize = 4096;
 #[derive(Clone)]
 enum SceneGeometry {
     TwoD {
-        vertices: Arc<Vec<Vertex2D>>,
+        segments: Arc<Vec<Segment2D>>,
         bounds_min: [f32; 2],
         bounds_max: [f32; 2],
     },
+    TwoDWithTopologicalDepth {
+        segments: Arc<Vec<TopologicalDepthSegment2D>>,
+        bounds_min: [f32; 2],
+        bounds_max: [f32; 2],
+        max_topological_depth: u32,
+    },
     ThreeD {
-        vertices: Arc<Vec<Vertex3D>>,
+        segments: Arc<Vec<Segment3D>>,
         bounds_min: [f32; 3],
         bounds_max: [f32; 3],
+    },
+    ThreeDWithTopologicalDepth {
+        segments: Arc<Vec<TopologicalDepthSegment3D>>,
+        bounds_min: [f32; 3],
+        bounds_max: [f32; 3],
+        max_topological_depth: u32,
     },
 }
 
 impl SceneGeometry {
     fn total_segments(&self) -> u32 {
-        let vertex_count = match self {
-            SceneGeometry::TwoD { vertices, .. } => vertices.len(),
-            SceneGeometry::ThreeD { vertices, .. } => vertices.len(),
+        let segment_count = match self {
+            SceneGeometry::TwoD { segments, .. } => segments.len(),
+            SceneGeometry::TwoDWithTopologicalDepth { segments, .. } => segments.len(),
+            SceneGeometry::ThreeD { segments, .. } => segments.len(),
+            SceneGeometry::ThreeDWithTopologicalDepth { segments, .. } => segments.len(),
         };
-        (vertex_count / 2) as u32
+        segment_count as u32
+    }
+
+    fn max_topological_depth(&self) -> u32 {
+        match self {
+            SceneGeometry::TwoDWithTopologicalDepth {
+                max_topological_depth,
+                ..
+            }
+            | SceneGeometry::ThreeDWithTopologicalDepth {
+                max_topological_depth,
+                ..
+            } => *max_topological_depth,
+            SceneGeometry::TwoD { .. } | SceneGeometry::ThreeD { .. } => 0,
+        }
+    }
+
+    fn uses_topological_depth(&self) -> bool {
+        matches!(
+            self,
+            SceneGeometry::TwoDWithTopologicalDepth { .. }
+                | SceneGeometry::ThreeDWithTopologicalDepth { .. }
+        )
     }
 }
 
@@ -53,19 +92,23 @@ pub(super) struct Scene {
 }
 
 impl Scene {
-    fn from_vertex_data_2d(
+    fn from_segment_data_2d(
         colors: &ColorConfig,
-        data: VertexData,
+        data: SegmentData,
         camera: Camera,
         revision: u64,
     ) -> Self {
         let geometry = SceneGeometry::TwoD {
-            vertices: Arc::new(data.vertices),
+            segments: Arc::new(data.segments),
             bounds_min: data.bounds_min,
             bounds_max: data.bounds_max,
         };
         Self {
-            color_params: color_params_from_config(&colors.line, geometry.total_segments()),
+            color_params: color_params_from_config(
+                &colors.line,
+                geometry.total_segments(),
+                geometry.max_topological_depth(),
+            ),
             geometry,
             background: colors.effective_background(),
             camera,
@@ -73,19 +116,73 @@ impl Scene {
         }
     }
 
-    fn from_vertex_data_3d(
+    fn from_segment_data_3d(
         colors: &ColorConfig,
-        data: VertexData3D,
+        data: SegmentData3D,
         camera: Camera,
         revision: u64,
     ) -> Self {
         let geometry = SceneGeometry::ThreeD {
-            vertices: Arc::new(data.vertices),
+            segments: Arc::new(data.segments),
             bounds_min: data.bounds_min,
             bounds_max: data.bounds_max,
         };
         Self {
-            color_params: color_params_from_config(&colors.line, geometry.total_segments()),
+            color_params: color_params_from_config(
+                &colors.line,
+                geometry.total_segments(),
+                geometry.max_topological_depth(),
+            ),
+            geometry,
+            background: colors.effective_background(),
+            camera,
+            revision,
+        }
+    }
+
+    fn from_depth_segment_data_2d(
+        colors: &ColorConfig,
+        data: TopologicalDepthSegmentData,
+        camera: Camera,
+        revision: u64,
+    ) -> Self {
+        let geometry = SceneGeometry::TwoDWithTopologicalDepth {
+            segments: Arc::new(data.segments),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
+            max_topological_depth: data.max_topological_depth,
+        };
+        Self {
+            color_params: color_params_from_config(
+                &colors.line,
+                geometry.total_segments(),
+                geometry.max_topological_depth(),
+            ),
+            geometry,
+            background: colors.effective_background(),
+            camera,
+            revision,
+        }
+    }
+
+    fn from_depth_segment_data_3d(
+        colors: &ColorConfig,
+        data: TopologicalDepthSegmentData3D,
+        camera: Camera,
+        revision: u64,
+    ) -> Self {
+        let geometry = SceneGeometry::ThreeDWithTopologicalDepth {
+            segments: Arc::new(data.segments),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
+            max_topological_depth: data.max_topological_depth,
+        };
+        Self {
+            color_params: color_params_from_config(
+                &colors.line,
+                geometry.total_segments(),
+                geometry.max_topological_depth(),
+            ),
             geometry,
             background: colors.effective_background(),
             camera,
@@ -94,7 +191,14 @@ impl Scene {
     }
 
     pub(super) fn is_3d(&self) -> bool {
-        matches!(self.geometry, SceneGeometry::ThreeD { .. })
+        matches!(
+            self.geometry,
+            SceneGeometry::ThreeD { .. } | SceneGeometry::ThreeDWithTopologicalDepth { .. }
+        )
+    }
+
+    pub(super) fn uses_topological_depth(&self) -> bool {
+        self.geometry.uses_topological_depth()
     }
 
     pub(super) fn reset_camera(&mut self) {
@@ -106,13 +210,18 @@ impl Scene {
             bounds_min,
             bounds_max,
             ..
-        } = self.geometry
+        }
+        | SceneGeometry::TwoDWithTopologicalDepth {
+            bounds_min,
+            bounds_max,
+            ..
+        } = &self.geometry
         {
             self.camera.pan_by_pixels(
                 dx,
                 dy,
-                bounds_min,
-                bounds_max,
+                *bounds_min,
+                *bounds_max,
                 size.width.max(1.0) as u32,
                 size.height.max(1.0) as u32,
             );
@@ -137,8 +246,13 @@ impl Scene {
 
     pub(super) fn zoom_toward_cursor(&mut self, delta_y: f32, cursor: Point, size: Size) {
         let factor = 1.1_f32.powf(-delta_y / 100.0);
-        match self.geometry {
+        match &self.geometry {
             SceneGeometry::TwoD {
+                bounds_min,
+                bounds_max,
+                ..
+            }
+            | SceneGeometry::TwoDWithTopologicalDepth {
                 bounds_min,
                 bounds_max,
                 ..
@@ -146,13 +260,13 @@ impl Scene {
                 self.camera.zoom_toward_cursor(
                     factor,
                     [cursor.x, cursor.y],
-                    bounds_min,
-                    bounds_max,
+                    *bounds_min,
+                    *bounds_max,
                     size.width.max(1.0) as u32,
                     size.height.max(1.0) as u32,
                 );
             }
-            SceneGeometry::ThreeD { .. } => {
+            SceneGeometry::ThreeD { .. } | SceneGeometry::ThreeDWithTopologicalDepth { .. } => {
                 self.camera.zoom_3d(factor);
             }
         }
@@ -160,7 +274,11 @@ impl Scene {
 
     pub(super) fn update_colors(&mut self, colors: &ColorConfig) {
         let total_segments = self.geometry.total_segments();
-        self.color_params = color_params_from_config(&colors.line, total_segments);
+        self.color_params = color_params_from_config(
+            &colors.line,
+            total_segments,
+            self.geometry.max_topological_depth(),
+        );
         self.background = colors.effective_background();
         self.revision = self.revision.wrapping_add(1);
     }
@@ -185,13 +303,15 @@ impl fmt::Debug for SceneBuildResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ready { generation, scene } => {
-                let vertex_count = match &scene.geometry {
-                    SceneGeometry::TwoD { vertices, .. } => vertices.len(),
-                    SceneGeometry::ThreeD { vertices, .. } => vertices.len(),
+                let segment_count = match &scene.geometry {
+                    SceneGeometry::TwoD { segments, .. } => segments.len(),
+                    SceneGeometry::TwoDWithTopologicalDepth { segments, .. } => segments.len(),
+                    SceneGeometry::ThreeD { segments, .. } => segments.len(),
+                    SceneGeometry::ThreeDWithTopologicalDepth { segments, .. } => segments.len(),
                 };
                 f.debug_struct("Ready")
                     .field("generation", generation)
-                    .field("vertices", &vertex_count)
+                    .field("segments", &segment_count)
                     .finish()
             }
             Self::Cancelled => f.write_str("Cancelled"),
@@ -210,67 +330,132 @@ pub(super) async fn build_scene(
 
     match config.generation.dimensions {
         Dimensions::ThreeD => {
-            let mut builder = VertexDataBuilder3D::new();
+            let use_topological_depth = config.colors.line.needs_topological_depth();
             let mut segments_seen = 0usize;
 
-            for segment in lsystem_core::generate_3d(&config.generation) {
-                if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                    if is_cancelled(generation, &current_generation) {
-                        return SceneBuildResult::Cancelled;
+            if use_topological_depth {
+                let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
+                for segment in lsystem_core::generate_3d_with_topological_depth(&config.generation)
+                {
+                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
+                        yield_generation().await;
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
                     }
-                    yield_generation().await;
-                    if is_cancelled(generation, &current_generation) {
-                        return SceneBuildResult::Cancelled;
-                    }
+                    builder.push_segment(segment);
+                    segments_seen = segments_seen.wrapping_add(1);
                 }
-                builder.push_segment(segment);
-                segments_seen = segments_seen.wrapping_add(1);
-            }
 
-            if is_cancelled(generation, &current_generation) {
-                return SceneBuildResult::Cancelled;
-            }
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
 
-            SceneBuildResult::Ready {
-                generation,
-                scene: Scene::from_vertex_data_3d(
-                    &config.colors,
-                    builder.finish(),
-                    camera,
+                SceneBuildResult::Ready {
                     generation,
-                ),
+                    scene: Scene::from_depth_segment_data_3d(
+                        &config.colors,
+                        builder.finish(),
+                        camera,
+                        generation,
+                    ),
+                }
+            } else {
+                let mut builder = SegmentDataBuilder3D::new();
+                for segment in lsystem_core::generate_3d(&config.generation) {
+                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
+                        yield_generation().await;
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
+                    }
+                    builder.push_segment(segment);
+                    segments_seen = segments_seen.wrapping_add(1);
+                }
+
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
+
+                SceneBuildResult::Ready {
+                    generation,
+                    scene: Scene::from_segment_data_3d(
+                        &config.colors,
+                        builder.finish(),
+                        camera,
+                        generation,
+                    ),
+                }
             }
         }
         Dimensions::TwoD => {
-            let mut builder = VertexDataBuilder::new();
+            let use_topological_depth = config.colors.line.needs_topological_depth();
             let mut segments_seen = 0usize;
 
-            for segment in lsystem_core::generate(&config.generation) {
-                if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                    if is_cancelled(generation, &current_generation) {
-                        return SceneBuildResult::Cancelled;
+            if use_topological_depth {
+                let mut builder = TopologicalDepthSegmentDataBuilder::new();
+                for segment in lsystem_core::generate_with_topological_depth(&config.generation) {
+                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
+                        yield_generation().await;
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
                     }
-                    yield_generation().await;
-                    if is_cancelled(generation, &current_generation) {
-                        return SceneBuildResult::Cancelled;
-                    }
+                    builder.push_segment(segment);
+                    segments_seen = segments_seen.wrapping_add(1);
                 }
-                builder.push_segment(segment);
-                segments_seen = segments_seen.wrapping_add(1);
-            }
 
-            if is_cancelled(generation, &current_generation) {
-                return SceneBuildResult::Cancelled;
-            }
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
 
-            SceneBuildResult::Ready {
-                generation,
-                scene: Scene::from_vertex_data_2d(
-                    &config.colors,
-                    builder.finish(),
-                    camera,
+                SceneBuildResult::Ready {
                     generation,
-                ),
+                    scene: Scene::from_depth_segment_data_2d(
+                        &config.colors,
+                        builder.finish(),
+                        camera,
+                        generation,
+                    ),
+                }
+            } else {
+                let mut builder = SegmentDataBuilder::new();
+                for segment in lsystem_core::generate(&config.generation) {
+                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
+                        yield_generation().await;
+                        if is_cancelled(generation, &current_generation) {
+                            return SceneBuildResult::Cancelled;
+                        }
+                    }
+                    builder.push_segment(segment);
+                    segments_seen = segments_seen.wrapping_add(1);
+                }
+
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
+
+                SceneBuildResult::Ready {
+                    generation,
+                    scene: Scene::from_segment_data_2d(
+                        &config.colors,
+                        builder.finish(),
+                        camera,
+                        generation,
+                    ),
+                }
             }
         }
     }
@@ -315,7 +500,7 @@ impl Default for Scene {
     fn default() -> Self {
         Self {
             geometry: SceneGeometry::TwoD {
-                vertices: Arc::new(Vec::new()),
+                segments: Arc::new(Vec::new()),
                 bounds_min: [-1.0, -1.0],
                 bounds_max: [1.0, 1.0],
             },
@@ -359,7 +544,10 @@ struct SceneSnapshot {
 
 impl SceneSnapshot {
     fn is_3d(&self) -> bool {
-        matches!(self.geometry, SceneGeometry::ThreeD { .. })
+        matches!(
+            self.geometry,
+            SceneGeometry::ThreeD { .. } | SceneGeometry::ThreeDWithTopologicalDepth { .. }
+        )
     }
 }
 
@@ -502,7 +690,7 @@ impl shader::Primitive for FractalPrimitive {
 
         match &self.scene.geometry {
             SceneGeometry::TwoD {
-                vertices,
+                segments,
                 bounds_min,
                 bounds_max,
             } => {
@@ -513,13 +701,34 @@ impl shader::Primitive for FractalPrimitive {
                 if pipeline.uploaded_revision != Some(self.scene.revision) {
                     pipeline
                         .pipeline_2d
-                        .upload(device, queue, vertices, self.scene.color_params);
+                        .upload(device, queue, segments, self.scene.color_params);
+                    pipeline.uploaded_revision = Some(self.scene.revision);
+                }
+                pipeline.pipeline_2d.write_transform(queue, transform);
+            }
+            SceneGeometry::TwoDWithTopologicalDepth {
+                segments,
+                bounds_min,
+                bounds_max,
+                ..
+            } => {
+                let transform =
+                    self.scene
+                        .camera
+                        .compute_transform(*bounds_min, *bounds_max, width, height);
+                if pipeline.uploaded_revision != Some(self.scene.revision) {
+                    pipeline.pipeline_2d.upload_with_topological_depth(
+                        device,
+                        queue,
+                        segments,
+                        self.scene.color_params,
+                    );
                     pipeline.uploaded_revision = Some(self.scene.revision);
                 }
                 pipeline.pipeline_2d.write_transform(queue, transform);
             }
             SceneGeometry::ThreeD {
-                vertices,
+                segments,
                 bounds_min,
                 bounds_max,
             } => {
@@ -530,7 +739,28 @@ impl shader::Primitive for FractalPrimitive {
                 if pipeline.uploaded_revision != Some(self.scene.revision) {
                     pipeline
                         .pipeline_3d
-                        .upload(device, queue, vertices, self.scene.color_params);
+                        .upload(device, queue, segments, self.scene.color_params);
+                    pipeline.uploaded_revision = Some(self.scene.revision);
+                }
+                pipeline.pipeline_3d.write_mvp(queue, mvp);
+            }
+            SceneGeometry::ThreeDWithTopologicalDepth {
+                segments,
+                bounds_min,
+                bounds_max,
+                ..
+            } => {
+                let mvp = self
+                    .scene
+                    .camera
+                    .compute_mvp_3d(*bounds_min, *bounds_max, width, height);
+                if pipeline.uploaded_revision != Some(self.scene.revision) {
+                    pipeline.pipeline_3d.upload_with_topological_depth(
+                        device,
+                        queue,
+                        segments,
+                        self.scene.color_params,
+                    );
                     pipeline.uploaded_revision = Some(self.scene.revision);
                 }
                 pipeline.pipeline_3d.write_mvp(queue, mvp);
@@ -540,8 +770,12 @@ impl shader::Primitive for FractalPrimitive {
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         match &self.scene.geometry {
-            SceneGeometry::TwoD { .. } => pipeline.pipeline_2d.draw(render_pass),
-            SceneGeometry::ThreeD { .. } => pipeline.pipeline_3d.draw(render_pass),
+            SceneGeometry::TwoD { .. } | SceneGeometry::TwoDWithTopologicalDepth { .. } => {
+                pipeline.pipeline_2d.draw(render_pass)
+            }
+            SceneGeometry::ThreeD { .. } | SceneGeometry::ThreeDWithTopologicalDepth { .. } => {
+                pipeline.pipeline_3d.draw(render_pass)
+            }
         }
         true
     }

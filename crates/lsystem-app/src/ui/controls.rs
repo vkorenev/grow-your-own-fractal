@@ -171,6 +171,13 @@ fn push_color_controls<'a>(
             .push(rgb_controls("Gradient end", end, move |end| {
                 Message::LineColorChanged(LineColorConfig::Gradient { start, end })
             })),
+        LineColorConfig::DepthGradient { start, end } => controls
+            .push(rgb_controls("Depth start", start, move |start| {
+                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
+            }))
+            .push(rgb_controls("Depth end", end, move |end| {
+                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
+            })),
         LineColorConfig::HueCycle { initial } => {
             controls.push(rgb_controls("Initial RGB", initial, |initial| {
                 Message::LineColorChanged(LineColorConfig::HueCycle { initial })

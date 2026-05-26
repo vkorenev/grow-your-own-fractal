@@ -934,6 +934,20 @@ color = [0.0, 0.9, 0.5]
                 initial: [0.25, 0.5, 0.75],
             }
         );
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::DepthGradient {
+                start: [0.2, 0.3, 0.4],
+                end: [0.5, 0.6, 0.7],
+            })
+            .unwrap();
+        assert_eq!(
+            workspace.selected().applied_config().colors.line,
+            LineColorConfig::DepthGradient {
+                start: [0.2, 0.3, 0.4],
+                end: [0.5, 0.6, 0.7],
+            }
+        );
     }
 
     #[test]
@@ -1005,6 +1019,19 @@ color = [0.0, 0.9, 0.5]
         assert!(!text.contains("initial ="));
         assert!(!text.contains("start ="));
         assert!(!text.contains("end ="));
+
+        clean_mut(&mut workspace)
+            .set_line_color(LineColorConfig::DepthGradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.4, 0.5, 0.6],
+            })
+            .unwrap();
+        let text = workspace.selected().draft_text().into_owned();
+        assert!(text.contains("mode = \"depth_gradient\""));
+        assert!(text.contains("start = [0.1, 0.2, 0.3]"));
+        assert!(text.contains("end = [0.4, 0.5, 0.6]"));
+        assert!(!text.contains("color ="));
+        assert!(!text.contains("initial ="));
     }
 
     #[test]
