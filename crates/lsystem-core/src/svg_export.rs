@@ -1,8 +1,8 @@
 use glam::Vec2;
 
 use crate::{
-    Config, LineColorConfig, Segment2DWithTopologicalDepth, color_util::rgb_to_hsv, generate,
-    generate_with_topological_depth,
+    ColorConfig, Config, LineColorConfig, Segment2DWithTopologicalDepth, color_util::rgb_to_hsv,
+    generate, generate_with_topological_depth,
 };
 
 /// Generate an SVG string for the given config.
@@ -16,6 +16,7 @@ pub fn export_svg(config: &Config) -> String {
             generate_with_topological_depth(&config.generation).collect();
         return export_svg_with_segments(
             config,
+            &colors,
             segments.iter().map(|segment| segment.points),
             build_depth_body(&segments, &colors.line),
         );
@@ -24,6 +25,7 @@ pub fn export_svg(config: &Config) -> String {
     let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
     export_svg_with_segments(
         config,
+        &colors,
         segments.iter().copied(),
         build_body(&segments, &colors.line),
     )
@@ -31,6 +33,7 @@ pub fn export_svg(config: &Config) -> String {
 
 fn export_svg_with_segments(
     config: &Config,
+    colors: &ColorConfig,
     segments: impl IntoIterator<Item = [Vec2; 2]>,
     body: String,
 ) -> String {
@@ -51,7 +54,7 @@ fn export_svg_with_segments(
         }
     }
     if !has_segments {
-        let bg = to_hex(config.colors.effective_background());
+        let bg = to_hex(colors.effective_background());
         return format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
         );
@@ -81,7 +84,7 @@ fn export_svg_with_segments(
     let w = max_x - min_x;
     let h = max_y - min_y;
 
-    let bg = to_hex(config.colors.effective_background());
+    let bg = to_hex(colors.effective_background());
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.

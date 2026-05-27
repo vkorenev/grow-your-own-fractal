@@ -51,8 +51,6 @@ impl ActiveScene {
 
     fn max_topological_depth(&self) -> u32 {
         match self {
-            // Bracketless fractals use instance_index as a depth proxy in the shader,
-            // so len-1 produces the correct [0, 1] normalization range.
             Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
             Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
             Self::TwoDWithTopologicalDepth {

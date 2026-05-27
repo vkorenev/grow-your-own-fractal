@@ -1454,8 +1454,15 @@ end = [1.0, 1.0, 1.0]"#,
             LineColorConfig::Gradient { start, end },
             "bracketless DepthGradient must normalize to Gradient"
         );
-        assert_eq!(cfg.colors.line, LineColorConfig::DepthGradient { start, end },
-            "effective_colors must not mutate the stored config");
+        assert_eq!(
+            effective.background, cfg.colors.background,
+            "background must be preserved during normalization"
+        );
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::DepthGradient { start, end },
+            "effective_colors must not mutate the stored config"
+        );
     }
 
     #[test]
@@ -1474,9 +1481,36 @@ end = [1.0, 1.0, 1.0]"#,
     }
 
     #[test]
-    fn effective_colors_passes_through_other_modes_for_bracketless() {
+    fn effective_colors_passes_through_solid_for_bracketless() {
         let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let cfg = parse_config(&toml).unwrap();
-        assert_eq!(cfg.effective_colors().line, cfg.colors.line);
+        let effective = cfg.effective_colors();
+        assert_eq!(effective.line, cfg.colors.line);
+        assert_eq!(effective.background, cfg.colors.background);
+    }
+
+    #[test]
+    fn effective_colors_passes_through_gradient_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let mut cfg = parse_config(&toml).unwrap();
+        cfg.colors.line = LineColorConfig::Gradient {
+            start: [1.0, 0.0, 0.0],
+            end: [0.0, 0.0, 1.0],
+        };
+        let effective = cfg.effective_colors();
+        assert_eq!(effective.line, cfg.colors.line);
+        assert_eq!(effective.background, cfg.colors.background);
+    }
+
+    #[test]
+    fn effective_colors_passes_through_hue_cycle_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let mut cfg = parse_config(&toml).unwrap();
+        cfg.colors.line = LineColorConfig::HueCycle {
+            initial: [1.0, 0.0, 0.0],
+        };
+        let effective = cfg.effective_colors();
+        assert_eq!(effective.line, cfg.colors.line);
+        assert_eq!(effective.background, cfg.colors.background);
     }
 }
