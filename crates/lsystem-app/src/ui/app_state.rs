@@ -361,7 +361,7 @@ impl FractalApp {
                 } = result
                     && self.is_current_generation(generation)
                 {
-                    scene.update_colors(&self.selected_config().colors);
+                    scene.update_colors(&self.selected_config().effective_colors());
                     self.scene = scene;
                     self.scene_pending = false;
                 }
@@ -580,17 +580,7 @@ impl FractalApp {
             .config_workspace
             .selected()
             .applied_config()
-            .colors
-            .clone();
-        let wants_topological_depth = colors.line.needs_topological_depth();
-        if self.scene.uses_topological_depth() != wants_topological_depth {
-            self.error = None;
-            self.export_status = None;
-            return self.schedule_scene_generation();
-        }
-        if self.scene_pending {
-            self.cancel_pending_scene_generation();
-        }
+            .effective_colors();
         self.scene.update_colors(&colors);
         self.error = None;
         self.export_status = None;
@@ -617,7 +607,7 @@ impl FractalApp {
         let generation = &config.generation;
         let max_seg = lsystem_renderer::line_renderer::max_segments_for_line_color(
             generation.dimensions,
-            &config.colors.line,
+            generation.has_stack_directives(),
         );
         self.max_iterations =
             lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
@@ -656,11 +646,6 @@ impl FractalApp {
             build_scene(config, generation, token, prev_camera),
             Message::SceneGenerated,
         )
-    }
-
-    fn cancel_pending_scene_generation(&mut self) {
-        self.scene_generation.fetch_add(1, Ordering::AcqRel);
-        self.scene_pending = false;
     }
 
     fn is_current_generation(&self, generation: u64) -> bool {
@@ -805,23 +790,31 @@ mod tests {
     }
 
     #[test]
-    fn switching_back_from_depth_gradient_cancels_pending_depth_scene() {
+    fn color_mode_change_does_not_schedule_or_cancel_geometry() {
         let (mut app, _) = FractalApp::new();
-        app.scene_generation.store(0, Ordering::Release);
+        let generation_before = app.scene_generation.load(Ordering::Acquire);
         app.scene_pending = false;
 
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::DepthGradient));
-        assert!(app.scene_pending);
-        let depth_generation = app.scene_generation.load(Ordering::Acquire);
+        assert!(
+            !app.scene_pending,
+            "color change must not schedule geometry"
+        );
+        assert_eq!(
+            app.scene_generation.load(Ordering::Acquire),
+            generation_before
+        );
+
+        // Simulate a geometry build in-flight for an unrelated reason
+        app.scene_pending = true;
+        let generation_mid = app.scene_generation.load(Ordering::Acquire);
 
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
-
-        assert!(!app.scene_pending);
-        assert!(app.scene_generation.load(Ordering::Acquire) > depth_generation);
-        assert!(matches!(
-            app.selected_config().colors.line,
-            LineColorConfig::Solid { .. }
-        ));
+        assert!(
+            app.scene_pending,
+            "color change must not cancel in-flight geometry build"
+        );
+        assert_eq!(app.scene_generation.load(Ordering::Acquire), generation_mid);
     }
 
     #[test]

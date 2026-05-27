@@ -58,6 +58,9 @@ fn color_for_traversal(instance_index: u32) -> vec4<f32> {
                 1.0,
             );
         }
+        case 3u: {
+            return color_for_depth(instance_index);
+        }
         default: {
             return color_params.color_start;
         }
@@ -94,6 +97,7 @@ fn vs_main(
 @vertex
 fn vs_depth_main(
     @builtin(vertex_index) vi: u32,
+    @builtin(instance_index) ii: u32,
     @location(0) start: vec3<f32>,
     @location(1) end: vec3<f32>,
     @location(2) topological_depth: u32,
@@ -102,7 +106,11 @@ fn vs_depth_main(
 
     var out: VertexOutput;
     out.clip_position = mvp.matrix * vec4<f32>(position, 1.0);
-    out.color = color_for_depth(topological_depth);
+    if color_params.mode == 3u {
+        out.color = color_for_depth(topological_depth);
+    } else {
+        out.color = color_for_traversal(ii);
+    }
     return out;
 }
 

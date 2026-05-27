@@ -22,7 +22,7 @@ pub(crate) fn max_iterations_for_config(config: &Config) -> u32 {
     let generation = &config.generation;
     let max_seg = lsystem_renderer::line_renderer::max_segments_for_line_color(
         generation.dimensions,
-        &config.colors.line,
+        config.generation.has_stack_directives(),
     );
     lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg)
 }

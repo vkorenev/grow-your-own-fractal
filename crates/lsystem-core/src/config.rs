@@ -135,6 +135,25 @@ pub struct Config {
     pub colors: ColorConfig,
 }
 
+impl Config {
+    /// Returns the effective colors for rendering.
+    ///
+    /// For bracketless fractals, `DepthGradient` is treated as `Gradient` because
+    /// topological depth equals segment index, making the two modes identical. This
+    /// keeps export segment selection consistent with the canvas iteration cap.
+    pub fn effective_colors(&self) -> ColorConfig {
+        if !self.generation.has_stack_directives()
+            && let LineColorConfig::DepthGradient { start, end } = self.colors.line
+        {
+            return ColorConfig {
+                line: LineColorConfig::Gradient { start, end },
+                background: self.colors.background,
+            };
+        }
+        self.colors.clone()
+    }
+}
+
 /// Validated inputs needed to expand an L-system and run the turtle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationConfig {
@@ -150,6 +169,15 @@ pub struct GenerationConfig {
     pub initial_heading: f32,
     /// Production rules: single ASCII letter → replacement string.
     pub rules: BTreeMap<char, String>,
+}
+
+impl GenerationConfig {
+    /// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
+    ///
+    /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
+    pub fn has_stack_directives(&self) -> bool {
+        self.axiom.contains('[') || self.rules.values().any(|rhs| rhs.contains('['))
+    }
 }
 
 /// Format-preserving TOML document for an L-system configuration.
@@ -1390,5 +1418,99 @@ end = [1.0, 1.0, 1.0]"#,
             matches!(err, ConfigError::InvalidAngle(_)),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn has_stack_directives_false_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "F = \"F-F++F-F\"");
+        let cfg = parse_config(&toml).unwrap();
+        assert!(!cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn has_stack_directives_true_when_axiom_has_bracket() {
+        let toml = test_toml(2, "F[+F]F", 1, "25.0", "1.0", "0.0", "");
+        let cfg = parse_config(&toml).unwrap();
+        assert!(cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn has_stack_directives_true_when_rule_has_bracket() {
+        let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
+        let cfg = parse_config(&toml).unwrap();
+        assert!(cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn effective_colors_normalizes_depth_gradient_to_gradient_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let mut cfg = parse_config(&toml).unwrap();
+        let start = [0.1, 0.2, 0.3];
+        let end = [0.7, 0.8, 0.9];
+        cfg.colors.line = LineColorConfig::DepthGradient { start, end };
+        let effective = cfg.effective_colors();
+        assert_eq!(
+            effective.line,
+            LineColorConfig::Gradient { start, end },
+            "bracketless DepthGradient must normalize to Gradient"
+        );
+        assert_eq!(
+            effective.background, cfg.colors.background,
+            "background must be preserved during normalization"
+        );
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::DepthGradient { start, end },
+            "effective_colors must not mutate the stored config"
+        );
+    }
+
+    #[test]
+    fn effective_colors_preserves_depth_gradient_for_bracket_fractal() {
+        let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
+        let mut cfg = parse_config(&toml).unwrap();
+        let start = [0.1, 0.2, 0.3];
+        let end = [0.7, 0.8, 0.9];
+        cfg.colors.line = LineColorConfig::DepthGradient { start, end };
+        let effective = cfg.effective_colors();
+        assert_eq!(
+            effective.line,
+            LineColorConfig::DepthGradient { start, end },
+            "bracket fractal DepthGradient must be preserved"
+        );
+    }
+
+    #[test]
+    fn effective_colors_passes_through_solid_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let cfg = parse_config(&toml).unwrap();
+        let effective = cfg.effective_colors();
+        assert_eq!(effective.line, cfg.colors.line);
+        assert_eq!(effective.background, cfg.colors.background);
+    }
+
+    #[test]
+    fn effective_colors_passes_through_gradient_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let mut cfg = parse_config(&toml).unwrap();
+        cfg.colors.line = LineColorConfig::Gradient {
+            start: [1.0, 0.0, 0.0],
+            end: [0.0, 0.0, 1.0],
+        };
+        let effective = cfg.effective_colors();
+        assert_eq!(effective.line, cfg.colors.line);
+        assert_eq!(effective.background, cfg.colors.background);
+    }
+
+    #[test]
+    fn effective_colors_passes_through_hue_cycle_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let mut cfg = parse_config(&toml).unwrap();
+        cfg.colors.line = LineColorConfig::HueCycle {
+            initial: [1.0, 0.0, 0.0],
+        };
+        let effective = cfg.effective_colors();
+        assert_eq!(effective.line, cfg.colors.line);
+        assert_eq!(effective.background, cfg.colors.background);
     }
 }
