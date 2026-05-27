@@ -61,24 +61,19 @@ impl SceneGeometry {
 
     fn max_topological_depth(&self) -> u32 {
         match self {
-            SceneGeometry::TwoDWithTopologicalDepth {
+            // Bracketless fractals use instance_index as a depth proxy in the shader,
+            // so len-1 produces the correct [0, 1] normalization range.
+            Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::TwoDWithTopologicalDepth {
                 max_topological_depth,
                 ..
             }
-            | SceneGeometry::ThreeDWithTopologicalDepth {
+            | Self::ThreeDWithTopologicalDepth {
                 max_topological_depth,
                 ..
             } => *max_topological_depth,
-            SceneGeometry::TwoD { .. } | SceneGeometry::ThreeD { .. } => 0,
         }
-    }
-
-    fn uses_topological_depth(&self) -> bool {
-        matches!(
-            self,
-            SceneGeometry::TwoDWithTopologicalDepth { .. }
-                | SceneGeometry::ThreeDWithTopologicalDepth { .. }
-        )
     }
 }
 
@@ -88,7 +83,8 @@ pub(super) struct Scene {
     color_params: ColorParams,
     background: [f32; 3],
     pub(super) camera: Camera,
-    revision: u64,
+    geometry_revision: u64,
+    color_revision: u64,
 }
 
 impl Scene {
@@ -112,7 +108,8 @@ impl Scene {
             geometry,
             background: colors.effective_background(),
             camera,
-            revision,
+            geometry_revision: revision,
+            color_revision: 0,
         }
     }
 
@@ -136,7 +133,8 @@ impl Scene {
             geometry,
             background: colors.effective_background(),
             camera,
-            revision,
+            geometry_revision: revision,
+            color_revision: 0,
         }
     }
 
@@ -161,7 +159,8 @@ impl Scene {
             geometry,
             background: colors.effective_background(),
             camera,
-            revision,
+            geometry_revision: revision,
+            color_revision: 0,
         }
     }
 
@@ -186,7 +185,8 @@ impl Scene {
             geometry,
             background: colors.effective_background(),
             camera,
-            revision,
+            geometry_revision: revision,
+            color_revision: 0,
         }
     }
 
@@ -195,10 +195,6 @@ impl Scene {
             self.geometry,
             SceneGeometry::ThreeD { .. } | SceneGeometry::ThreeDWithTopologicalDepth { .. }
         )
-    }
-
-    pub(super) fn uses_topological_depth(&self) -> bool {
-        self.geometry.uses_topological_depth()
     }
 
     pub(super) fn reset_camera(&mut self) {
@@ -280,7 +276,7 @@ impl Scene {
             self.geometry.max_topological_depth(),
         );
         self.background = colors.effective_background();
-        self.revision = self.revision.wrapping_add(1);
+        self.color_revision = self.color_revision.wrapping_add(1);
     }
 
     fn snapshot(&self) -> SceneSnapshot {
@@ -288,7 +284,8 @@ impl Scene {
             geometry: self.geometry.clone(),
             color_params: self.color_params,
             camera: self.camera.clone(),
-            revision: self.revision,
+            geometry_revision: self.geometry_revision,
+            color_revision: self.color_revision,
         }
     }
 }
@@ -330,7 +327,9 @@ pub(super) async fn build_scene(
 
     match config.generation.dimensions {
         Dimensions::ThreeD => {
-            let use_topological_depth = config.colors.line.needs_topological_depth();
+            // Depth geometry is decided by fractal structure, not color mode, so color
+            // changes after this build never require a geometry rebuild.
+            let use_topological_depth = config.generation.has_stack_directives();
             let mut segments_seen = 0usize;
 
             if use_topological_depth {
@@ -395,7 +394,9 @@ pub(super) async fn build_scene(
             }
         }
         Dimensions::TwoD => {
-            let use_topological_depth = config.colors.line.needs_topological_depth();
+            // Depth geometry is decided by fractal structure, not color mode, so color
+            // changes after this build never require a geometry rebuild.
+            let use_topological_depth = config.generation.has_stack_directives();
             let mut segments_seen = 0usize;
 
             if use_topological_depth {
@@ -507,7 +508,8 @@ impl Default for Scene {
             color_params: ColorParams::default(),
             background: ColorConfig::DEFAULT_BACKGROUND,
             camera: Camera::new(),
-            revision: 0,
+            geometry_revision: 0,
+            color_revision: 0,
         }
     }
 }
@@ -539,7 +541,8 @@ struct SceneSnapshot {
     geometry: SceneGeometry,
     color_params: ColorParams,
     camera: Camera,
-    revision: u64,
+    geometry_revision: u64,
+    color_revision: u64,
 }
 
 impl SceneSnapshot {
@@ -667,7 +670,8 @@ struct FractalPrimitive {
 impl fmt::Debug for FractalPrimitive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FractalPrimitive")
-            .field("revision", &self.scene.revision)
+            .field("geometry_revision", &self.scene.geometry_revision)
+            .field("color_revision", &self.scene.color_revision)
             .field("is_3d", &self.scene.is_3d())
             .finish()
     }
@@ -698,11 +702,27 @@ impl shader::Primitive for FractalPrimitive {
                     self.scene
                         .camera
                         .compute_transform(*bounds_min, *bounds_max, width, height);
-                if pipeline.uploaded_revision != Some(self.scene.revision) {
+                if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.geometry != self.scene.geometry_revision)
+                {
                     pipeline
                         .pipeline_2d
                         .upload(device, queue, segments, self.scene.color_params);
-                    pipeline.uploaded_revision = Some(self.scene.revision);
+                    pipeline.uploaded = Some(UploadedRevisions {
+                        geometry: self.scene.geometry_revision,
+                        color: self.scene.color_revision,
+                    });
+                } else if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.color != self.scene.color_revision)
+                {
+                    pipeline
+                        .pipeline_2d
+                        .write_color_params(queue, self.scene.color_params);
+                    pipeline.uploaded.as_mut().unwrap().color = self.scene.color_revision;
                 }
                 pipeline.pipeline_2d.write_transform(queue, transform);
             }
@@ -716,14 +736,30 @@ impl shader::Primitive for FractalPrimitive {
                     self.scene
                         .camera
                         .compute_transform(*bounds_min, *bounds_max, width, height);
-                if pipeline.uploaded_revision != Some(self.scene.revision) {
+                if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.geometry != self.scene.geometry_revision)
+                {
                     pipeline.pipeline_2d.upload_with_topological_depth(
                         device,
                         queue,
                         segments,
                         self.scene.color_params,
                     );
-                    pipeline.uploaded_revision = Some(self.scene.revision);
+                    pipeline.uploaded = Some(UploadedRevisions {
+                        geometry: self.scene.geometry_revision,
+                        color: self.scene.color_revision,
+                    });
+                } else if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.color != self.scene.color_revision)
+                {
+                    pipeline
+                        .pipeline_2d
+                        .write_color_params(queue, self.scene.color_params);
+                    pipeline.uploaded.as_mut().unwrap().color = self.scene.color_revision;
                 }
                 pipeline.pipeline_2d.write_transform(queue, transform);
             }
@@ -736,11 +772,27 @@ impl shader::Primitive for FractalPrimitive {
                     .scene
                     .camera
                     .compute_mvp_3d(*bounds_min, *bounds_max, width, height);
-                if pipeline.uploaded_revision != Some(self.scene.revision) {
+                if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.geometry != self.scene.geometry_revision)
+                {
                     pipeline
                         .pipeline_3d
                         .upload(device, queue, segments, self.scene.color_params);
-                    pipeline.uploaded_revision = Some(self.scene.revision);
+                    pipeline.uploaded = Some(UploadedRevisions {
+                        geometry: self.scene.geometry_revision,
+                        color: self.scene.color_revision,
+                    });
+                } else if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.color != self.scene.color_revision)
+                {
+                    pipeline
+                        .pipeline_3d
+                        .write_color_params(queue, self.scene.color_params);
+                    pipeline.uploaded.as_mut().unwrap().color = self.scene.color_revision;
                 }
                 pipeline.pipeline_3d.write_mvp(queue, mvp);
             }
@@ -754,14 +806,30 @@ impl shader::Primitive for FractalPrimitive {
                     .scene
                     .camera
                     .compute_mvp_3d(*bounds_min, *bounds_max, width, height);
-                if pipeline.uploaded_revision != Some(self.scene.revision) {
+                if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.geometry != self.scene.geometry_revision)
+                {
                     pipeline.pipeline_3d.upload_with_topological_depth(
                         device,
                         queue,
                         segments,
                         self.scene.color_params,
                     );
-                    pipeline.uploaded_revision = Some(self.scene.revision);
+                    pipeline.uploaded = Some(UploadedRevisions {
+                        geometry: self.scene.geometry_revision,
+                        color: self.scene.color_revision,
+                    });
+                } else if pipeline
+                    .uploaded
+                    .as_ref()
+                    .is_none_or(|r| r.color != self.scene.color_revision)
+                {
+                    pipeline
+                        .pipeline_3d
+                        .write_color_params(queue, self.scene.color_params);
+                    pipeline.uploaded.as_mut().unwrap().color = self.scene.color_revision;
                 }
                 pipeline.pipeline_3d.write_mvp(queue, mvp);
             }
@@ -781,10 +849,15 @@ impl shader::Primitive for FractalPrimitive {
     }
 }
 
+struct UploadedRevisions {
+    geometry: u64,
+    color: u64,
+}
+
 struct FractalPipeline {
     pipeline_2d: LinePipeline2D,
     pipeline_3d: LinePipeline3D,
-    uploaded_revision: Option<u64>,
+    uploaded: Option<UploadedRevisions>,
 }
 
 impl shader::Pipeline for FractalPipeline {
@@ -792,7 +865,7 @@ impl shader::Pipeline for FractalPipeline {
         Self {
             pipeline_2d: LinePipeline2D::new(device, format),
             pipeline_3d: LinePipeline3D::new(device, format),
-            uploaded_revision: None,
+            uploaded: None,
         }
     }
 }

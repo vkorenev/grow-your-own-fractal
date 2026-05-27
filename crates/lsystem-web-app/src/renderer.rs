@@ -51,24 +51,19 @@ impl ActiveScene {
 
     fn max_topological_depth(&self) -> u32 {
         match self {
-            ActiveScene::TwoDWithTopologicalDepth {
+            // Bracketless fractals use instance_index as a depth proxy in the shader,
+            // so len-1 produces the correct [0, 1] normalization range.
+            Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::TwoDWithTopologicalDepth {
                 max_topological_depth,
                 ..
             }
-            | ActiveScene::ThreeDWithTopologicalDepth {
+            | Self::ThreeDWithTopologicalDepth {
                 max_topological_depth,
                 ..
             } => *max_topological_depth,
-            ActiveScene::TwoD { .. } | ActiveScene::ThreeD { .. } => 0,
         }
-    }
-
-    fn uses_topological_depth(&self) -> bool {
-        matches!(
-            self,
-            ActiveScene::TwoDWithTopologicalDepth { .. }
-                | ActiveScene::ThreeDWithTopologicalDepth { .. }
-        )
     }
 }
 
@@ -134,7 +129,7 @@ impl CanvasRenderer {
     fn rebuild_scene(&mut self, config: &Config) {
         match config.generation.dimensions {
             Dimensions::ThreeD => {
-                if config.colors.line.needs_topological_depth() {
+                if config.generation.has_stack_directives() {
                     let TopologicalDepthSegmentData3D {
                         segments,
                         bounds_min,
@@ -163,7 +158,7 @@ impl CanvasRenderer {
                 }
             }
             Dimensions::TwoD => {
-                if config.colors.line.needs_topological_depth() {
+                if config.generation.has_stack_directives() {
                     let TopologicalDepthSegmentData {
                         segments,
                         bounds_min,
@@ -214,11 +209,6 @@ impl CanvasRenderer {
         config: &Config,
     ) -> RenderStatus {
         let colors = &config.colors;
-        let wants_topological_depth = colors.line.needs_topological_depth();
-        if self.scene.uses_topological_depth() != wants_topological_depth {
-            self.rebuild_scene(config);
-            return self.render(canvas);
-        }
         self.color_params = color_params_from_config(
             &colors.line,
             self.scene.total_segments(),
@@ -231,7 +221,16 @@ impl CanvasRenderer {
             b: b as f64,
             a: 1.0,
         };
-        self.needs_upload = true;
+        match &self.scene {
+            ActiveScene::TwoD { .. } | ActiveScene::TwoDWithTopologicalDepth { .. } => {
+                self.pipeline_2d
+                    .write_color_params(&self.gpu.queue, self.color_params);
+            }
+            ActiveScene::ThreeD { .. } | ActiveScene::ThreeDWithTopologicalDepth { .. } => {
+                self.pipeline_3d
+                    .write_color_params(&self.gpu.queue, self.color_params);
+            }
+        }
         self.render(canvas)
     }
 

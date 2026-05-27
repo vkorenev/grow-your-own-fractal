@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use bytemuck::{NoUninit, Pod, Zeroable};
-use lsystem_core::{Dimensions, LineColorConfig};
+use lsystem_core::Dimensions;
 use wgpu::util::DeviceExt;
 
 use crate::wgpu_util;
@@ -93,11 +93,11 @@ pub fn max_segments_for(dimensions: Dimensions) -> u64 {
     }
 }
 
-/// Returns the segment cap appropriate for the dimensions and active line color mode.
-pub fn max_segments_for_line_color(dimensions: Dimensions, line: &LineColorConfig) -> u64 {
+/// Returns the segment cap appropriate for the dimensions and whether topological depth is used.
+pub fn max_segments_for_line_color(dimensions: Dimensions, uses_topological_depth: bool) -> u64 {
     match dimensions {
-        Dimensions::TwoD if line.needs_topological_depth() => MAX_DEPTH_SEGMENTS_2D,
-        Dimensions::ThreeD if line.needs_topological_depth() => MAX_DEPTH_SEGMENTS_3D,
+        Dimensions::TwoD if uses_topological_depth => MAX_DEPTH_SEGMENTS_2D,
+        Dimensions::ThreeD if uses_topological_depth => MAX_DEPTH_SEGMENTS_3D,
         _ => max_segments_for(dimensions),
     }
 }
@@ -411,6 +411,14 @@ impl LinePipeline2D {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
     }
 
+    pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
+        queue.write_buffer(
+            &self.color_params_buffer,
+            0,
+            bytemuck::bytes_of(&color_params),
+        );
+    }
+
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         match self.active_segment_buffer {
             ActiveSegmentBuffer::Normal => draw_line_list(
@@ -590,6 +598,14 @@ impl LinePipeline3D {
 
     pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
         queue.write_buffer(&self.mvp_buffer, 0, bytemuck::bytes_of(&mvp));
+    }
+
+    pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
+        queue.write_buffer(
+            &self.color_params_buffer,
+            0,
+            bytemuck::bytes_of(&color_params),
+        );
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -832,25 +848,23 @@ mod tests {
 
     #[test]
     fn depth_gradient_segment_caps_use_depth_record_sizes() {
-        let depth_line = LineColorConfig::DepthGradient {
-            start: [0.0, 0.0, 0.0],
-            end: [1.0, 1.0, 1.0],
-        };
-        let solid_line = LineColorConfig::DEFAULT_SOLID;
-
         assert_eq!(
-            max_segments_for_line_color(Dimensions::TwoD, &depth_line),
+            max_segments_for_line_color(Dimensions::TwoD, true),
             GUARANTEED_VERTEX_BUFFER_BYTES
                 / std::mem::size_of::<TopologicalDepthSegment2D>() as u64
         );
         assert_eq!(
-            max_segments_for_line_color(Dimensions::ThreeD, &depth_line),
+            max_segments_for_line_color(Dimensions::ThreeD, true),
             GUARANTEED_VERTEX_BUFFER_BYTES
                 / std::mem::size_of::<TopologicalDepthSegment3D>() as u64
         );
         assert_eq!(
-            max_segments_for_line_color(Dimensions::TwoD, &solid_line),
+            max_segments_for_line_color(Dimensions::TwoD, false),
             max_segments_for(Dimensions::TwoD)
+        );
+        assert_eq!(
+            max_segments_for_line_color(Dimensions::ThreeD, false),
+            max_segments_for(Dimensions::ThreeD)
         );
     }
 }

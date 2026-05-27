@@ -152,6 +152,15 @@ pub struct GenerationConfig {
     pub rules: BTreeMap<char, String>,
 }
 
+impl GenerationConfig {
+    /// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
+    ///
+    /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
+    pub fn has_stack_directives(&self) -> bool {
+        self.axiom.contains('[') || self.rules.values().any(|rhs| rhs.contains('['))
+    }
+}
+
 /// Format-preserving TOML document for an L-system configuration.
 #[derive(Debug, Clone)]
 pub struct ConfigSource {
@@ -1390,5 +1399,26 @@ end = [1.0, 1.0, 1.0]"#,
             matches!(err, ConfigError::InvalidAngle(_)),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn has_stack_directives_false_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "F = \"F-F++F-F\"");
+        let cfg = parse_config(&toml).unwrap();
+        assert!(!cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn has_stack_directives_true_when_axiom_has_bracket() {
+        let toml = test_toml(2, "F[+F]F", 1, "25.0", "1.0", "0.0", "");
+        let cfg = parse_config(&toml).unwrap();
+        assert!(cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn has_stack_directives_true_when_rule_has_bracket() {
+        let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
+        let cfg = parse_config(&toml).unwrap();
+        assert!(cfg.generation.has_stack_directives());
     }
 }
