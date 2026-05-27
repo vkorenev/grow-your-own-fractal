@@ -10,13 +10,14 @@ use crate::{
 /// The SVG uses the natural turtle coordinate system, scaled to fit the fractal.
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> String {
-    if config.colors.line.needs_topological_depth() {
+    let colors = config.effective_colors();
+    if colors.line.needs_topological_depth() {
         let segments: Vec<Segment2DWithTopologicalDepth> =
             generate_with_topological_depth(&config.generation).collect();
         return export_svg_with_segments(
             config,
             segments.iter().map(|segment| segment.points),
-            build_depth_body(&segments, &config.colors.line),
+            build_depth_body(&segments, &colors.line),
         );
     }
 
@@ -24,7 +25,7 @@ pub fn export_svg(config: &Config) -> String {
     export_svg_with_segments(
         config,
         segments.iter().copied(),
-        build_body(&segments, &config.colors.line),
+        build_body(&segments, &colors.line),
     )
 }
 

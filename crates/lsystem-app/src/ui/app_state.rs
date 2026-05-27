@@ -361,7 +361,7 @@ impl FractalApp {
                 } = result
                     && self.is_current_generation(generation)
                 {
-                    scene.update_colors(&self.selected_config().colors);
+                    scene.update_colors(&self.selected_config().effective_colors());
                     self.scene = scene;
                     self.scene_pending = false;
                 }
@@ -580,8 +580,7 @@ impl FractalApp {
             .config_workspace
             .selected()
             .applied_config()
-            .colors
-            .clone();
+            .effective_colors();
         self.scene.update_colors(&colors);
         self.error = None;
         self.export_status = None;

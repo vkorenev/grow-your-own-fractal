@@ -86,9 +86,11 @@ initial_heading = 0.0   # starting direction in degrees (0 = east,
 background = [0.0, 0.0, 0.0]   # optional RGB 0-1; omit to use black
 
 [colors.line]
-# mode = "solid"          # single color; set with `color`
-# mode = "gradient"       # linear RGB from `start` to `end` across all segments
-# mode = "hue_cycle"      # full hue rotation starting from `initial`
+# mode = "solid"           # single color; set with `color`
+# mode = "gradient"        # linear RGB from `start` to `end` across all segments
+# mode = "hue_cycle"       # full hue rotation starting from `initial`
+# mode = "depth_gradient"  # linear RGB by topological bracket depth; equivalent
+#                           # to `gradient` for non-branching (bracketless) fractals
 mode = "solid"
 color = [0.0, 0.9, 0.5]  # used by solid mode
 
@@ -100,6 +102,11 @@ color = [0.0, 0.9, 0.5]  # used by solid mode
 # hue_cycle example:
 # mode    = "hue_cycle"
 # initial = [0.9, 0.0, 0.0]
+
+# depth_gradient example (branching fractals only; same as gradient otherwise):
+# mode  = "depth_gradient"
+# start = [1.0, 0.4, 0.0]
+# end   = [0.6, 0.0, 1.0]
 ```
 
 Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,

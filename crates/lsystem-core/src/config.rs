@@ -135,6 +135,25 @@ pub struct Config {
     pub colors: ColorConfig,
 }
 
+impl Config {
+    /// Returns the effective colors for rendering.
+    ///
+    /// For bracketless fractals, `DepthGradient` is treated as `Gradient` because
+    /// topological depth equals segment index, making the two modes identical. This
+    /// keeps export segment selection consistent with the canvas iteration cap.
+    pub fn effective_colors(&self) -> ColorConfig {
+        if !self.generation.has_stack_directives()
+            && let LineColorConfig::DepthGradient { start, end } = self.colors.line
+        {
+            return ColorConfig {
+                line: LineColorConfig::Gradient { start, end },
+                background: self.colors.background,
+            };
+        }
+        self.colors.clone()
+    }
+}
+
 /// Validated inputs needed to expand an L-system and run the turtle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationConfig {
@@ -1420,5 +1439,44 @@ end = [1.0, 1.0, 1.0]"#,
         let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
         let cfg = parse_config(&toml).unwrap();
         assert!(cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn effective_colors_normalizes_depth_gradient_to_gradient_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let mut cfg = parse_config(&toml).unwrap();
+        let start = [0.1, 0.2, 0.3];
+        let end = [0.7, 0.8, 0.9];
+        cfg.colors.line = LineColorConfig::DepthGradient { start, end };
+        let effective = cfg.effective_colors();
+        assert_eq!(
+            effective.line,
+            LineColorConfig::Gradient { start, end },
+            "bracketless DepthGradient must normalize to Gradient"
+        );
+        assert_eq!(cfg.colors.line, LineColorConfig::DepthGradient { start, end },
+            "effective_colors must not mutate the stored config");
+    }
+
+    #[test]
+    fn effective_colors_preserves_depth_gradient_for_bracket_fractal() {
+        let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
+        let mut cfg = parse_config(&toml).unwrap();
+        let start = [0.1, 0.2, 0.3];
+        let end = [0.7, 0.8, 0.9];
+        cfg.colors.line = LineColorConfig::DepthGradient { start, end };
+        let effective = cfg.effective_colors();
+        assert_eq!(
+            effective.line,
+            LineColorConfig::DepthGradient { start, end },
+            "bracket fractal DepthGradient must be preserved"
+        );
+    }
+
+    #[test]
+    fn effective_colors_passes_through_other_modes_for_bracketless() {
+        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let cfg = parse_config(&toml).unwrap();
+        assert_eq!(cfg.effective_colors().line, cfg.colors.line);
     }
 }

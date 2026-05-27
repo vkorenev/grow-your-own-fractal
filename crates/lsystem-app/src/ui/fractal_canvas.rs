@@ -324,6 +324,7 @@ pub(super) async fn build_scene(
 ) -> SceneBuildResult {
     let mut camera = prev_camera;
     camera.reset_position();
+    let effective_colors = config.effective_colors();
 
     match config.generation.dimensions {
         Dimensions::ThreeD => {
@@ -356,7 +357,7 @@ pub(super) async fn build_scene(
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_depth_segment_data_3d(
-                        &config.colors,
+                        &effective_colors,
                         builder.finish(),
                         camera,
                         generation,
@@ -385,7 +386,7 @@ pub(super) async fn build_scene(
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_segment_data_3d(
-                        &config.colors,
+                        &effective_colors,
                         builder.finish(),
                         camera,
                         generation,
@@ -422,7 +423,7 @@ pub(super) async fn build_scene(
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_depth_segment_data_2d(
-                        &config.colors,
+                        &effective_colors,
                         builder.finish(),
                         camera,
                         generation,
@@ -451,7 +452,7 @@ pub(super) async fn build_scene(
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_segment_data_2d(
-                        &config.colors,
+                        &effective_colors,
                         builder.finish(),
                         camera,
                         generation,

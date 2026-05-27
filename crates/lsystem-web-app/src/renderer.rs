@@ -188,12 +188,13 @@ impl CanvasRenderer {
             }
         }
 
+        let colors = config.effective_colors();
         self.color_params = color_params_from_config(
-            &config.colors.line,
+            &colors.line,
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
         );
-        let [r, g, b] = config.colors.effective_background();
+        let [r, g, b] = colors.effective_background();
         self.background = wgpu::Color {
             r: r as f64,
             g: g as f64,
@@ -208,7 +209,7 @@ impl CanvasRenderer {
         canvas: &web_sys::HtmlCanvasElement,
         config: &Config,
     ) -> RenderStatus {
-        let colors = &config.colors;
+        let colors = config.effective_colors();
         self.color_params = color_params_from_config(
             &colors.line,
             self.scene.total_segments(),
