@@ -5,7 +5,11 @@ use iced::widget::{
 use iced::{Color, Element, Length, Theme};
 use lsystem_core::LineColorConfig;
 
-use super::app_state::{FractalApp, LineColorMode, Message};
+use super::app_state::{
+    FractalApp, HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
+    HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND, HsvMovement, HsvMovementDirection, LineColorMode,
+    Message,
+};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
@@ -57,7 +61,7 @@ impl FractalApp {
                     slider(1.0..=180.0, config.generation.angle, Message::AngleChanged).step(0.5),
                 );
 
-            controls = push_color_controls(controls, config);
+            controls = push_color_controls(controls, config, &self.hsv_movement);
 
             controls = controls.push(text("PNG width").size(13)).push(
                 text_input("2048", &self.png_width_text)
@@ -133,6 +137,7 @@ impl FractalApp {
 fn push_color_controls<'a>(
     mut controls: iced::widget::Column<'a, Message>,
     config: &'a lsystem_core::Config,
+    hsv_movement: &HsvMovement,
 ) -> iced::widget::Column<'a, Message> {
     let background = config.colors.background;
     controls = controls.push(
@@ -179,9 +184,41 @@ fn push_color_controls<'a>(
                 Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
             })),
         LineColorConfig::HueCycle { initial } => {
-            controls.push(rgb_controls("Initial RGB", initial, |initial| {
-                Message::LineColorChanged(LineColorConfig::HueCycle { initial })
-            }))
+            let movement_label = if hsv_movement.enabled {
+                "HSV movement: On"
+            } else {
+                "HSV movement: Off"
+            };
+            controls
+                .push(rgb_controls("Initial RGB", initial, |initial| {
+                    Message::LineColorChanged(LineColorConfig::HueCycle { initial })
+                }))
+                .push(button(movement_label).on_press(Message::ToggleHsvMovement))
+                .push(
+                    pick_list(
+                        Some(hsv_movement.direction),
+                        HsvMovementDirection::ALL,
+                        |choice| choice.to_string(),
+                    )
+                    .on_select(Message::SetHsvMovementDirection)
+                    .width(Length::Fill),
+                )
+                .push(
+                    text(format!(
+                        "Movement speed: {:.0} °/s",
+                        hsv_movement.speed_degrees_per_second
+                    ))
+                    .size(13),
+                )
+                .push(
+                    slider(
+                        HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND
+                            ..=HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
+                        hsv_movement.speed_degrees_per_second,
+                        Message::SetHsvMovementSpeed,
+                    )
+                    .step(1.0),
+                )
         }
     }
 }

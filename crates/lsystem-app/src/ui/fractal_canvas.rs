@@ -79,6 +79,7 @@ impl SceneGeometry {
 pub(super) struct Scene {
     geometry: SceneGeometry,
     color_params: ColorParams,
+    hue_offset_degrees: f32,
     background: [f32; 3],
     pub(super) camera: Camera,
     geometry_revision: u64,
@@ -104,6 +105,7 @@ impl Scene {
                 geometry.max_topological_depth(),
             ),
             geometry,
+            hue_offset_degrees: 0.0,
             background: colors.effective_background(),
             camera,
             geometry_revision: revision,
@@ -129,6 +131,7 @@ impl Scene {
                 geometry.max_topological_depth(),
             ),
             geometry,
+            hue_offset_degrees: 0.0,
             background: colors.effective_background(),
             camera,
             geometry_revision: revision,
@@ -155,6 +158,7 @@ impl Scene {
                 geometry.max_topological_depth(),
             ),
             geometry,
+            hue_offset_degrees: 0.0,
             background: colors.effective_background(),
             camera,
             geometry_revision: revision,
@@ -181,6 +185,7 @@ impl Scene {
                 geometry.max_topological_depth(),
             ),
             geometry,
+            hue_offset_degrees: 0.0,
             background: colors.effective_background(),
             camera,
             geometry_revision: revision,
@@ -273,14 +278,25 @@ impl Scene {
             total_segments,
             self.geometry.max_topological_depth(),
         );
+        self.hue_offset_degrees = 0.0;
         self.background = colors.effective_background();
         self.color_revision = self.color_revision.wrapping_add(1);
+    }
+
+    pub(super) fn set_hue_offset_degrees(&mut self, offset: f32) {
+        let offset = offset.rem_euclid(360.0);
+        if self.hue_offset_degrees != offset {
+            self.hue_offset_degrees = offset;
+            self.color_revision = self.color_revision.wrapping_add(1);
+        }
     }
 
     fn snapshot(&self) -> SceneSnapshot {
         SceneSnapshot {
             geometry: self.geometry.clone(),
-            color_params: self.color_params,
+            color_params: self
+                .color_params
+                .with_hue_offset_degrees(self.hue_offset_degrees),
             camera: self.camera.clone(),
             geometry_revision: self.geometry_revision,
             color_revision: self.color_revision,
@@ -505,6 +521,7 @@ impl Default for Scene {
                 bounds_max: [1.0, 1.0],
             },
             color_params: ColorParams::default(),
+            hue_offset_degrees: 0.0,
             background: ColorConfig::DEFAULT_BACKGROUND,
             camera: Camera::new(),
             geometry_revision: 0,

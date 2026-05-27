@@ -117,6 +117,12 @@ flat TOML with top-level `name`, `axiom`, `[rules]`, `background_color`, or
 black when omitted. All present colors are RGB arrays with finite components in
 the 0-1 range, including `hue_cycle`'s RGB `initial` color.
 
+HSV movement is a playback control in the UI for `hue_cycle` line colors. It
+temporarily offsets the rendered hue start while it is enabled; it is not a TOML
+field and does not change the stored `initial` color. If another line color mode
+is active, the saved movement state is ignored until `hue_cycle` is selected
+again.
+
 Config parsing is format-preserving: parsing and serializing an unchanged TOML
 document keeps comments, spacing, and string quoting intact. Newly generated
 TOML writes axiom/rule text as literal strings when possible and keeps color
@@ -149,6 +155,10 @@ you can break long rules across lines for readability.
 | Scroll wheel | Zoom in / out toward the cursor |
 | `F` | Reset view to fit the fractal |
 
+When the line color mode is **Hue cycle**, the control panel also shows an HSV
+movement toggle, direction selector, and speed slider. This shifts the visible
+hue cycle over time without changing the config text.
+
 **3D** (when `dimensions = 3`)
 
 | Input | Action |
@@ -166,6 +176,8 @@ The **Export SVG** button saves the current fractal as a resolution-independent
 SVG file. SVG export is only available for 2D fractals.
 The **Export PNG** button renders the fractal to a raster PNG using the selected
 PNG width. For 3D fractals, PNG captures the current camera orientation.
+Exports use the static colors from the active config, not any transient HSV
+movement phase currently visible in the UI.
 
 ### Bundled presets
 
