@@ -78,7 +78,13 @@ pub struct TopologicalDepthSegmentData {
     pub segments: Vec<TopologicalDepthSegment2D>,
     pub bounds_min: [f32; 2],
     pub bounds_max: [f32; 2],
-    pub max_topological_depth: u32,
+    max_topological_depth: u32,
+}
+
+impl TopologicalDepthSegmentData {
+    pub fn max_topological_depth(&self) -> u32 {
+        self.max_topological_depth
+    }
 }
 
 pub struct TopologicalDepthSegmentDataBuilder {
@@ -226,7 +232,13 @@ pub struct TopologicalDepthSegmentData3D {
     pub segments: Vec<TopologicalDepthSegment3D>,
     pub bounds_min: [f32; 3],
     pub bounds_max: [f32; 3],
-    pub max_topological_depth: u32,
+    max_topological_depth: u32,
+}
+
+impl TopologicalDepthSegmentData3D {
+    pub fn max_topological_depth(&self) -> u32 {
+        self.max_topological_depth
+    }
 }
 
 pub struct TopologicalDepthSegmentDataBuilder3D {
@@ -506,7 +518,7 @@ mod tests {
             geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(&cfg("A")));
 
         assert!(data.segments.is_empty());
-        assert_eq!(data.max_topological_depth, 0);
+        assert_eq!(data.max_topological_depth(), 0);
         assert!(close(data.bounds_min[0], -1.0) && close(data.bounds_min[1], -1.0));
         assert!(close(data.bounds_max[0], 1.0) && close(data.bounds_max[1], 1.0));
     }
@@ -526,7 +538,7 @@ mod tests {
         ));
 
         assert!(data.segments.is_empty());
-        assert_eq!(data.max_topological_depth, 0);
+        assert_eq!(data.max_topological_depth(), 0);
         assert_eq!(data.bounds_min, [-1.0, -1.0, -1.0]);
         assert_eq!(data.bounds_max, [1.0, 1.0, 1.0]);
     }
@@ -567,7 +579,7 @@ mod tests {
         assert_eq!(data.segments[0].topological_depth, 0);
         assert_eq!(data.segments[1].topological_depth, 1);
         assert_eq!(data.segments[2].topological_depth, 1);
-        assert_eq!(data.max_topological_depth, 1);
+        assert_eq!(data.max_topological_depth(), 1);
         assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
         assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
     }
@@ -590,7 +602,7 @@ mod tests {
         assert_eq!(data.segments[0].topological_depth, 0);
         assert_eq!(data.segments[1].topological_depth, 1);
         assert_eq!(data.segments[2].topological_depth, 1);
-        assert_eq!(data.max_topological_depth, 1);
+        assert_eq!(data.max_topological_depth(), 1);
         assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
         assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
         assert!(close(data.bounds_min[2], 0.0) && close(data.bounds_max[2], 0.0));

@@ -16,8 +16,11 @@ use crate::renderer::{CanvasRenderer, RenderStatus};
 type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
 
 const ROTATION_STEP_DEG: f32 = 5.0;
+const HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND: f32 = 15.0;
+const HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND: f32 = 1.0;
+const HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND: f32 = 60.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LineColorMode {
     Solid,
     Gradient,
@@ -62,6 +65,56 @@ impl LineColorMode {
             Self::DepthGradient => LineColorConfig::DEFAULT_DEPTH_GRADIENT,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HsvMovementDirection {
+    Forward,
+    Reverse,
+}
+
+impl HsvMovementDirection {
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "forward" => Some(Self::Forward),
+            "reverse" => Some(Self::Reverse),
+            _ => None,
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "Forward",
+            Self::Reverse => "Reverse",
+        }
+    }
+
+    fn sign(self) -> f32 {
+        match self {
+            Self::Forward => 1.0,
+            Self::Reverse => -1.0,
+        }
+    }
+}
+
+fn advance_hsv_phase_degrees(
+    phase_degrees: f32,
+    speed_degrees_per_second: f32,
+    dt_seconds: f32,
+    direction: HsvMovementDirection,
+) -> f32 {
+    (phase_degrees + direction.sign() * speed_degrees_per_second * dt_seconds).rem_euclid(360.0)
+}
+
+fn hsv_movement_is_active(enabled: bool, line_color: &LineColorConfig) -> bool {
+    enabled && matches!(line_color, LineColorConfig::HueCycle { .. })
 }
 
 #[derive(Clone, Copy)]
@@ -158,9 +211,13 @@ pub(crate) fn App() -> impl IntoView {
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(false);
     let auto_rotate_speed = RwSignal::new(45.0f32);
-    // Generation counter: bumped on each toggle-on so older rAF loops detect
+    let hsv_movement = RwSignal::new(false);
+    let hsv_movement_speed = RwSignal::new(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
+    let hsv_movement_direction = RwSignal::new(HsvMovementDirection::Forward);
+    let hsv_movement_phase = RwSignal::new(0.0f32);
+    // Generation counter: bumped on each animation start so older rAF loops detect
     // they have been superseded and exit.
-    let auto_rotate_token = RwSignal::new(0u32);
+    let animation_token = RwSignal::new(0u32);
 
     let base_config =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_config().clone()));
@@ -297,6 +354,91 @@ pub(crate) fn App() -> impl IntoView {
         ));
     };
 
+    let reset_hsv_movement = move || {
+        let was_active = hsv_movement.get_untracked() || hsv_movement_phase.get_untracked() != 0.0;
+        hsv_movement.set(false);
+        hsv_movement_phase.set(0.0);
+        if was_active && let Some(canvas) = canvas_ref.get_untracked() {
+            with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                r.animate_and_render(c, None, Some(0.0))
+            });
+        }
+    };
+
+    let stop_auto_rotate_if_2d = move || {
+        if !is_3d_untracked() && auto_rotate.get_untracked() {
+            auto_rotate.set(false);
+        }
+    };
+
+    let start_animation_loop = move || {
+        animation_token.update(|t| *t = t.wrapping_add(1));
+        let token = animation_token.get_untracked();
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut prev_ts: Option<f64> = None;
+            loop {
+                let ts = match next_animation_frame().await {
+                    Ok(ts) => ts,
+                    Err(reason) => {
+                        log::error!("requestAnimationFrame failed ({reason}); stopping animation");
+                        auto_rotate.set(false);
+                        hsv_movement.set(false);
+                        hsv_movement_phase.set(0.0);
+                        error.set(Some(
+                            "Animation stopped unexpectedly. Try toggling it again.".to_string(),
+                        ));
+                        break;
+                    }
+                };
+                if animation_token.get_untracked() != token {
+                    break;
+                }
+
+                let auto_active = auto_rotate.get_untracked() && is_3d_untracked();
+                let line_color = base_config.with_untracked(line_color_of);
+                if !(auto_active
+                    || hsv_movement_is_active(hsv_movement.get_untracked(), &line_color))
+                {
+                    break;
+                }
+                let hsv_active = hsv_movement_is_active(hsv_movement.get_untracked(), &line_color);
+
+                // Clamp dt to 100 ms to prevent a large jump after the tab was backgrounded.
+                let dt = prev_ts
+                    .map_or(1.0_f32 / 60.0, |p| ((ts - p) / 1000.0) as f32)
+                    .min(1.0 / 10.0);
+                prev_ts = Some(ts);
+
+                let auto_degrees = auto_active.then(|| auto_rotate_speed.get_untracked() * dt);
+                let hue_phase = hsv_active.then(|| {
+                    let next = advance_hsv_phase_degrees(
+                        hsv_movement_phase.get_untracked(),
+                        hsv_movement_speed.get_untracked(),
+                        dt,
+                        hsv_movement_direction.get_untracked(),
+                    );
+                    hsv_movement_phase.set(next);
+                    next
+                });
+
+                if let Some(canvas) = canvas_ref.get_untracked() {
+                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                        r.animate_and_render(c, auto_degrees, hue_phase)
+                    });
+                }
+            }
+        });
+    };
+
+    let resume_hsv_movement_if_active = move || {
+        if hsv_movement_is_active(
+            hsv_movement.get_untracked(),
+            &base_config.with_untracked(line_color_of),
+        ) {
+            start_animation_loop();
+        }
+    };
+
     let apply_current = move || {
         if !config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
             return;
@@ -311,6 +453,7 @@ pub(crate) fn App() -> impl IntoView {
                     auto_rotate.set(false);
                 }
                 render_current();
+                resume_hsv_movement_if_active();
             }
             Some(Err(msg)) => error.set(Some(msg)),
             None => {
@@ -320,17 +463,12 @@ pub(crate) fn App() -> impl IntoView {
         }
     };
 
-    let stop_auto_rotate_if_2d = move || {
-        if !is_3d_untracked() && auto_rotate.get_untracked() {
-            auto_rotate.set(false);
-        }
-    };
-
     let select_current_config = move || {
         error.set(None);
         stop_auto_rotate_if_2d();
         refresh_color_memory();
         render_current();
+        resume_hsv_movement_if_active();
     };
 
     let toggle_auto_rotate = move |_: web_sys::MouseEvent| {
@@ -338,41 +476,19 @@ pub(crate) fn App() -> impl IntoView {
             auto_rotate.set(false);
         } else {
             auto_rotate.set(true);
-            auto_rotate_token.update(|t| *t = t.wrapping_add(1));
-            let token = auto_rotate_token.get_untracked();
-            wasm_bindgen_futures::spawn_local(async move {
-                let mut prev_ts: Option<f64> = None;
-                loop {
-                    let ts = match next_animation_frame().await {
-                        Ok(ts) => ts,
-                        Err(reason) => {
-                            log::error!(
-                                "requestAnimationFrame failed ({reason}); stopping auto-rotate"
-                            );
-                            auto_rotate.set(false);
-                            error.set(Some(
-                                "Auto-rotate stopped unexpectedly. Try toggling it again."
-                                    .to_string(),
-                            ));
-                            break;
-                        }
-                    };
-                    if !auto_rotate.get_untracked() || auto_rotate_token.get_untracked() != token {
-                        break;
-                    }
-                    // Clamp dt to 100 ms to prevent a large rotation jump after the tab was backgrounded.
-                    let dt = prev_ts
-                        .map_or(1.0_f32 / 60.0, |p| ((ts - p) / 1000.0) as f32)
-                        .min(1.0 / 10.0);
-                    prev_ts = Some(ts);
-                    let degrees = auto_rotate_speed.get_untracked() * dt;
-                    if let Some(canvas) = canvas_ref.get_untracked() {
-                        with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                            r.auto_rotate_and_render(c, degrees)
-                        });
-                    }
-                }
-            });
+            start_animation_loop();
+        }
+    };
+
+    let toggle_hsv_movement = move |_: web_sys::MouseEvent| {
+        if hsv_movement.get_untracked() {
+            reset_hsv_movement();
+        } else if matches!(
+            base_config.with_untracked(line_color_of),
+            LineColorConfig::HueCycle { .. }
+        ) {
+            hsv_movement.set(true);
+            start_animation_loop();
         }
     };
 
@@ -439,6 +555,7 @@ pub(crate) fn App() -> impl IntoView {
                                 stop_auto_rotate_if_2d();
                                 refresh_color_memory();
                                 render_current();
+                                resume_hsv_movement_if_active();
                             }
                             Some(Err(msg)) => error.set(Some(msg)),
                             None => {
@@ -499,6 +616,7 @@ pub(crate) fn App() -> impl IntoView {
                                 stop_auto_rotate_if_2d();
                                 refresh_color_memory();
                                 render_current();
+                                resume_hsv_movement_if_active();
                             } else {
                                 log::error!("revert: config_workspace signal was unavailable");
                                 error.set(Some(
@@ -532,6 +650,7 @@ pub(crate) fn App() -> impl IntoView {
                                     stop_auto_rotate_if_2d();
                                     refresh_color_memory();
                                     render_current();
+                                    resume_hsv_movement_if_active();
                                 }
                                 Some(Ok(false)) => {
                                     log::warn!(
@@ -717,6 +836,7 @@ pub(crate) fn App() -> impl IntoView {
                                 color_memory.update(|memory| {
                                     memory.remember_line(line_color);
                                 });
+                                resume_hsv_movement_if_active();
                             }
                         }
                     >
@@ -1011,6 +1131,64 @@ pub(crate) fn App() -> impl IntoView {
                                 }
                             }
                         />
+                    </div>
+
+                    <div
+                        class:hidden=move || {
+                            !matches!(
+                                current_line_color(base_config),
+                                LineColorConfig::HueCycle { .. }
+                            )
+                        }
+                    >
+                        <button type="button" on:click=toggle_hsv_movement>
+                            {move || {
+                                if hsv_movement.get() {
+                                    "HSV movement: On"
+                                } else {
+                                    "HSV movement: Off"
+                                }
+                            }}
+                        </button>
+                        <label for="hsv-movement-direction">"Direction"</label>
+                        <select
+                            id="hsv-movement-direction"
+                            prop:value=move || hsv_movement_direction.get().key().to_string()
+                            on:change:target=move |ev| {
+                                let key = ev.target().value();
+                                let Some(direction) = HsvMovementDirection::from_key(&key) else {
+                                    log::error!("unknown HSV movement direction selected: {key}");
+                                    return;
+                                };
+                                hsv_movement_direction.set(direction);
+                            }
+                        >
+                            <option value="forward">{HsvMovementDirection::Forward.label()}</option>
+                            <option value="reverse">{HsvMovementDirection::Reverse.label()}</option>
+                        </select>
+                        <label for="hsv-movement-speed">"Movement speed (°/s)"</label>
+                        <div class="row">
+                            <input
+                                id="hsv-movement-speed"
+                                type="range"
+                                min=HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND.to_string()
+                                max=HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND.to_string()
+                                step="1"
+                                prop:value=move || hsv_movement_speed.get().to_string()
+                                on:input:target=move |ev| {
+                                    let next = ev
+                                        .target()
+                                        .value()
+                                        .parse::<f32>()
+                                        .unwrap_or(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
+                                    hsv_movement_speed.set(next.clamp(
+                                        HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
+                                        HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
+                                    ));
+                                }
+                            />
+                            <output>{move || format!("{:.0}", hsv_movement_speed.get())}</output>
+                        </div>
                     </div>
 
                     <label for="png-width">"PNG width"</label>
@@ -1390,7 +1568,10 @@ async fn next_animation_frame() -> Result<f64, &'static str> {
 mod tests {
     use lsystem_core::{ColorConfig, LineColorConfig};
 
-    use super::{ColorControlMemory, LineColorMode};
+    use super::{
+        ColorControlMemory, HsvMovementDirection, LineColorMode, advance_hsv_phase_degrees,
+        hsv_movement_is_active,
+    };
 
     #[test]
     fn line_color_mode_key_round_trip() {
@@ -1403,6 +1584,46 @@ mod tests {
             assert_eq!(LineColorMode::from_key(mode.key()), Some(mode));
         }
         assert_eq!(LineColorMode::from_key("unknown"), None);
+    }
+
+    #[test]
+    fn hsv_movement_direction_key_and_label_round_trip() {
+        for direction in [HsvMovementDirection::Forward, HsvMovementDirection::Reverse] {
+            assert_eq!(
+                HsvMovementDirection::from_key(direction.key()),
+                Some(direction)
+            );
+            assert!(!direction.label().is_empty());
+        }
+        assert_eq!(HsvMovementDirection::from_key("sideways"), None);
+    }
+
+    #[test]
+    fn hsv_movement_phase_advances_by_speed_direction_and_wraps() {
+        assert_eq!(
+            advance_hsv_phase_degrees(350.0, 20.0, 1.0, HsvMovementDirection::Forward),
+            10.0
+        );
+        assert_eq!(
+            advance_hsv_phase_degrees(10.0, 20.0, 1.0, HsvMovementDirection::Reverse),
+            350.0
+        );
+    }
+
+    #[test]
+    fn hsv_movement_is_only_active_for_hue_cycle_line_color() {
+        assert!(hsv_movement_is_active(
+            true,
+            &LineColorConfig::DEFAULT_HUE_CYCLE
+        ));
+        assert!(!hsv_movement_is_active(
+            true,
+            &LineColorConfig::DEFAULT_SOLID
+        ));
+        assert!(!hsv_movement_is_active(
+            false,
+            &LineColorConfig::DEFAULT_HUE_CYCLE
+        ));
     }
 
     #[test]

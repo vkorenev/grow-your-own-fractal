@@ -131,6 +131,16 @@ pub struct ColorParams {
     pub _pad2: f32,
 }
 
+impl ColorParams {
+    /// Applies a hue offset only for `HueCycle`; other color modes are unchanged.
+    pub fn with_hue_offset_degrees(mut self, offset: f32) -> Self {
+        if self.mode == ColorMode::HueCycle {
+            self.hue_start = (self.hue_start + offset).rem_euclid(360.0);
+        }
+        self
+    }
+}
+
 struct GrowableVertexBuffer {
     buffer: Option<wgpu::Buffer>,
     capacity: u64,
@@ -846,6 +856,20 @@ impl GpuContext {
 mod tests {
     use super::*;
 
+    fn sample_params(mode: ColorMode, hue_start: f32) -> ColorParams {
+        ColorParams {
+            mode,
+            total_segments: 10,
+            max_topological_depth: 3,
+            color_start: [0.1, 0.2, 0.3, 1.0],
+            color_end: [0.7, 0.8, 0.9, 1.0],
+            hue_start,
+            saturation: 0.5,
+            value: 0.75,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn depth_gradient_segment_caps_use_depth_record_sizes() {
         assert_eq!(
@@ -866,5 +890,47 @@ mod tests {
             max_segments_for_line_color(Dimensions::ThreeD, false),
             max_segments_for(Dimensions::ThreeD)
         );
+    }
+
+    #[test]
+    fn hue_offset_shifts_hue_cycle_start() {
+        let params = sample_params(ColorMode::HueCycle, 180.0);
+
+        let shifted = params.with_hue_offset_degrees(15.0);
+
+        assert_eq!(shifted.mode, ColorMode::HueCycle);
+        assert_eq!(shifted.hue_start, 195.0);
+        assert_eq!(shifted.total_segments, params.total_segments);
+        assert_eq!(shifted.saturation, params.saturation);
+        assert_eq!(shifted.value, params.value);
+    }
+
+    #[test]
+    fn hue_offset_wraps_positive_and_negative_offsets() {
+        let params = sample_params(ColorMode::HueCycle, 350.0);
+
+        assert_eq!(params.with_hue_offset_degrees(20.0).hue_start, 10.0);
+        assert_eq!(params.with_hue_offset_degrees(-370.0).hue_start, 340.0);
+    }
+
+    #[test]
+    fn hue_offset_leaves_non_hue_cycle_params_unchanged() {
+        for mode in [
+            ColorMode::Solid,
+            ColorMode::Gradient,
+            ColorMode::DepthGradient,
+        ] {
+            let params = sample_params(mode, 123.0);
+            let shifted = params.with_hue_offset_degrees(45.0);
+
+            assert_eq!(shifted.mode, params.mode);
+            assert_eq!(shifted.total_segments, params.total_segments);
+            assert_eq!(shifted.max_topological_depth, params.max_topological_depth);
+            assert_eq!(shifted.color_start, params.color_start);
+            assert_eq!(shifted.color_end, params.color_end);
+            assert_eq!(shifted.hue_start, params.hue_start);
+            assert_eq!(shifted.saturation, params.saturation);
+            assert_eq!(shifted.value, params.value);
+        }
     }
 }

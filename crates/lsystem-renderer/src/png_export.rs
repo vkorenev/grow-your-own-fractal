@@ -112,7 +112,7 @@ pub async fn render_png(
                 let color_params = color_params_from_config(
                     &colors.line,
                     data.segments.len() as u32,
-                    data.max_topological_depth,
+                    data.max_topological_depth(),
                 );
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
@@ -148,7 +148,7 @@ pub async fn render_png(
                 let color_params = color_params_from_config(
                     &colors.line,
                     data.segments.len() as u32,
-                    data.max_topological_depth,
+                    data.max_topological_depth(),
                 );
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)

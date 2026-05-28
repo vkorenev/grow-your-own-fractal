@@ -8,9 +8,8 @@ use lsystem_renderer::line_renderer::{
     TopologicalDepthSegment3D,
 };
 use lsystem_renderer::lsystem_bridge::{
-    SegmentData, SegmentData3D, TopologicalDepthSegmentData, TopologicalDepthSegmentData3D,
-    color_params_from_config, geometry_to_depth_segments, geometry_to_depth_segments_3d,
-    geometry_to_segments, geometry_to_segments_3d,
+    SegmentData, SegmentData3D, color_params_from_config, geometry_to_depth_segments,
+    geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
 };
 
 enum ActiveScene {
@@ -72,6 +71,7 @@ pub struct CanvasRenderer {
     camera: Camera,
     scene: ActiveScene,
     color_params: ColorParams,
+    hue_offset_degrees: f32,
     background: wgpu::Color,
     needs_upload: bool,
 }
@@ -100,6 +100,7 @@ impl CanvasRenderer {
                 bounds_max: [1.0, 1.0],
             },
             color_params: ColorParams::default(),
+            hue_offset_degrees: 0.0,
             background: wgpu::Color::BLACK,
             needs_upload: false,
         })
@@ -128,18 +129,14 @@ impl CanvasRenderer {
         match config.generation.dimensions {
             Dimensions::ThreeD => {
                 if config.generation.has_stack_directives() {
-                    let TopologicalDepthSegmentData3D {
-                        segments,
-                        bounds_min,
-                        bounds_max,
-                        max_topological_depth,
-                    } = geometry_to_depth_segments_3d(
+                    let data = geometry_to_depth_segments_3d(
                         lsystem_core::generate_3d_with_topological_depth(&config.generation),
                     );
+                    let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::ThreeDWithTopologicalDepth {
-                        segments,
-                        bounds_min,
-                        bounds_max,
+                        segments: data.segments,
+                        bounds_min: data.bounds_min,
+                        bounds_max: data.bounds_max,
                         max_topological_depth,
                     };
                 } else {
@@ -157,18 +154,14 @@ impl CanvasRenderer {
             }
             Dimensions::TwoD => {
                 if config.generation.has_stack_directives() {
-                    let TopologicalDepthSegmentData {
-                        segments,
-                        bounds_min,
-                        bounds_max,
-                        max_topological_depth,
-                    } = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
-                        &config.generation,
-                    ));
+                    let data = geometry_to_depth_segments(
+                        lsystem_core::generate_with_topological_depth(&config.generation),
+                    );
+                    let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::TwoDWithTopologicalDepth {
-                        segments,
-                        bounds_min,
-                        bounds_max,
+                        segments: data.segments,
+                        bounds_min: data.bounds_min,
+                        bounds_max: data.bounds_max,
                         max_topological_depth,
                     };
                 } else {
@@ -192,6 +185,7 @@ impl CanvasRenderer {
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
         );
+        self.hue_offset_degrees = 0.0;
         let [r, g, b] = colors.effective_background();
         self.background = wgpu::Color {
             r: r as f64,
@@ -220,15 +214,21 @@ impl CanvasRenderer {
             b: b as f64,
             a: 1.0,
         };
-        match &self.scene {
-            ActiveScene::TwoD { .. } | ActiveScene::TwoDWithTopologicalDepth { .. } => {
-                self.pipeline_2d
-                    .write_color_params(&self.gpu.queue, self.color_params);
-            }
-            ActiveScene::ThreeD { .. } | ActiveScene::ThreeDWithTopologicalDepth { .. } => {
-                self.pipeline_3d
-                    .write_color_params(&self.gpu.queue, self.color_params);
-            }
+        self.write_color_params();
+        self.render(canvas)
+    }
+
+    pub fn animate_and_render(
+        &mut self,
+        canvas: &web_sys::HtmlCanvasElement,
+        auto_rotate_degrees: Option<f32>,
+        hue_offset_degrees: Option<f32>,
+    ) -> RenderStatus {
+        if let Some(degrees) = auto_rotate_degrees {
+            self.camera.auto_rotate_by(degrees);
+        }
+        if let Some(offset) = hue_offset_degrees {
+            self.set_hue_offset_degrees(offset);
         }
         self.render(canvas)
     }
@@ -332,15 +332,6 @@ impl CanvasRenderer {
         self.render(canvas)
     }
 
-    pub fn auto_rotate_and_render(
-        &mut self,
-        canvas: &web_sys::HtmlCanvasElement,
-        degrees: f32,
-    ) -> RenderStatus {
-        self.camera.auto_rotate_by(degrees);
-        self.render(canvas)
-    }
-
     pub fn reset_and_render(&mut self, canvas: &web_sys::HtmlCanvasElement) -> RenderStatus {
         self.camera.reset();
         self.render(canvas)
@@ -403,7 +394,7 @@ impl CanvasRenderer {
                         &self.gpu.device,
                         &self.gpu.queue,
                         segments,
-                        self.color_params,
+                        self.effective_color_params(),
                     );
                     self.needs_upload = false;
                 }
@@ -428,7 +419,7 @@ impl CanvasRenderer {
                         &self.gpu.device,
                         &self.gpu.queue,
                         segments,
-                        self.color_params,
+                        self.effective_color_params(),
                     );
                     self.needs_upload = false;
                 }
@@ -452,7 +443,7 @@ impl CanvasRenderer {
                         &self.gpu.device,
                         &self.gpu.queue,
                         segments,
-                        self.color_params,
+                        self.effective_color_params(),
                     );
                     self.needs_upload = false;
                 }
@@ -477,7 +468,7 @@ impl CanvasRenderer {
                         &self.gpu.device,
                         &self.gpu.queue,
                         segments,
-                        self.color_params,
+                        self.effective_color_params(),
                     );
                     self.needs_upload = false;
                 }
@@ -522,6 +513,35 @@ impl CanvasRenderer {
 
         self.gpu
             .end_frame(*frame, encoder, reconfigure_after_present);
+    }
+
+    fn set_hue_offset_degrees(&mut self, offset: f32) {
+        let offset = offset.rem_euclid(360.0);
+        if self.hue_offset_degrees != offset {
+            self.hue_offset_degrees = offset;
+            if !self.needs_upload {
+                self.write_color_params();
+            }
+        }
+    }
+
+    fn effective_color_params(&self) -> ColorParams {
+        self.color_params
+            .with_hue_offset_degrees(self.hue_offset_degrees)
+    }
+
+    fn write_color_params(&self) {
+        let color_params = self.effective_color_params();
+        match &self.scene {
+            ActiveScene::TwoD { .. } | ActiveScene::TwoDWithTopologicalDepth { .. } => {
+                self.pipeline_2d
+                    .write_color_params(&self.gpu.queue, color_params);
+            }
+            ActiveScene::ThreeD { .. } | ActiveScene::ThreeDWithTopologicalDepth { .. } => {
+                self.pipeline_3d
+                    .write_color_params(&self.gpu.queue, color_params);
+            }
+        }
     }
 }
 
