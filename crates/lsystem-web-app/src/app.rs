@@ -117,14 +117,6 @@ fn hsv_movement_is_active(enabled: bool, line_color: &LineColorConfig) -> bool {
     enabled && matches!(line_color, LineColorConfig::HueCycle { .. })
 }
 
-fn animation_loop_has_active_work(
-    auto_active: bool,
-    hsv_enabled: bool,
-    line_color: &LineColorConfig,
-) -> bool {
-    auto_active || hsv_movement_is_active(hsv_enabled, line_color)
-}
-
 #[derive(Clone, Copy)]
 struct ColorControlMemory {
     background: [f32; 3],
@@ -338,16 +330,6 @@ pub(crate) fn App() -> impl IntoView {
         });
     };
 
-    let render_hsv_phase = move || {
-        let Some(canvas) = canvas_ref.get_untracked() else {
-            return;
-        };
-        let phase = hsv_movement_phase.get_untracked();
-        with_renderer(canvas, renderer, recover_after_render, |r, c| {
-            r.set_hue_offset_degrees_and_render(c, phase)
-        });
-    };
-
     canvas_ref.on_load(move |canvas| {
         wasm_bindgen_futures::spawn_local(async move {
             match CanvasRenderer::new(canvas.clone()).await {
@@ -372,19 +354,14 @@ pub(crate) fn App() -> impl IntoView {
         ));
     };
 
-    let is_hue_cycle_untracked = move || {
-        matches!(
-            base_config.with_untracked(line_color_of),
-            LineColorConfig::HueCycle { .. }
-        )
-    };
-
     let reset_hsv_movement = move || {
         let was_active = hsv_movement.get_untracked() || hsv_movement_phase.get_untracked() != 0.0;
         hsv_movement.set(false);
         hsv_movement_phase.set(0.0);
-        if was_active {
-            render_hsv_phase();
+        if was_active && let Some(canvas) = canvas_ref.get_untracked() {
+            with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                r.animate_and_render(c, None, Some(0.0))
+            });
         }
     };
 
@@ -419,11 +396,9 @@ pub(crate) fn App() -> impl IntoView {
 
                 let auto_active = auto_rotate.get_untracked() && is_3d_untracked();
                 let line_color = base_config.with_untracked(line_color_of);
-                if !animation_loop_has_active_work(
-                    auto_active,
-                    hsv_movement.get_untracked(),
-                    &line_color,
-                ) {
+                if !(auto_active
+                    || hsv_movement_is_active(hsv_movement.get_untracked(), &line_color))
+                {
                     break;
                 }
                 let hsv_active = hsv_movement_is_active(hsv_movement.get_untracked(), &line_color);
@@ -508,7 +483,10 @@ pub(crate) fn App() -> impl IntoView {
     let toggle_hsv_movement = move |_: web_sys::MouseEvent| {
         if hsv_movement.get_untracked() {
             reset_hsv_movement();
-        } else if is_hue_cycle_untracked() {
+        } else if matches!(
+            base_config.with_untracked(line_color_of),
+            LineColorConfig::HueCycle { .. }
+        ) {
             hsv_movement.set(true);
             start_animation_loop();
         }
@@ -1592,7 +1570,7 @@ mod tests {
 
     use super::{
         ColorControlMemory, HsvMovementDirection, LineColorMode, advance_hsv_phase_degrees,
-        animation_loop_has_active_work, hsv_movement_is_active,
+        hsv_movement_is_active,
     };
 
     #[test]
@@ -1645,25 +1623,6 @@ mod tests {
         assert!(!hsv_movement_is_active(
             false,
             &LineColorConfig::DEFAULT_HUE_CYCLE
-        ));
-    }
-
-    #[test]
-    fn animation_loop_has_no_work_for_inactive_hsv_mode() {
-        assert!(!animation_loop_has_active_work(
-            false,
-            true,
-            &LineColorConfig::DEFAULT_SOLID
-        ));
-        assert!(animation_loop_has_active_work(
-            false,
-            true,
-            &LineColorConfig::DEFAULT_HUE_CYCLE
-        ));
-        assert!(animation_loop_has_active_work(
-            true,
-            false,
-            &LineColorConfig::DEFAULT_SOLID
         ));
     }
 

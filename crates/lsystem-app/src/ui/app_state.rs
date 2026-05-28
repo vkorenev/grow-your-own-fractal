@@ -100,16 +100,37 @@ impl std::fmt::Display for HsvMovementDirection {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HsvMovement {
-    pub(super) enabled: bool,
-    pub(super) speed_degrees_per_second: f32,
-    pub(super) direction: HsvMovementDirection,
-    pub(super) phase_degrees: f32,
+    enabled: bool,
+    speed_degrees_per_second: f32,
+    direction: HsvMovementDirection,
+    phase_degrees: f32,
 }
 
 impl HsvMovement {
+    pub(super) fn is_enabled(self) -> bool {
+        self.enabled
+    }
+
+    pub(super) fn speed_degrees_per_second(self) -> f32 {
+        self.speed_degrees_per_second
+    }
+
+    pub(super) fn direction(self) -> HsvMovementDirection {
+        self.direction
+    }
+
+    #[cfg(test)]
+    fn phase_degrees(self) -> f32 {
+        self.phase_degrees
+    }
+
     fn stop_and_reset(&mut self) {
         self.enabled = false;
         self.phase_degrees = 0.0;
+    }
+
+    fn start(&mut self) {
+        self.enabled = true;
     }
 
     fn set_speed(&mut self, speed: f32) {
@@ -117,6 +138,10 @@ impl HsvMovement {
             HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
             HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
         );
+    }
+
+    fn set_direction(&mut self, direction: HsvMovementDirection) {
+        self.direction = direction;
     }
 
     fn advance(&mut self, dt_seconds: f32) {
@@ -481,10 +506,10 @@ impl FractalApp {
                 Task::none()
             }
             Message::ToggleHsvMovement => {
-                if self.hsv_movement.enabled {
+                if self.hsv_movement.is_enabled() {
                     self.reset_hsv_movement();
                 } else if self.line_color_is_hue_cycle() {
-                    self.hsv_movement.enabled = true;
+                    self.hsv_movement.start();
                 }
                 Task::none()
             }
@@ -493,7 +518,7 @@ impl FractalApp {
                 Task::none()
             }
             Message::SetHsvMovementDirection(direction) => {
-                self.hsv_movement.direction = direction;
+                self.hsv_movement.set_direction(direction);
                 Task::none()
             }
             Message::AnimationTick => {
@@ -501,7 +526,7 @@ impl FractalApp {
                     self.scene
                         .auto_rotate_by(self.auto_rotate_speed * AUTO_ROTATE_DT_SECS);
                 }
-                if self.hsv_movement.enabled && self.line_color_is_hue_cycle() {
+                if self.hsv_movement.is_enabled() && self.line_color_is_hue_cycle() {
                     self.hsv_movement.advance(AUTO_ROTATE_DT_SECS);
                     self.scene
                         .set_hue_offset_degrees(self.hsv_movement.phase_degrees);
@@ -520,7 +545,7 @@ impl FractalApp {
     pub(super) fn subscription(&self) -> Subscription<Message> {
         let is_3d = self.scene.is_3d();
         let auto_rotate = self.auto_rotate;
-        let hsv_movement = self.hsv_movement.enabled && self.line_color_is_hue_cycle();
+        let hsv_movement = self.hsv_movement.is_enabled() && self.line_color_is_hue_cycle();
 
         let key_sub = event::listen_with(|event, status, _window| {
             if status == event::Status::Captured {
@@ -984,13 +1009,28 @@ mod tests {
         let _ = app.update(Message::ToggleHsvMovement);
         let _ = app.update(Message::AnimationTick);
 
-        assert!(app.hsv_movement.enabled);
-        assert_ne!(app.hsv_movement.phase_degrees, 0.0);
+        assert!(app.hsv_movement.is_enabled());
+        assert_ne!(app.hsv_movement.phase_degrees(), 0.0);
+        assert_ne!(app.scene.hue_offset_degrees(), 0.0);
 
         let _ = app.update(Message::ToggleHsvMovement);
 
-        assert!(!app.hsv_movement.enabled);
-        assert_eq!(app.hsv_movement.phase_degrees, 0.0);
+        assert!(!app.hsv_movement.is_enabled());
+        assert_eq!(app.hsv_movement.phase_degrees(), 0.0);
+        assert_eq!(app.scene.hue_offset_degrees(), 0.0);
+    }
+
+    #[test]
+    fn hsv_movement_toggle_is_ignored_outside_hue_cycle() {
+        let (mut app, _) = FractalApp::new();
+
+        let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
+        assert!(!app.line_color_is_hue_cycle());
+
+        let _ = app.update(Message::ToggleHsvMovement);
+
+        assert!(!app.hsv_movement.is_enabled());
+        assert_eq!(app.hsv_movement.phase_degrees(), 0.0);
     }
 
     #[test]
@@ -998,10 +1038,10 @@ mod tests {
         let (mut app, _) = FractalApp::new();
 
         let _ = app.update(Message::SetHsvMovementSpeed(0.0));
-        assert_eq!(app.hsv_movement.speed_degrees_per_second, 1.0);
+        assert_eq!(app.hsv_movement.speed_degrees_per_second(), 1.0);
 
         let _ = app.update(Message::SetHsvMovementSpeed(75.0));
-        assert_eq!(app.hsv_movement.speed_degrees_per_second, 60.0);
+        assert_eq!(app.hsv_movement.speed_degrees_per_second(), 60.0);
     }
 
     #[test]
@@ -1016,7 +1056,7 @@ mod tests {
         ));
         let _ = app.update(Message::AnimationTick);
 
-        assert_eq!(app.hsv_movement.phase_degrees, 359.0);
+        assert_eq!(app.hsv_movement.phase_degrees(), 359.0);
     }
 
     #[test]
@@ -1026,13 +1066,13 @@ mod tests {
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::HueCycle));
         let _ = app.update(Message::ToggleHsvMovement);
         let _ = app.update(Message::AnimationTick);
-        let phase_before_mode_change = app.hsv_movement.phase_degrees;
+        let phase_before_mode_change = app.hsv_movement.phase_degrees();
 
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
         let _ = app.update(Message::AnimationTick);
 
-        assert!(app.hsv_movement.enabled);
-        assert_eq!(app.hsv_movement.phase_degrees, phase_before_mode_change);
+        assert!(app.hsv_movement.is_enabled());
+        assert_eq!(app.hsv_movement.phase_degrees(), phase_before_mode_change);
     }
 
     #[test]

@@ -132,6 +132,7 @@ pub struct ColorParams {
 }
 
 impl ColorParams {
+    /// Applies a hue offset only for `HueCycle`; other color modes are unchanged.
     pub fn with_hue_offset_degrees(mut self, offset: f32) -> Self {
         if self.mode == ColorMode::HueCycle {
             self.hue_start = (self.hue_start + offset).rem_euclid(360.0);

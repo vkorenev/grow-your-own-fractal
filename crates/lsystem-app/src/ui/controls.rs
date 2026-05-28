@@ -184,7 +184,7 @@ fn push_color_controls<'a>(
                 Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
             })),
         LineColorConfig::HueCycle { initial } => {
-            let movement_label = if hsv_movement.enabled {
+            let movement_label = if hsv_movement.is_enabled() {
                 "HSV movement: On"
             } else {
                 "HSV movement: Off"
@@ -196,7 +196,7 @@ fn push_color_controls<'a>(
                 .push(button(movement_label).on_press(Message::ToggleHsvMovement))
                 .push(
                     pick_list(
-                        Some(hsv_movement.direction),
+                        Some(hsv_movement.direction()),
                         HsvMovementDirection::ALL,
                         |choice| choice.to_string(),
                     )
@@ -206,7 +206,7 @@ fn push_color_controls<'a>(
                 .push(
                     text(format!(
                         "Movement speed: {:.0} °/s",
-                        hsv_movement.speed_degrees_per_second
+                        hsv_movement.speed_degrees_per_second()
                     ))
                     .size(13),
                 )
@@ -214,7 +214,7 @@ fn push_color_controls<'a>(
                     slider(
                         HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND
                             ..=HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-                        hsv_movement.speed_degrees_per_second,
+                        hsv_movement.speed_degrees_per_second(),
                         Message::SetHsvMovementSpeed,
                     )
                     .step(1.0),

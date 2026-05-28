@@ -8,9 +8,8 @@ use lsystem_renderer::line_renderer::{
     TopologicalDepthSegment3D,
 };
 use lsystem_renderer::lsystem_bridge::{
-    SegmentData, SegmentData3D, TopologicalDepthSegmentData, TopologicalDepthSegmentData3D,
-    color_params_from_config, geometry_to_depth_segments, geometry_to_depth_segments_3d,
-    geometry_to_segments, geometry_to_segments_3d,
+    SegmentData, SegmentData3D, color_params_from_config, geometry_to_depth_segments,
+    geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
 };
 
 enum ActiveScene {
@@ -130,18 +129,14 @@ impl CanvasRenderer {
         match config.generation.dimensions {
             Dimensions::ThreeD => {
                 if config.generation.has_stack_directives() {
-                    let TopologicalDepthSegmentData3D {
-                        segments,
-                        bounds_min,
-                        bounds_max,
-                        max_topological_depth,
-                    } = geometry_to_depth_segments_3d(
+                    let data = geometry_to_depth_segments_3d(
                         lsystem_core::generate_3d_with_topological_depth(&config.generation),
                     );
+                    let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::ThreeDWithTopologicalDepth {
-                        segments,
-                        bounds_min,
-                        bounds_max,
+                        segments: data.segments,
+                        bounds_min: data.bounds_min,
+                        bounds_max: data.bounds_max,
                         max_topological_depth,
                     };
                 } else {
@@ -159,18 +154,14 @@ impl CanvasRenderer {
             }
             Dimensions::TwoD => {
                 if config.generation.has_stack_directives() {
-                    let TopologicalDepthSegmentData {
-                        segments,
-                        bounds_min,
-                        bounds_max,
-                        max_topological_depth,
-                    } = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
-                        &config.generation,
-                    ));
+                    let data = geometry_to_depth_segments(
+                        lsystem_core::generate_with_topological_depth(&config.generation),
+                    );
+                    let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::TwoDWithTopologicalDepth {
-                        segments,
-                        bounds_min,
-                        bounds_max,
+                        segments: data.segments,
+                        bounds_min: data.bounds_min,
+                        bounds_max: data.bounds_max,
                         max_topological_depth,
                     };
                 } else {
@@ -224,15 +215,6 @@ impl CanvasRenderer {
             a: 1.0,
         };
         self.write_color_params();
-        self.render(canvas)
-    }
-
-    pub fn set_hue_offset_degrees_and_render(
-        &mut self,
-        canvas: &web_sys::HtmlCanvasElement,
-        offset: f32,
-    ) -> RenderStatus {
-        self.set_hue_offset_degrees(offset);
         self.render(canvas)
     }
 

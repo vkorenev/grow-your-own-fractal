@@ -145,11 +145,12 @@ impl Scene {
         camera: Camera,
         revision: u64,
     ) -> Self {
+        let max_topological_depth = data.max_topological_depth();
         let geometry = SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
             bounds_min: data.bounds_min,
             bounds_max: data.bounds_max,
-            max_topological_depth: data.max_topological_depth,
+            max_topological_depth,
         };
         Self {
             color_params: color_params_from_config(
@@ -172,11 +173,12 @@ impl Scene {
         camera: Camera,
         revision: u64,
     ) -> Self {
+        let max_topological_depth = data.max_topological_depth();
         let geometry = SceneGeometry::ThreeDWithTopologicalDepth {
             segments: Arc::new(data.segments),
             bounds_min: data.bounds_min,
             bounds_max: data.bounds_max,
-            max_topological_depth: data.max_topological_depth,
+            max_topological_depth,
         };
         Self {
             color_params: color_params_from_config(
@@ -289,6 +291,11 @@ impl Scene {
             self.hue_offset_degrees = offset;
             self.color_revision = self.color_revision.wrapping_add(1);
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn hue_offset_degrees(&self) -> f32 {
+        self.hue_offset_degrees
     }
 
     fn snapshot(&self) -> SceneSnapshot {
