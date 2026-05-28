@@ -5,6 +5,7 @@ mod color_input;
 mod export;
 mod presets;
 mod renderer;
+pub(crate) mod ui;
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn start() {

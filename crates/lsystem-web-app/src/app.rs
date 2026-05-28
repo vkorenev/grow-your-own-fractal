@@ -74,6 +74,16 @@ enum HsvMovementDirection {
 }
 
 impl HsvMovementDirection {
+    fn sign(self) -> f32 {
+        match self {
+            Self::Forward => 1.0,
+            Self::Reverse => -1.0,
+        }
+    }
+}
+
+#[cfg(test)]
+impl HsvMovementDirection {
     fn from_key(key: &str) -> Option<Self> {
         match key {
             "forward" => Some(Self::Forward),
@@ -95,13 +105,6 @@ impl HsvMovementDirection {
             Self::Reverse => "Reverse",
         }
     }
-
-    fn sign(self) -> f32 {
-        match self {
-            Self::Forward => 1.0,
-            Self::Reverse => -1.0,
-        }
-    }
 }
 
 fn advance_hsv_phase_degrees(
@@ -115,6 +118,10 @@ fn advance_hsv_phase_degrees(
 
 fn hsv_movement_is_active(enabled: bool, line_color: &LineColorConfig) -> bool {
     enabled && matches!(line_color, LineColorConfig::HueCycle { .. })
+}
+
+fn contains_3d_symbols(s: &str) -> bool {
+    s.contains(['&', '^', '/', '\\'])
 }
 
 #[derive(Clone, Copy)]
@@ -215,6 +222,9 @@ pub(crate) fn App() -> impl IntoView {
     let hsv_movement_speed = RwSignal::new(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
     let hsv_movement_direction = RwSignal::new(HsvMovementDirection::Forward);
     let hsv_movement_phase = RwSignal::new(0.0f32);
+    let sidebar_collapsed = RwSignal::new(false);
+    let sheet_open = RwSignal::new(false);
+    let sheet_drag_start: StoredValue<Option<f64>, LocalStorage> = StoredValue::new_local(None);
     // Generation counter: bumped on each animation start so older rAF loops detect
     // they have been superseded and exit.
     let animation_token = RwSignal::new(0u32);
@@ -251,6 +261,50 @@ pub(crate) fn App() -> impl IntoView {
         )
     };
     let is_dirty = move || config_workspace.with(|workspace| workspace.selected().is_dirty());
+
+    let rename_mode = RwSignal::new(false);
+    let rename_draft = RwSignal::new(String::new());
+    let reset_prompt = RwSignal::new(false);
+
+    let grammar_axiom = RwSignal::new(base_config.get_untracked().generation.axiom.clone());
+    let grammar_rules: RwSignal<Vec<(String, String)>> = RwSignal::new(
+        base_config
+            .get_untracked()
+            .generation
+            .rules
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
+    );
+    let grammar_prompt = RwSignal::new(false);
+    let grammar_3d_prompt = RwSignal::new(false);
+
+    let dims_3d_error: RwSignal<Option<String>> = RwSignal::new(None);
+    let params_pending: StoredValue<Option<Box<dyn Fn()>>, LocalStorage> =
+        StoredValue::new_local(None);
+    let params_prompt = RwSignal::new(false);
+
+    let colors_pending: StoredValue<Option<Box<dyn Fn()>>, LocalStorage> =
+        StoredValue::new_local(None);
+    let colors_prompt = RwSignal::new(false);
+
+    let hue_prompt = RwSignal::new(false);
+    let hue_pending_dir: StoredValue<Option<HsvMovementDirection>, LocalStorage> =
+        StoredValue::new_local(None);
+
+    let save_format = RwSignal::new("png"); // "svg" | "png"
+
+    let sync_grammar_editor = move || {
+        let generation = base_config.get_untracked().generation.clone();
+        grammar_axiom.set(generation.axiom);
+        grammar_rules.set(
+            generation
+                .rules
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        );
+    };
 
     let canvas_ref = NodeRef::<Canvas>::new();
 
@@ -454,6 +508,7 @@ pub(crate) fn App() -> impl IntoView {
                 }
                 render_current();
                 resume_hsv_movement_if_active();
+                sync_grammar_editor();
             }
             Some(Err(msg)) => error.set(Some(msg)),
             None => {
@@ -469,274 +524,668 @@ pub(crate) fn App() -> impl IntoView {
         refresh_color_memory();
         render_current();
         resume_hsv_movement_if_active();
+        sync_grammar_editor();
     };
 
-    let toggle_auto_rotate = move |_: web_sys::MouseEvent| {
-        if auto_rotate.get_untracked() {
-            auto_rotate.set(false);
-        } else {
-            auto_rotate.set(true);
-            start_animation_loop();
+    // Silently reverts any in-flight dirty draft; used by confirm callbacks that
+    // need a clean entry before applying a new operation.
+    let revert_dirty = move || {
+        let _ = config_workspace.try_update(|ws| {
+            if let EntryViewMut::Dirty(dirty) = ws.selected_mut().view_mut() {
+                dirty.revert();
+            }
+        });
+    };
+
+    let commit_rename = move || {
+        let name = rename_draft.get_untracked().trim().to_string();
+        let idx = config_workspace.with_untracked(|ws| ws.selected_index());
+        match config_workspace.try_update(|ws| ws.rename(idx, &name)) {
+            Some(Ok(())) => {
+                error.set(None);
+                rename_mode.set(false);
+            }
+            Some(Err(e)) => error.set(Some(e.to_string())),
+            None => error.set(Some("Internal error: could not rename.".to_string())),
         }
     };
 
-    let toggle_hsv_movement = move |_: web_sys::MouseEvent| {
-        if hsv_movement.get_untracked() {
-            reset_hsv_movement();
-        } else if matches!(
-            base_config.with_untracked(line_color_of),
-            LineColorConfig::HueCycle { .. }
-        ) {
+    let do_reset = move || {
+        let result = config_workspace.try_update(|ws| {
+            ws.reset()
+                .map(|opt| opt.is_some())
+                .map_err(|e| e.to_string())
+        });
+        match result {
+            Some(Ok(true)) => {
+                error.set(None);
+                stop_auto_rotate_if_2d();
+                refresh_color_memory();
+                render_current();
+                resume_hsv_movement_if_active();
+                sync_grammar_editor();
+            }
+            Some(Ok(false)) => {
+                log::warn!(
+                    "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
+                );
+            }
+            Some(Err(msg)) => error.set(Some(msg)),
+            None => error.set(Some("Internal error: could not reset.".to_string())),
+        }
+    };
+
+    let try_reset = move || {
+        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
+            reset_prompt.set(true);
+        } else {
+            do_reset();
+        }
+    };
+
+    let grammar_has_3d_symbols = move || {
+        contains_3d_symbols(&grammar_axiom.get_untracked())
+            || grammar_rules
+                .get_untracked()
+                .iter()
+                .any(|(_, rhs)| contains_3d_symbols(rhs))
+    };
+
+    let do_apply_grammar = move || {
+        let axiom = grammar_axiom.get_untracked();
+        let rules_raw = grammar_rules.get_untracked();
+        let mut seen = std::collections::HashSet::new();
+        let mut rules: Vec<(char, String)> = Vec::with_capacity(rules_raw.len());
+        for (k, v) in rules_raw {
+            let Some(c) = k.chars().next() else {
+                error.set(Some(
+                    "Each rule must have a symbol. Remove or complete empty rows before applying."
+                        .to_string(),
+                ));
+                return;
+            };
+            if !seen.insert(c) {
+                error.set(Some(format!(
+                    "Duplicate rule symbol '{c}'. Each symbol may appear only once."
+                )));
+                return;
+            }
+            rules.push((c, v));
+        }
+        update_clean_config(
+            config_workspace,
+            error,
+            render_current,
+            "grammar apply",
+            move |clean| clean.set_grammar(&axiom, &rules),
+        );
+    };
+
+    let try_apply_grammar = move || {
+        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
+            grammar_prompt.set(true);
+            return;
+        }
+        if grammar_has_3d_symbols()
+            && !matches!(
+                base_config.get_untracked().generation.dimensions,
+                Dimensions::ThreeD
+            )
+        {
+            grammar_3d_prompt.set(true);
+            return;
+        }
+        do_apply_grammar();
+    };
+
+    let try_clean_param = move |action: Box<dyn Fn()>| {
+        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
+            params_pending.set_value(Some(action));
+            params_prompt.set(true);
+        } else {
+            action();
+        }
+    };
+
+    let try_clean_color = move |action: Box<dyn Fn()>| {
+        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
+            colors_pending.set_value(Some(action));
+            colors_prompt.set(true);
+        } else {
+            action();
+        }
+    };
+
+    let try_set_dimensions = move |key: &'static str| {
+        let next = if key == "3d" {
+            Dimensions::ThreeD
+        } else {
+            Dimensions::TwoD
+        };
+        if next == Dimensions::TwoD {
+            let generation = base_config.get_untracked().generation;
+            if contains_3d_symbols(&generation.axiom)
+                || generation
+                    .rules
+                    .values()
+                    .any(|rhs| contains_3d_symbols(rhs))
+            {
+                dims_3d_error.set(Some(
+                    "Remove 3D-only symbols (& ^ / \\) from the grammar before switching to 2D."
+                        .to_string(),
+                ));
+                return;
+            }
+        }
+        dims_3d_error.set(None);
+        try_clean_param(Box::new(move || {
+            update_clean_config(
+                config_workspace,
+                error,
+                render_current,
+                "set dimensions",
+                move |clean| clean.set_dimensions(next),
+            );
+            if next == Dimensions::TwoD && auto_rotate.get_untracked() {
+                auto_rotate.set(false);
+            }
+        }));
+    };
+
+    let apply_hue_movement = move |dir: Option<HsvMovementDirection>| match dir {
+        None => reset_hsv_movement(),
+        Some(d) => {
+            hsv_movement_direction.set(d);
             hsv_movement.set(true);
             start_animation_loop();
         }
     };
 
+    let try_set_hue_movement = move |key: &'static str| {
+        let dir = match key {
+            "forward" => Some(HsvMovementDirection::Forward),
+            "backward" => Some(HsvMovementDirection::Reverse),
+            _ => None,
+        };
+        if dir.is_some()
+            && !matches!(
+                base_config.with_untracked(line_color_of),
+                LineColorConfig::HueCycle { .. }
+            )
+        {
+            hue_pending_dir.set_value(dir);
+            hue_prompt.set(true);
+            return;
+        }
+        apply_hue_movement(dir);
+    };
+
     view! {
-        <main class="app-shell">
-            <aside class="controls">
-                <h1>"Grow Your Own Fractal"</h1>
-
-                <label for="preset">"Config"</label>
-                <select
-                    id="preset"
-                    prop:value=move || {
-                        config_workspace.with(|workspace| workspace.selected_index().to_string())
+        <main
+            class="app-shell"
+            class:sidebar-collapsed=move || sidebar_collapsed.get()
+        >
+            <aside
+                class="controls"
+                class:sheet-open=move || sheet_open.get()
+            >
+                <div
+                    class="sheet-handle-area"
+                    on:pointerdown=move |ev: web_sys::PointerEvent| {
+                        let target: web_sys::Element = ev.target().unwrap().unchecked_into();
+                        let _ = target.set_pointer_capture(ev.pointer_id());
+                        sheet_drag_start.set_value(Some(ev.client_y() as f64));
                     }
-                    on:change:target=move |ev| {
-                        let idx = ev.target().value().parse::<usize>().unwrap_or(0);
-                        let selected = config_workspace.try_update(|workspace| {
-                            workspace.select(idx).map(|_| ()).map_err(|e| e.to_string())
-                        });
-                        match selected {
-                            Some(Ok(())) => {
-                                select_current_config();
-                            }
-                            Some(Err(err)) => {
-                                log::error!("select preset: rejected index {idx}: {err}");
-                                error.set(Some(err));
-                            }
-                            None => {
-                                log::error!(
-                                    "select preset: config_workspace signal was unavailable"
-                                );
-                                error.set(Some(
-                                    "Internal error: could not select config.".to_string(),
-                                ));
-                            }
+                    on:pointermove=move |ev: web_sys::PointerEvent| {
+                        let Some(start) = sheet_drag_start.get_value() else { return; };
+                        let dy = ev.client_y() as f64 - start;
+                        if dy < -30.0 {
+                            sheet_open.set(true);
+                            sheet_drag_start.set_value(None);
+                        } else if dy > 30.0 {
+                            sheet_open.set(false);
+                            sheet_drag_start.set_value(None);
                         }
                     }
+                    on:pointerup=move |_| { sheet_drag_start.set_value(None); }
+                    on:click=move |_| sheet_open.update(|v| *v = !*v)
                 >
-                    {move || {
-                        config_workspace.with(|workspace| {
-                            workspace
-                                .entries()
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, entry)| {
-                                    view! {
-                                        <option value=idx.to_string()>{entry.name().to_string()}</option>
-                                    }
-                                })
-                                .collect_view()
-                        })
-                    }}
-                </select>
+                    <div class="sheet-handle"></div>
+                    <span class="sheet-preset-name">
+                        {move || config_workspace.with(|ws| ws.selected().name().to_string())}
+                    </span>
+                </div>
 
-                <button
-                    type="button"
-                    on:click=move |_| {
-                        let result = config_workspace.try_update(|workspace| {
-                            workspace.copy().map(|_| ()).map_err(|e| e.to_string())
-                        });
-                        match result {
-                            Some(Ok(())) => {
-                                error.set(None);
-                                stop_auto_rotate_if_2d();
-                                refresh_color_memory();
-                                render_current();
-                                resume_hsv_movement_if_active();
-                            }
-                            Some(Err(msg)) => error.set(Some(msg)),
-                            None => {
-                                log::error!("copy: config_workspace signal was unavailable");
-                                error.set(Some(
-                                    "Internal error: could not copy config.".to_string(),
-                                ));
-                            }
-                        }
-                    }
-                >
-                    "Copy"
-                </button>
+                <div class="controls-scroll">
+                <h1 class="controls-title">"Grow Your Own Fractal"</h1>
 
-                <label for="config">"Config (TOML)"</label>
-                <textarea
-                    id="config"
-                    spellcheck="false"
-                    prop:value=move || toml_text.get()
-                    on:input:target=move |ev| {
-                        let text = ev.target().value();
-                        let updated = config_workspace.try_update(|workspace| {
-                            workspace.selected_mut().set_draft_text(text);
-                        });
-                        if updated.is_none() {
-                            log::error!("textarea input: config_workspace signal was unavailable");
-                            error.set(Some(
-                                "Internal error: could not update config.".to_string(),
-                            ));
-                        }
-                    }
-                />
-
-                <div class="row">
-                    <button
-                        type="button"
-                        disabled=move || !is_dirty()
-                        on:click=move |_| apply_current()
-                    >
-                        "Apply"
-                    </button>
-                    <button
-                        type="button"
-                        disabled=move || !is_dirty()
-                        on:click=move |_| {
-                            let ok = config_workspace.try_update(|workspace| {
-                                match workspace.selected_mut().view_mut() {
-                                    EntryViewMut::Dirty(dirty) => dirty.revert(),
-                                    EntryViewMut::Clean(_) => {
-                                        log::error!(
-                                            "revert fired while entry is clean; UI guards bypassed"
-                                        );
-                                    }
-                                }
+                <div class="preset-row">
+                    <select
+                        class:hidden=move || rename_mode.get()
+                        prop:value=move || config_workspace.with(|ws| ws.selected_index().to_string())
+                        on:change:target=move |ev| {
+                            let idx = ev.target().value().parse::<usize>().unwrap_or(0);
+                            let selected = config_workspace.try_update(|workspace| {
+                                workspace.select(idx).map(|_| ()).map_err(|e| e.to_string())
                             });
-                            if ok.is_some() {
-                                error.set(None);
-                                stop_auto_rotate_if_2d();
-                                refresh_color_memory();
-                                render_current();
-                                resume_hsv_movement_if_active();
-                            } else {
-                                log::error!("revert: config_workspace signal was unavailable");
-                                error.set(Some(
-                                    "Internal error: could not revert config.".to_string(),
-                                ));
-                            }
-                        }
-                    >
-                        "Revert"
-                    </button>
-                    <button
-                        type="button"
-                        disabled=move || {
-                            config_workspace.with(|workspace| {
-                                workspace.selected().is_dirty() || !workspace.can_reset()
-                            })
-                        }
-                        on:click=move |_| {
-                            if is_dirty() {
-                                return;
-                            }
-                            let result = config_workspace.try_update(|workspace| {
-                                workspace
-                                    .reset()
-                                    .map(|opt| opt.is_some())
-                                    .map_err(|e| e.to_string())
-                            });
-                            match result {
-                                Some(Ok(true)) => {
-                                    error.set(None);
-                                    stop_auto_rotate_if_2d();
-                                    refresh_color_memory();
-                                    render_current();
-                                    resume_hsv_movement_if_active();
+                            match selected {
+                                Some(Ok(())) => {
+                                    select_current_config();
                                 }
-                                Some(Ok(false)) => {
-                                    log::warn!(
-                                        "reset: no-op for entry without a bundled default; button guard may have been bypassed"
-                                    );
+                                Some(Err(err)) => {
+                                    log::error!("select preset: rejected index {idx}: {err}");
+                                    error.set(Some(err));
                                 }
-                                Some(Err(msg)) => error.set(Some(msg)),
                                 None => {
                                     log::error!(
-                                        "reset: config_workspace signal was unavailable"
+                                        "select preset: config_workspace signal was unavailable"
                                     );
                                     error.set(Some(
-                                        "Internal error: could not reset config.".to_string(),
+                                        "Internal error: could not select config.".to_string(),
                                     ));
                                 }
                             }
                         }
                     >
-                        "Reset"
+                        {move || {
+                            config_workspace.with(|workspace| {
+                                workspace
+                                    .entries()
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, entry)| {
+                                        view! {
+                                            <option value=idx.to_string()>{entry.name().to_string()}</option>
+                                        }
+                                    })
+                                    .collect_view()
+                            })
+                        }}
+                    </select>
+
+                    <input
+                        type="text"
+                        class="rename-input"
+                        class:hidden=move || !rename_mode.get()
+                        prop:value=move || rename_draft.get()
+                        on:input:target=move |ev| rename_draft.set(ev.target().value())
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if ev.key() == "Enter" { commit_rename(); }
+                            if ev.key() == "Escape" { rename_mode.set(false); }
+                        }
+                    />
+
+                    <button
+                        type="button"
+                        class:hidden=move || rename_mode.get()
+                        on:click=move |_| {
+                            let result = config_workspace.try_update(|workspace| {
+                                workspace.copy().map(|_| ()).map_err(|e| e.to_string())
+                            });
+                            match result {
+                                Some(Ok(())) => {
+                                    error.set(None);
+                                    stop_auto_rotate_if_2d();
+                                    refresh_color_memory();
+                                    render_current();
+                                    resume_hsv_movement_if_active();
+                                    sync_grammar_editor();
+                                }
+                                Some(Err(msg)) => error.set(Some(msg)),
+                                None => {
+                                    log::error!("copy: config_workspace signal was unavailable");
+                                    error.set(Some(
+                                        "Internal error: could not copy config.".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    >
+                        "Copy"
                     </button>
+
+                    {move || if rename_mode.get() {
+                        view! {
+                            <div style="display:contents">
+                                <button
+                                    type="button"
+                                    disabled=move || {
+                                        let d = rename_draft.get();
+                                        d.trim().is_empty()
+                                            || config_workspace.with(|ws| {
+                                                ws.index_by_name(d.trim())
+                                                    .is_some_and(|i| i != ws.selected_index())
+                                            })
+                                    }
+                                    on:click=move |_| commit_rename()
+                                >"Save"</button>
+                                <button type="button" on:click=move |_| rename_mode.set(false)>"✕"</button>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div style="display:contents">
+                                <button
+                                    type="button"
+                                    on:click=move |_| {
+                                        rename_draft.set(
+                                            config_workspace.with(|ws| ws.selected().name().to_string())
+                                        );
+                                        rename_mode.set(true);
+                                    }
+                                >"Rename"</button>
+                                <button
+                                    type="button"
+                                    disabled=move || config_workspace.with(|ws| !ws.can_reset())
+                                    on:click=move |_| try_reset()
+                                >"Reset"</button>
+                            </div>
+                        }.into_any()
+                    }}
                 </div>
 
-                <p class=move || if error.get().is_some() { "status error" } else { "status ok" }>
-                    {move || error.get().unwrap_or_else(|| "OK".to_string())}
-                </p>
+                <Show when=move || reset_prompt.get()>
+                    <crate::ui::WarningPrompt
+                        message="You have unapplied TOML changes. Discard them and reset?"
+                        confirm_label="Discard & reset"
+                        on_confirm=move || {
+                            reset_prompt.set(false);
+                            revert_dirty();
+                            do_reset();
+                        }
+                        on_cancel=move || reset_prompt.set(false)
+                    />
+                </Show>
 
-                <p class:hidden=move || !is_dirty() class="status">
-                    "Apply or Revert the edited config before using controls."
-                </p>
+                <crate::ui::Disclosure title="Grammar">
+                    <table class="grammar-table">
+                        <tbody>
+                            <tr>
+                                <td class="g-symbol">
+                                    <span class="grammar-axiom-label">"axiom"</span>
+                                </td>
+                                <td>
+                                    <input
+                                        type="text"
+                                        class="grammar-rhs"
+                                        prop:value=move || grammar_axiom.get()
+                                        on:input:target=move |ev| grammar_axiom.set(ev.target().value())
+                                    />
+                                </td>
+                                <td class="g-delete"></td>
+                            </tr>
+                            {move || {
+                                let rules = grammar_rules.get();
+                                let axiom = grammar_axiom.get();
+                                let all_syms: Vec<char> = axiom
+                                    .chars()
+                                    .chain(rules.iter().flat_map(|(k, _)| k.chars()))
+                                    .filter(|c| c.is_ascii_alphabetic())
+                                    .collect::<std::collections::BTreeSet<_>>()
+                                    .into_iter()
+                                    .collect();
+                                rules.into_iter().enumerate().map(|(idx, (sym, rhs))| {
+                                    let list_id = format!("sym-dl-{idx}");
+                                    view! {
+                                        <tr>
+                                            <td class="g-symbol">
+                                                <input
+                                                    type="text"
+                                                    class="grammar-combo"
+                                                    list=list_id.clone()
+                                                    maxlength="1"
+                                                    prop:value=sym.clone()
+                                                    on:input:target=move |ev| {
+                                                        grammar_rules.update(|rules| {
+                                                            if let Some(r) = rules.get_mut(idx) {
+                                                                r.0 = ev.target().value();
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                                <datalist id=list_id>
+                                                    {all_syms.iter().map(|c| {
+                                                        let s = c.to_string();
+                                                        view! { <option value=s /> }
+                                                    }).collect_view()}
+                                                </datalist>
+                                            </td>
+                                            <td>
+                                                <input
+                                                    type="text"
+                                                    class="grammar-rhs"
+                                                    prop:value=rhs.clone()
+                                                    on:input:target=move |ev| {
+                                                        grammar_rules.update(|rules| {
+                                                            if let Some(r) = rules.get_mut(idx) {
+                                                                r.1 = ev.target().value();
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                            </td>
+                                            <td class="g-delete">
+                                                <button
+                                                    type="button"
+                                                    class="grammar-delete-btn"
+                                                    on:click=move |_| {
+                                                        grammar_rules.update(|rules| { rules.remove(idx); });
+                                                    }
+                                                >"×"</button>
+                                            </td>
+                                        </tr>
+                                    }
+                                }).collect_view()
+                            }}
+                        </tbody>
+                    </table>
 
-                <div class="group" class:hidden=move || is_dirty()>
-                    <label for="iterations">"Iterations"</label>
+                    <button
+                        type="button"
+                        style="width:100%"
+                        on:click=move |_| {
+                            grammar_rules.update(|rules| rules.push((String::new(), String::new())));
+                        }
+                    >"+ Add rule"</button>
+
                     <div class="row">
-                        <input
-                            id="iterations"
-                            type="range"
-                            min="0"
-                            max=move || max_iterations.get().to_string()
-                            prop:value=move || iterations.get().to_string()
-                            on:input:target=move |ev| {
-                                let next = ev
-                                    .target()
-                                    .value()
-                                    .parse::<u32>()
-                                    .unwrap_or(0)
-                                    .clamp(0, max_iterations.get_untracked());
-                                update_clean_config(
+                        <button type="button" on:click=move |_| try_apply_grammar()>"Apply"</button>
+                        <span class=move || {
+                            if error.get().is_some() { "inline-status error" } else { "inline-status ok" }
+                        }>
+                            {move || error.get().unwrap_or_else(|| "OK".to_string())}
+                        </span>
+                    </div>
+
+                    <Show when=move || grammar_prompt.get()>
+                        <crate::ui::WarningPrompt
+                            message="You have unapplied TOML changes. Discard them and proceed?"
+                            confirm_label="Discard & apply"
+                            on_confirm=move || {
+                                grammar_prompt.set(false);
+                                revert_dirty();
+                                try_apply_grammar();
+                            }
+                            on_cancel=move || grammar_prompt.set(false)
+                        />
+                    </Show>
+
+                    <Show when=move || grammar_3d_prompt.get()>
+                        <crate::ui::WarningPrompt
+                            message="Grammar contains 3D-only symbols. Switch to 3D to apply it."
+                            confirm_label="Switch to 3D & apply"
+                            on_confirm=move || {
+                                grammar_3d_prompt.set(false);
+                                if update_clean_config(
                                     config_workspace,
                                     error,
                                     render_current,
-                                    "iterations input",
-                                    move |clean| clean.set_iterations(next),
-                                );
+                                    "switch to 3D for grammar",
+                                    |clean| clean.set_dimensions(Dimensions::ThreeD),
+                                ) {
+                                    do_apply_grammar();
+                                }
                             }
+                            on_cancel=move || grammar_3d_prompt.set(false)
                         />
-                        <output>{move || iterations.get()}</output>
-                    </div>
+                    </Show>
+                </crate::ui::Disclosure>
 
-                    <label for="angle">"Angle"</label>
+                <crate::ui::Disclosure title="Edit TOML" open=false>
+                    <textarea
+                        id="config"
+                        spellcheck="false"
+                        prop:value=move || toml_text.get()
+                        on:input:target=move |ev| {
+                            let text = ev.target().value();
+                            let updated = config_workspace.try_update(|workspace| {
+                                workspace.selected_mut().set_draft_text(text);
+                            });
+                            if updated.is_none() {
+                                log::error!("textarea input: config_workspace signal was unavailable");
+                                error.set(Some(
+                                    "Internal error: could not update config.".to_string(),
+                                ));
+                            }
+                        }
+                    />
                     <div class="row">
-                        <input
-                            id="angle"
-                            type="range"
-                            min="1"
-                            max="180"
-                            step="0.5"
-                            prop:value=move || angle.get().to_string()
-                            on:input:target=move |ev| {
-                                let next = ev
-                                    .target()
-                                    .value()
-                                    .parse::<f32>()
-                                    .unwrap_or(60.0)
-                                    .clamp(1.0, 180.0);
-                                update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current,
-                                    "angle input",
-                                    move |clean| clean.set_angle(next),
-                                );
+                        <button
+                            type="button"
+                            disabled=move || !is_dirty()
+                            on:click=move |_| apply_current()
+                        >
+                            "Apply"
+                        </button>
+                        <button
+                            type="button"
+                            disabled=move || !is_dirty()
+                            on:click=move |_| {
+                                let ok = config_workspace.try_update(|workspace| {
+                                    match workspace.selected_mut().view_mut() {
+                                        EntryViewMut::Dirty(dirty) => dirty.revert(),
+                                        EntryViewMut::Clean(_) => {
+                                            log::error!(
+                                                "revert fired while entry is clean; UI guards bypassed"
+                                            );
+                                        }
+                                    }
+                                });
+                                if ok.is_some() {
+                                    error.set(None);
+                                    stop_auto_rotate_if_2d();
+                                    refresh_color_memory();
+                                    render_current();
+                                    resume_hsv_movement_if_active();
+                                    sync_grammar_editor();
+                                } else {
+                                    log::error!("revert: config_workspace signal was unavailable");
+                                    error.set(Some(
+                                        "Internal error: could not revert config.".to_string(),
+                                    ));
+                                }
                             }
+                        >
+                            "Revert"
+                        </button>
+                    </div>
+                </crate::ui::Disclosure>
+
+                <crate::ui::Disclosure title="Parameters">
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                        <span class="section-label">"Dimensions"</span>
+                        <crate::ui::SegmentedToggle
+                            options=vec![("2d", "2D"), ("3d", "3D")]
+                            selected=Signal::derive(move || match base_config.get().generation.dimensions {
+                                Dimensions::TwoD => "2d",
+                                Dimensions::ThreeD => "3d",
+                            })
+                            on_change=move |key| try_set_dimensions(key)
                         />
-                        <output>{move || format!("{:.1}", angle.get())}</output>
+                        {move || dims_3d_error.get().map(|msg| view! {
+                            <span class="inline-status error">{msg}</span>
+                        })}
                     </div>
 
+                    <div class="spinner-row">
+                        <span class="spinner-label">"Angle (°)"</span>
+                        <crate::ui::Spinner
+                            value=Signal::derive(move || format!("{:.1}", angle.get()))
+                            step=0.5
+                            on_commit=move |s| {
+                                if let Ok(v) = s.parse::<f32>() {
+                                    let v = v.clamp(1.0, 180.0);
+                                    try_clean_param(Box::new(move || {
+                                        update_clean_config(
+                                            config_workspace, error, render_current, "angle",
+                                            move |clean| clean.set_angle(v),
+                                        );
+                                    }));
+                                }
+                            }
+                        />
+                    </div>
+
+                    <div class="spinner-row">
+                        <span class="spinner-label">"Initial heading (°)"</span>
+                        <crate::ui::Spinner
+                            value=Signal::derive(move || format!(
+                                "{:.1}",
+                                config_workspace.with(|ws| ws.selected().applied_config().generation.initial_heading)
+                            ))
+                            step=1.0
+                            on_commit=move |s| {
+                                if let Ok(v) = s.parse::<f32>() {
+                                    try_clean_param(Box::new(move || {
+                                        update_clean_config(
+                                            config_workspace, error, render_current, "initial_heading",
+                                            move |clean| clean.set_initial_heading(v),
+                                        );
+                                    }));
+                                }
+                            }
+                        />
+                    </div>
+
+                    <div class="spinner-row">
+                        <span class="spinner-label">"Iterations"</span>
+                        <crate::ui::Spinner
+                            value=Signal::derive(move || iterations.get().to_string())
+                            step=1.0
+                            on_commit=move |s| {
+                                if let Ok(v) = s.parse::<u32>() {
+                                    let v = v.clamp(0, max_iterations.get_untracked());
+                                    try_clean_param(Box::new(move || {
+                                        update_clean_config(
+                                            config_workspace, error, render_current, "iterations",
+                                            move |clean| clean.set_iterations(v),
+                                        );
+                                    }));
+                                }
+                            }
+                        />
+                    </div>
+
+                    <Show when=move || params_prompt.get()>
+                        <crate::ui::WarningPrompt
+                            message="You have unapplied TOML changes. Discard them and proceed?"
+                            confirm_label="Discard & proceed"
+                            on_confirm=move || {
+                                params_prompt.set(false);
+                                revert_dirty();
+                                sync_grammar_editor();
+                                if let Some(Some(action)) = params_pending.try_update_value(|v| v.take()) { action(); }
+                                params_pending.set_value(None);
+                            }
+                            on_cancel=move || {
+                                params_prompt.set(false);
+                                params_pending.set_value(None);
+                            }
+                        />
+                    </Show>
+                </crate::ui::Disclosure>
+
+                <crate::ui::Disclosure title="Colors">
                     <label class="check-row" for="background-override">
                         <input
                             id="background-override"
@@ -756,13 +1205,15 @@ pub(crate) fn App() -> impl IntoView {
                                 } else {
                                     None
                                 };
-                                update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "background checkbox",
-                                    move |clean| clean.set_background(background),
-                                );
+                                try_clean_color(Box::new(move || {
+                                    update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "background checkbox",
+                                        move |clean| clean.set_background(background),
+                                    );
+                                }));
                             }
                         />
                         <span>"Background"</span>
@@ -784,17 +1235,19 @@ pub(crate) fn App() -> impl IntoView {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "background color input",
-                                    move |clean| clean.set_background(Some(color)),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_background(color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "background color input",
+                                        move |clean| clean.set_background(Some(color)),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_background(color);
+                                        });
+                                    }
+                                }));
                             }
                         />
                     </div>
@@ -826,18 +1279,20 @@ pub(crate) fn App() -> impl IntoView {
                                 ));
                                 return;
                             };
-                            if update_clean_config(
-                                config_workspace,
-                                error,
-                                render_current_colors,
-                                "line color mode select",
-                                move |clean| clean.set_line_color(line_color),
-                            ) {
-                                color_memory.update(|memory| {
-                                    memory.remember_line(line_color);
-                                });
-                                resume_hsv_movement_if_active();
-                            }
+                            try_clean_color(Box::new(move || {
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "line color mode select",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                    resume_hsv_movement_if_active();
+                                }
+                            }));
                         }
                     >
                         <option value="solid">"Solid"</option>
@@ -872,17 +1327,19 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let line_color = LineColorConfig::Solid { color };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "solid line color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "solid line color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }));
                             }
                         />
                     </div>
@@ -931,17 +1388,19 @@ pub(crate) fn App() -> impl IntoView {
                                     ),
                                 };
                                 let line_color = LineColorConfig::DepthGradient { start, end };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "depth-gradient start color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "depth-gradient start color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }));
                             }
                         />
 
@@ -978,17 +1437,19 @@ pub(crate) fn App() -> impl IntoView {
                                     ),
                                 };
                                 let line_color = LineColorConfig::DepthGradient { start, end };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "depth-gradient end color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "depth-gradient end color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }));
                             }
                         />
                     </div>
@@ -1031,17 +1492,19 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 };
                                 let line_color = LineColorConfig::Gradient { start, end };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "gradient start color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "gradient start color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }));
                             }
                         />
 
@@ -1074,17 +1537,19 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 };
                                 let line_color = LineColorConfig::Gradient { start, end };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "gradient end color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "gradient end color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }));
                             }
                         />
                     </div>
@@ -1118,109 +1583,176 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let line_color = LineColorConfig::HueCycle { initial };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "hue-cycle initial color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
+                                try_clean_color(Box::new(move || {
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "hue-cycle initial color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }));
                             }
                         />
                     </div>
 
-                    <div
-                        class:hidden=move || {
-                            !matches!(
-                                current_line_color(base_config),
-                                LineColorConfig::HueCycle { .. }
-                            )
-                        }
-                    >
-                        <button type="button" on:click=toggle_hsv_movement>
-                            {move || {
-                                if hsv_movement.get() {
-                                    "HSV movement: On"
-                                } else {
-                                    "HSV movement: Off"
+                    <Show when=move || colors_prompt.get()>
+                        <crate::ui::WarningPrompt
+                            message="You have unapplied TOML changes. Discard them and proceed?"
+                            confirm_label="Discard & proceed"
+                            on_confirm=move || {
+                                colors_prompt.set(false);
+                                revert_dirty();
+                                sync_grammar_editor();
+                                if let Some(action) = colors_pending.try_update_value(|v| v.take()).flatten() {
+                                    action();
                                 }
-                            }}
-                        </button>
-                        <label for="hsv-movement-direction">"Direction"</label>
-                        <select
-                            id="hsv-movement-direction"
-                            prop:value=move || hsv_movement_direction.get().key().to_string()
-                            on:change:target=move |ev| {
-                                let key = ev.target().value();
-                                let Some(direction) = HsvMovementDirection::from_key(&key) else {
-                                    log::error!("unknown HSV movement direction selected: {key}");
-                                    return;
-                                };
-                                hsv_movement_direction.set(direction);
                             }
-                        >
-                            <option value="forward">{HsvMovementDirection::Forward.label()}</option>
-                            <option value="reverse">{HsvMovementDirection::Reverse.label()}</option>
-                        </select>
-                        <label for="hsv-movement-speed">"Movement speed (°/s)"</label>
-                        <div class="row">
-                            <input
-                                id="hsv-movement-speed"
-                                type="range"
-                                min=HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND.to_string()
-                                max=HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND.to_string()
-                                step="1"
-                                prop:value=move || hsv_movement_speed.get().to_string()
-                                on:input:target=move |ev| {
-                                    let next = ev
-                                        .target()
-                                        .value()
-                                        .parse::<f32>()
-                                        .unwrap_or(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
-                                    hsv_movement_speed.set(next.clamp(
-                                        HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
-                                        HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-                                    ));
-                                }
-                            />
-                            <output>{move || format!("{:.0}", hsv_movement_speed.get())}</output>
-                        </div>
+                            on_cancel=move || {
+                                colors_prompt.set(false);
+                                colors_pending.set_value(None);
+                            }
+                        />
+                    </Show>
+                </crate::ui::Disclosure>
+
+                <crate::ui::Disclosure title="Animations">
+                    <div style="display:flex;flex-direction:column;gap:6px">
+                        <span class=move || {
+                            if is_3d() { "section-label" } else { "section-label dim" }
+                        }>
+                            {move || if is_3d() { "Auto-rotate" } else { "Auto-rotate (3D only)" }}
+                        </span>
+                        <crate::ui::SegmentedToggle
+                            options=vec![("off", "Off"), ("on", "On")]
+                            selected=Signal::derive(move || if auto_rotate.get() { "on" } else { "off" })
+                            on_change=move |key| {
+                                if key == "on" { auto_rotate.set(true); start_animation_loop(); }
+                                else { auto_rotate.set(false); }
+                            }
+                            disabled=Signal::derive(move || !is_3d())
+                        />
+                        <Show when=move || auto_rotate.get() && is_3d()>
+                            <div class="spinner-row">
+                                <span class="spinner-label">"Speed (°/s)"</span>
+                                <crate::ui::Spinner
+                                    value=Signal::derive(move || format!("{:.0}", auto_rotate_speed.get()))
+                                    step=5.0
+                                    on_commit=move |s| {
+                                        if let Ok(v) = s.parse::<f32>() {
+                                            auto_rotate_speed.set(v.clamp(10.0, 360.0));
+                                        }
+                                    }
+                                />
+                            </div>
+                        </Show>
                     </div>
 
-                    <label for="png-width">"PNG width"</label>
-                    <input
-                        id="png-width"
-                        type="number"
-                        min="256"
-                        max="4096"
-                        step="16"
-                        prop:value=move || png_width.get().to_string()
-                        on:input:target=move |ev| {
-                            let next = ev.target().value().parse::<u32>().unwrap_or(2048);
-                            png_width.set(next.clamp(256, 4096));
-                        }
-                    />
+                    <hr class="section-divider" />
 
-                    <div class="export-row">
-                        <button
-                            type="button"
-                            class:hidden=move || is_3d()
-                            on:click=move |_| {
-                                let mut config = base_config.get_untracked();
-                                config.generation.iterations = iterations.get_untracked();
-                                config.generation.angle = angle.get_untracked();
+                    <div style="display:flex;flex-direction:column;gap:6px">
+                        <span class="section-label">"Hue movement"</span>
+                        <crate::ui::SegmentedToggle
+                            options=vec![("off", "Off"), ("forward", "Forward"), ("backward", "Backward")]
+                            selected=Signal::derive(move || {
+                                if !hsv_movement.get() { "off" }
+                                else if hsv_movement_direction.get() == HsvMovementDirection::Forward { "forward" }
+                                else { "backward" }
+                            })
+                            on_change=move |key| try_set_hue_movement(key)
+                        />
+                        <Show when=move || hsv_movement.get()>
+                            <div class="spinner-row">
+                                <span class="spinner-label">"Speed (°/s)"</span>
+                                <crate::ui::Spinner
+                                    value=Signal::derive(move || format!("{:.0}", hsv_movement_speed.get()))
+                                    step=1.0
+                                    on_commit=move |s| {
+                                        if let Ok(v) = s.parse::<f32>() {
+                                            hsv_movement_speed.set(v.clamp(
+                                                HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
+                                                HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
+                                            ));
+                                        }
+                                    }
+                                />
+                            </div>
+                        </Show>
+                        <Show when=move || hue_prompt.get()>
+                            <crate::ui::WarningPrompt
+                                message="Line color is not Hue cycle. Enabling this will switch it to Hue cycle."
+                                confirm_label="Switch & enable"
+                                on_confirm=move || {
+                                    let dir = hue_pending_dir
+                                        .try_update_value(|v| v.take())
+                                        .flatten()
+                                        .unwrap_or(HsvMovementDirection::Forward);
+                                    revert_dirty();
+                                    let line_color = color_memory
+                                        .with_untracked(|m| m.line_for(LineColorMode::HueCycle));
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        render_current_colors,
+                                        "switch to hue cycle",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|m| m.remember_line(line_color));
+                                        resume_hsv_movement_if_active();
+                                        apply_hue_movement(Some(dir));
+                                    }
+                                    hue_prompt.set(false);
+                                }
+                                on_cancel=move || {
+                                    hue_prompt.set(false);
+                                    hue_pending_dir.set_value(None);
+                                }
+                            />
+                        </Show>
+                    </div>
+                </crate::ui::Disclosure>
+
+                <crate::ui::Disclosure title="Save image" open=false>
+                    {move || if is_3d() {
+                        view! { <span class="section-label">"PNG"</span> }.into_any()
+                    } else {
+                        view! {
+                            <crate::ui::SegmentedToggle
+                                options=vec![("svg", "SVG"), ("png", "PNG")]
+                                selected=Signal::derive(move || save_format.get())
+                                on_change=move |key| save_format.set(key)
+                            />
+                        }.into_any()
+                    }}
+
+                    <Show when=move || save_format.get() == "png">
+                        <div class="spinner-row">
+                            <span class="spinner-label">"Width (px)"</span>
+                            <crate::ui::Spinner
+                                value=Signal::derive(move || png_width.get().to_string())
+                                step=16.0
+                                on_commit=move |s| {
+                                    if let Ok(v) = s.parse::<u32>() {
+                                        png_width.set(v.clamp(256, 4096));
+                                    }
+                                }
+                            />
+                        </div>
+                    </Show>
+
+                    <button
+                        type="button"
+                        on:click=move |_| {
+                            let mut config = base_config.get_untracked();
+                            config.generation.iterations = iterations.get_untracked();
+                            config.generation.angle = angle.get_untracked();
+                            if save_format.get_untracked() == "svg" {
                                 export_svg(config);
-                            }
-                        >
-                            "Export SVG"
-                        </button>
-                        <button
-                            type="button"
-                            on:click=move |_| {
+                            } else {
                                 let Some(Some((device, queue, camera))) =
                                     renderer.try_with_value(|opt| {
                                         opt.as_ref().map(|r| {
@@ -1229,16 +1761,9 @@ pub(crate) fn App() -> impl IntoView {
                                         })
                                     })
                                 else {
-                                    log::error!("PNG export: renderer not initialized");
-                                    error.set(Some(
-                                        "Cannot export PNG: GPU renderer is not ready yet."
-                                            .to_string(),
-                                    ));
+                                    error.set(Some("Cannot save: GPU renderer not ready.".to_string()));
                                     return;
                                 };
-                                let mut config = base_config.get_untracked();
-                                config.generation.iterations = iterations.get_untracked();
-                                config.generation.angle = angle.get_untracked();
                                 export_png(
                                     device,
                                     queue,
@@ -1248,39 +1773,17 @@ pub(crate) fn App() -> impl IntoView {
                                     move |e| error.set(Some(e)),
                                 );
                             }
-                        >
-                            "Export PNG"
-                        </button>
-                    </div>
+                        }
+                    >"Save"</button>
+                </crate::ui::Disclosure>
 
-                    <div class:hidden=move || !is_3d()>
-                        <button type="button" on:click=toggle_auto_rotate>
-                            {move || {
-                                if auto_rotate.get() {
-                                    "Auto-rotate: On"
-                                } else {
-                                    "Auto-rotate: Off"
-                                }
-                            }}
-                        </button>
-                        <label for="auto-rotate-speed">"Speed (°/s)"</label>
-                        <div class="row">
-                            <input
-                                id="auto-rotate-speed"
-                                type="range"
-                                min="10"
-                                max="360"
-                                step="10"
-                                prop:value=move || auto_rotate_speed.get().to_string()
-                                on:input:target=move |ev| {
-                                    let next =
-                                        ev.target().value().parse::<f32>().unwrap_or(45.0);
-                                    auto_rotate_speed.set(next.clamp(10.0, 360.0));
-                                }
-                            />
-                            <output>{move || format!("{:.0}", auto_rotate_speed.get())}</output>
-                        </div>
-                    </div>
+                <button
+                    type="button"
+                    class="sidebar-collapse-btn"
+                    on:click=move |_| sidebar_collapsed.update(|v| *v = !*v)
+                >
+                    {move || if sidebar_collapsed.get() { "▶" } else { "◀" }}
+                </button>
                 </div>
             </aside>
 

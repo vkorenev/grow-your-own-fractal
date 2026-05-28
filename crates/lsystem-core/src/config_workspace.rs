@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{Config, ConfigDocument, ConfigError, ConfigSource, LineColorConfig};
+use crate::{Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -144,6 +144,17 @@ impl ConfigWorkspace {
         self.entries.push(new_entry);
         self.selected = self.entries.len() - 1;
         Ok(&self.entries[self.selected])
+    }
+
+    pub fn rename(&mut self, index: usize, new_name: &str) -> Result<(), ConfigWorkspaceError> {
+        if index >= self.entries.len() {
+            return Err(ConfigWorkspaceError::InvalidIndex(index));
+        }
+        if self.name_exists_except(new_name, index) {
+            return Err(ConfigWorkspaceError::DuplicateName(new_name.to_string()));
+        }
+        self.entries[index].rename_in_place(new_name)?;
+        Ok(())
     }
 
     /// Validates the selected entry's draft text and commits it as the new applied
@@ -304,6 +315,22 @@ impl ConfigEntry {
         Ok(())
     }
 
+    fn rename_in_place(&mut self, new_name: &str) -> Result<(), ConfigError> {
+        let mut source = self.last_applied.source().clone();
+        source.set_name(new_name);
+        self.last_applied = ConfigDocument::try_from(source)?;
+        // Update the draft name too so applying the draft later does not silently
+        // revert the rename. If the draft is unparseable TOML, leave it verbatim —
+        // the apply path will surface the parse error to the user.
+        if let Some(draft_text) = &self.draft
+            && let Ok(mut draft_source) = ConfigSource::parse(draft_text)
+        {
+            draft_source.set_name(new_name);
+            self.draft = Some(draft_source.to_toml_string());
+        }
+        Ok(())
+    }
+
     fn default_name(&self) -> Option<&str> {
         self.default.as_ref().map(ConfigDocument::name)
     }
@@ -324,6 +351,25 @@ impl CleanMut<'_> {
     pub fn set_angle(&mut self, angle: f32) -> Result<(), ConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_angle(angle))
+    }
+
+    pub fn set_initial_heading(&mut self, initial_heading: f32) -> Result<(), ConfigError> {
+        self.0
+            .update_last_applied_source(|source| source.set_initial_heading(initial_heading))
+    }
+
+    pub fn set_dimensions(&mut self, dimensions: Dimensions) -> Result<(), ConfigError> {
+        self.0
+            .update_last_applied_source(|source| source.set_dimensions(dimensions))
+    }
+
+    pub fn set_grammar(
+        &mut self,
+        axiom: &str,
+        rules: &[(char, String)],
+    ) -> Result<(), ConfigError> {
+        self.0
+            .update_last_applied_source(|source| source.set_grammar(axiom, rules))
     }
 
     pub fn set_background(&mut self, background: Option<[f32; 3]>) -> Result<(), ConfigError> {
@@ -837,6 +883,60 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
+    fn clean_entry_set_initial_heading_updates_toml_and_applied_config() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace).set_initial_heading(45.0).unwrap();
+
+        let entry = workspace.selected();
+        assert!(entry.draft_text().contains("initial_heading = 45"));
+        assert_eq!(entry.applied_config().generation.initial_heading, 45.0);
+        assert!(!entry.is_dirty());
+    }
+
+    #[test]
+    fn clean_entry_set_dimensions_updates_toml_and_applied_config() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        assert_eq!(
+            workspace.selected().applied_config().generation.dimensions,
+            Dimensions::TwoD
+        );
+        clean_mut(&mut workspace)
+            .set_dimensions(Dimensions::ThreeD)
+            .unwrap();
+        assert_eq!(
+            workspace.selected().applied_config().generation.dimensions,
+            Dimensions::ThreeD
+        );
+        assert!(workspace.selected().draft_text().contains("dimensions = 3"));
+    }
+
+    #[test]
+    fn clean_entry_set_grammar_updates_axiom_and_rules() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let rules = vec![('F', "FF".to_string()), ('X', "F+X".to_string())];
+        clean_mut(&mut workspace).set_grammar("XF", &rules).unwrap();
+        let generation = &workspace.selected().applied_config().generation;
+        assert_eq!(generation.axiom, "XF");
+        assert_eq!(generation.rules[&'F'], "FF");
+        assert_eq!(generation.rules[&'X'], "F+X");
+    }
+
+    #[test]
+    fn clean_entry_set_grammar_rejects_invalid_axiom() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        // '@' is not a valid symbol
+        let result = clean_mut(&mut workspace).set_grammar("F@", &[]);
+        assert!(result.is_err());
+        // Entry left unchanged
+        assert_eq!(workspace.selected().applied_config().generation.axiom, "F");
+    }
+
+    #[test]
     fn clean_entry_set_background_some_updates_toml_and_applied_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
@@ -1322,5 +1422,47 @@ end = [ 1.0, 1.0, 1.0 ]
 
         assert_eq!(workspace.index_by_name("Missing"), None);
         assert_eq!(workspace.index_by_name("First"), Some(0));
+    }
+
+    #[test]
+    fn rename_updates_entry_name() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
+        workspace.rename(0, "My Plant").unwrap();
+        assert_eq!(workspace.selected().name(), "My Plant");
+        assert!(workspace.selected().draft_text().contains("\"My Plant\""));
+    }
+
+    #[test]
+    fn rename_rejects_duplicate_name() {
+        let first = config_text("First", "F", 60.0);
+        let second = config_text("Second", "F+F", 90.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
+        let err = workspace.rename(0, "Second").unwrap_err();
+        assert!(matches!(err, ConfigWorkspaceError::DuplicateName(ref n) if n == "Second"));
+        assert_eq!(workspace.selected().name(), "First");
+    }
+
+    #[test]
+    fn rename_rejects_invalid_index() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        assert!(matches!(
+            workspace.rename(1, "Y").unwrap_err(),
+            ConfigWorkspaceError::InvalidIndex(1)
+        ));
+    }
+
+    #[test]
+    fn rename_works_while_entry_is_dirty() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
+        workspace
+            .selected_mut()
+            .set_draft_text("dirty draft".to_string());
+        workspace.rename(0, "Renamed Plant").unwrap();
+        assert_eq!(workspace.selected().name(), "Renamed Plant");
+        assert!(workspace.selected().is_dirty()); // draft preserved
     }
 }
