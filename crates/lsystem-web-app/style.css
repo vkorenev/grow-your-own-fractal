@@ -256,27 +256,42 @@ textarea {
 }
 
 /* ── Disclosure sections ── */
-.disclosure { border-top: 1px solid #252a35; }
+.disclosure {
+  border: 1px solid #2d3548;
+  border-radius: 7px;
+  /* No overflow:hidden — it clamps flex-item height inside a fixed-height
+     flex container, causing the card to stop short of its content. Corners
+     are handled by per-element border-radius instead. */
+}
 
-.disclosure-header {
+/* Higher specificity (.controls .disclosure-header = 0,2,0)
+   overrides the global .controls button rule (0,1,1). */
+.controls .disclosure-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 14px;
+  padding: 8px 12px;
   cursor: pointer;
   user-select: none;
-  color: #cbd5e1;
+  color: #8fa3b8;
   font-weight: 600;
   font-size: 11px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  background: none;
+  background: #1e2333;
   border: none;
+  border-radius: 7px 7px 0 0;
+  min-height: 0;
   width: 100%;
   text-align: left;
 }
 
-.disclosure-header:hover { background: #1f2330; }
+.controls .disclosure-header:hover { background: #232840; }
+
+/* When closed the header rounds all four corners */
+.controls .disclosure-header:not(:has(+ .disclosure-body:not(.hidden))) {
+  border-radius: 7px;
+}
 
 .disclosure-chevron {
   color: #5a6478;
@@ -288,10 +303,13 @@ textarea {
 .disclosure-chevron.open { transform: rotate(90deg); }
 
 .disclosure-body {
-  padding: 10px 14px 13px;
+  padding: 10px 12px 13px;
   display: flex;
   flex-direction: column;
   gap: 9px;
+  border-top: 1px solid #2d3548;
+  background: #151820;
+  border-radius: 0 0 7px 7px;
 }
 
 /* ── Segmented toggle ── */
@@ -317,7 +335,8 @@ textarea {
 
 .seg-toggle button:not(:first-child) { border-left: 1px solid #3a4352; }
 .seg-toggle button.seg-active { background: #315d68; color: #e5e7eb; cursor: default; }
-.seg-toggle button:disabled { opacity: 0.35; cursor: not-allowed; }
+.seg-toggle button:disabled:not(.seg-active) { opacity: 0.35; cursor: not-allowed; }
+.seg-toggle button.seg-active:disabled { cursor: default; }
 
 /* ── Spinner ── */
 .spinner {
@@ -489,6 +508,12 @@ textarea {
 
 .preset-row { display: flex; gap: 5px; align-items: center; }
 .preset-row select { flex: 1; min-width: 0; }
+
+.preset-actions { display: flex; gap: 5px; margin-top: 4px; }
+.preset-actions button { flex: 1; }
+
+.btn-row { display: flex; gap: 5px; }
+.btn-row button { flex: 1; }
 
 .rename-input {
   flex: 1;

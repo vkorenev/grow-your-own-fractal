@@ -757,8 +757,6 @@ pub(crate) fn App() -> impl IntoView {
                 </div>
 
                 <div class="controls-scroll">
-                <h1 class="controls-title">"Grow Your Own Fractal"</h1>
-
                 <div class="preset-row">
                     <select
                         class:hidden=move || rename_mode.get()
@@ -814,36 +812,9 @@ pub(crate) fn App() -> impl IntoView {
                             if ev.key() == "Escape" { rename_mode.set(false); }
                         }
                     />
+                </div>
 
-                    <button
-                        type="button"
-                        class:hidden=move || rename_mode.get()
-                        on:click=move |_| {
-                            let result = config_workspace.try_update(|workspace| {
-                                workspace.copy().map(|_| ()).map_err(|e| e.to_string())
-                            });
-                            match result {
-                                Some(Ok(())) => {
-                                    error.set(None);
-                                    stop_auto_rotate_if_2d();
-                                    refresh_color_memory();
-                                    render_current();
-                                    resume_hsv_movement_if_active();
-                                    sync_grammar_editor();
-                                }
-                                Some(Err(msg)) => error.set(Some(msg)),
-                                None => {
-                                    log::error!("copy: config_workspace signal was unavailable");
-                                    error.set(Some(
-                                        "Internal error: could not copy config.".to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                    >
-                        "Copy"
-                    </button>
-
+                <div class="preset-actions">
                     {move || if rename_mode.get() {
                         view! {
                             <div style="display:contents">
@@ -865,6 +836,31 @@ pub(crate) fn App() -> impl IntoView {
                     } else {
                         view! {
                             <div style="display:contents">
+                                <button
+                                    type="button"
+                                    on:click=move |_| {
+                                        let result = config_workspace.try_update(|workspace| {
+                                            workspace.copy().map(|_| ()).map_err(|e| e.to_string())
+                                        });
+                                        match result {
+                                            Some(Ok(())) => {
+                                                error.set(None);
+                                                stop_auto_rotate_if_2d();
+                                                refresh_color_memory();
+                                                render_current();
+                                                resume_hsv_movement_if_active();
+                                                sync_grammar_editor();
+                                            }
+                                            Some(Err(msg)) => error.set(Some(msg)),
+                                            None => {
+                                                log::error!("copy: config_workspace signal was unavailable");
+                                                error.set(Some(
+                                                    "Internal error: could not copy config.".to_string(),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                >"Copy"</button>
                                 <button
                                     type="button"
                                     on:click=move |_| {
@@ -896,6 +892,66 @@ pub(crate) fn App() -> impl IntoView {
                         on_cancel=move || reset_prompt.set(false)
                     />
                 </Show>
+
+                <crate::ui::Disclosure title="Edit TOML" open=false>
+                    <textarea
+                        id="config"
+                        spellcheck="false"
+                        prop:value=move || toml_text.get()
+                        on:input:target=move |ev| {
+                            let text = ev.target().value();
+                            let updated = config_workspace.try_update(|workspace| {
+                                workspace.selected_mut().set_draft_text(text);
+                            });
+                            if updated.is_none() {
+                                log::error!("textarea input: config_workspace signal was unavailable");
+                                error.set(Some(
+                                    "Internal error: could not update config.".to_string(),
+                                ));
+                            }
+                        }
+                    />
+                    <div class="btn-row">
+                        <button
+                            type="button"
+                            disabled=move || !is_dirty()
+                            on:click=move |_| apply_current()
+                        >
+                            "Apply"
+                        </button>
+                        <button
+                            type="button"
+                            disabled=move || !is_dirty()
+                            on:click=move |_| {
+                                let ok = config_workspace.try_update(|workspace| {
+                                    match workspace.selected_mut().view_mut() {
+                                        EntryViewMut::Dirty(dirty) => dirty.revert(),
+                                        EntryViewMut::Clean(_) => {
+                                            log::error!(
+                                                "revert fired while entry is clean; UI guards bypassed"
+                                            );
+                                        }
+                                    }
+                                });
+                                if ok.is_some() {
+                                    error.set(None);
+                                    stop_auto_rotate_if_2d();
+                                    refresh_color_memory();
+                                    render_current();
+                                    resume_hsv_movement_if_active();
+                                    sync_grammar_editor();
+                                } else {
+                                    log::error!("revert: config_workspace signal was unavailable");
+                                    error.set(Some(
+                                        "Internal error: could not revert config.".to_string(),
+                                    ));
+                                }
+                            }
+                        >
+                            "Revert"
+                        </button>
+                    </div>
+                </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Grammar">
                     <table class="grammar-table">
@@ -980,22 +1036,21 @@ pub(crate) fn App() -> impl IntoView {
                         </tbody>
                     </table>
 
-                    <button
-                        type="button"
-                        style="width:100%"
-                        on:click=move |_| {
-                            grammar_rules.update(|rules| rules.push((String::new(), String::new())));
-                        }
-                    >"+ Add rule"</button>
-
-                    <div class="row">
-                        <button type="button" on:click=move |_| try_apply_grammar()>"Apply"</button>
-                        <span class=move || {
-                            if error.get().is_some() { "inline-status error" } else { "inline-status ok" }
-                        }>
-                            {move || error.get().unwrap_or_else(|| "OK".to_string())}
-                        </span>
+                    <div class="btn-row">
+                        <button
+                            type="button"
+                            on:click=move |_| {
+                                grammar_rules.update(|rules| rules.push((String::new(), String::new())));
+                            }
+                        >"Add rule"</button>
+                        <button
+                            type="button"
+                            on:click=move |_| try_apply_grammar()
+                        >"Apply"</button>
                     </div>
+                    {move || error.get().map(|msg| view! {
+                        <span class="inline-status error">{msg}</span>
+                    })}
 
                     <Show when=move || grammar_prompt.get()>
                         <crate::ui::WarningPrompt
@@ -1029,66 +1084,6 @@ pub(crate) fn App() -> impl IntoView {
                             on_cancel=move || grammar_3d_prompt.set(false)
                         />
                     </Show>
-                </crate::ui::Disclosure>
-
-                <crate::ui::Disclosure title="Edit TOML" open=false>
-                    <textarea
-                        id="config"
-                        spellcheck="false"
-                        prop:value=move || toml_text.get()
-                        on:input:target=move |ev| {
-                            let text = ev.target().value();
-                            let updated = config_workspace.try_update(|workspace| {
-                                workspace.selected_mut().set_draft_text(text);
-                            });
-                            if updated.is_none() {
-                                log::error!("textarea input: config_workspace signal was unavailable");
-                                error.set(Some(
-                                    "Internal error: could not update config.".to_string(),
-                                ));
-                            }
-                        }
-                    />
-                    <div class="row">
-                        <button
-                            type="button"
-                            disabled=move || !is_dirty()
-                            on:click=move |_| apply_current()
-                        >
-                            "Apply"
-                        </button>
-                        <button
-                            type="button"
-                            disabled=move || !is_dirty()
-                            on:click=move |_| {
-                                let ok = config_workspace.try_update(|workspace| {
-                                    match workspace.selected_mut().view_mut() {
-                                        EntryViewMut::Dirty(dirty) => dirty.revert(),
-                                        EntryViewMut::Clean(_) => {
-                                            log::error!(
-                                                "revert fired while entry is clean; UI guards bypassed"
-                                            );
-                                        }
-                                    }
-                                });
-                                if ok.is_some() {
-                                    error.set(None);
-                                    stop_auto_rotate_if_2d();
-                                    refresh_color_memory();
-                                    render_current();
-                                    resume_hsv_movement_if_active();
-                                    sync_grammar_editor();
-                                } else {
-                                    log::error!("revert: config_workspace signal was unavailable");
-                                    error.set(Some(
-                                        "Internal error: could not revert config.".to_string(),
-                                    ));
-                                }
-                            }
-                        >
-                            "Revert"
-                        </button>
-                    </div>
                 </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Parameters">
