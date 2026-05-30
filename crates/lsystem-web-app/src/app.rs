@@ -82,31 +82,6 @@ impl HsvMovementDirection {
     }
 }
 
-#[cfg(test)]
-impl HsvMovementDirection {
-    fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "forward" => Some(Self::Forward),
-            "reverse" => Some(Self::Reverse),
-            _ => None,
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            Self::Forward => "forward",
-            Self::Reverse => "reverse",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Forward => "Forward",
-            Self::Reverse => "Reverse",
-        }
-    }
-}
-
 fn advance_hsv_phase_degrees(
     phase_degrees: f32,
     speed_degrees_per_second: f32,
@@ -222,7 +197,6 @@ pub(crate) fn App() -> impl IntoView {
     let hsv_movement_speed = RwSignal::new(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
     let hsv_movement_direction = RwSignal::new(HsvMovementDirection::Forward);
     let hsv_movement_phase = RwSignal::new(0.0f32);
-    let sidebar_collapsed = RwSignal::new(false);
     let sheet_open = RwSignal::new(false);
     let sheet_drag_start: StoredValue<Option<f64>, LocalStorage> = StoredValue::new_local(None);
     // Generation counter: bumped on each animation start so older rAF loops detect
@@ -483,9 +457,7 @@ pub(crate) fn App() -> impl IntoView {
             Some(Ok(())) => {
                 error.set(None);
                 refresh_color_memory();
-                if !is_3d_untracked() && auto_rotate.get_untracked() {
-                    auto_rotate.set(false);
-                }
+                stop_auto_rotate_if_2d();
                 render_current();
                 resume_hsv_movement_if_active();
                 sync_grammar_editor();
@@ -696,7 +668,6 @@ pub(crate) fn App() -> impl IntoView {
     view! {
         <main
             class="app-shell"
-            class:sidebar-collapsed=move || sidebar_collapsed.get()
         >
             <aside
                 class="controls"
@@ -1638,13 +1609,6 @@ pub(crate) fn App() -> impl IntoView {
                     >"Save"</button>
                 </crate::ui::Disclosure>
 
-                <button
-                    type="button"
-                    class="sidebar-collapse-btn"
-                    on:click=move |_| sidebar_collapsed.update(|v| *v = !*v)
-                >
-                    {move || if sidebar_collapsed.get() { "▶" } else { "◀" }}
-                </button>
                 </div>
             </aside>
 
@@ -1955,18 +1919,6 @@ mod tests {
             assert_eq!(LineColorMode::from_key(mode.key()), Some(mode));
         }
         assert_eq!(LineColorMode::from_key("unknown"), None);
-    }
-
-    #[test]
-    fn hsv_movement_direction_key_and_label_round_trip() {
-        for direction in [HsvMovementDirection::Forward, HsvMovementDirection::Reverse] {
-            assert_eq!(
-                HsvMovementDirection::from_key(direction.key()),
-                Some(direction)
-            );
-            assert!(!direction.label().is_empty());
-        }
-        assert_eq!(HsvMovementDirection::from_key("sideways"), None);
     }
 
     #[test]

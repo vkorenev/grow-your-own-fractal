@@ -199,8 +199,6 @@ textarea {
     overscroll-behavior: contain;
   }
 
-  /* Hide desktop-only elements on mobile */
-  .sidebar-collapse-btn { display: none; }
 }
 
 @media (min-width: 761px) {
@@ -436,19 +434,9 @@ textarea {
 .btn-row > div { flex: 1; display: flex; }
 .btn-row > div > button { flex: 1; }
 
-.rename-input {
-  flex: 1;
-  min-width: 0;
-  color: #f3f4f6;
-  background: #0f1117;
-  border: 1px solid #3a4352;
-  border-radius: 6px;
-  min-height: 34px;
-  padding: 0 8px;
-}
+.rename-input { flex: 1; }
 
 .inline-status { font-size: 12px; min-height: 16px; }
-.inline-status.ok { color: #65d894; }
 .inline-status.error { color: #ff7b7b; }
 
 /* ── Disclosure badge (amber dot for dirty state) ── */
@@ -459,40 +447,3 @@ textarea {
   vertical-align: middle;
 }
 
-/* ── Sidebar collapse (desktop only) ── */
-.controls { position: relative; }
-
-.sidebar-collapse-btn {
-  position: absolute;
-  top: 50%;
-  right: -13px;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 40px;
-  background: #1a1d24;
-  border: 1px solid #303642;
-  border-left: none;
-  border-radius: 0 5px 5px 0;
-  color: #5a6478;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  z-index: 10;
-  padding: 0;
-  min-height: 0;
-}
-
-.sidebar-collapse-btn:hover { color: #cbd5e1; }
-
-.app-shell.sidebar-collapsed {
-  grid-template-columns: 0 1fr;
-}
-
-.app-shell.sidebar-collapsed .controls {
-  overflow: hidden;
-  width: 0;
-  padding: 0;
-  border: none;
-}
