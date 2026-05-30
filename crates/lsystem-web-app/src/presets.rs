@@ -1,5 +1,5 @@
 use include_dir::{Dir, include_dir};
-use lsystem_core::Config;
+use lsystem_core::GenerationConfig;
 
 static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
@@ -18,11 +18,10 @@ pub(crate) fn load_presets() -> Vec<(String, String)> {
         .collect()
 }
 
-pub(crate) fn max_iterations_for_config(config: &Config) -> u32 {
-    let generation = &config.generation;
+pub(crate) fn max_iterations_for_config(generation: &GenerationConfig) -> u32 {
     let max_seg = lsystem_renderer::line_renderer::max_segments_for_line_color(
         generation.dimensions,
-        config.generation.has_stack_directives(),
+        generation.has_stack_directives(),
     );
     lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg)
 }
