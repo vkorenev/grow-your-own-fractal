@@ -1,8 +1,8 @@
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_core::{
-    CleanMut, ColorConfig, Config, ConfigError, ConfigWorkspace, Dimensions, EntryViewMut,
-    LineColorConfig,
+    CleanMut, ColorConfig, ConfigError, ConfigWorkspace, Dimensions, EntryViewMut,
+    GenerationConfig, LineColorConfig,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
@@ -184,10 +184,10 @@ impl ColorControlMemory {
 pub(crate) fn App() -> impl IntoView {
     let initial_workspace =
         ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
-    let initial_config = initial_workspace.selected().applied_config().clone();
-
+    let color_memory = RwSignal::new(ColorControlMemory::from_colors(
+        &initial_workspace.selected().applied_config().colors,
+    ));
     let config_workspace = RwSignal::new(initial_workspace);
-    let color_memory = RwSignal::new(ColorControlMemory::from_colors(&initial_config.colors));
     let error = RwSignal::new(None::<String>);
     let png_width = RwSignal::new(2048u32);
     let gpu_error = RwSignal::new(None::<String>);
@@ -203,34 +203,33 @@ pub(crate) fn App() -> impl IntoView {
     // they have been superseded and exit.
     let animation_token = RwSignal::new(0u32);
 
-    let base_config =
-        Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_config().clone()));
     let toml_text =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().draft_text().into_owned()));
     let max_iterations = Memo::new(move |_| {
-        config_workspace.with(|ws| max_iterations_for_config(ws.selected().applied_config()))
+        config_workspace
+            .with(|ws| max_iterations_for_config(&ws.selected().applied_config().generation))
     });
-    let iterations = Memo::new(move |_| {
+    let generation_config = Memo::new(move |_| {
         let max = max_iterations.get();
         config_workspace.with(|ws| {
-            ws.selected()
-                .applied_config()
-                .generation
-                .iterations
-                .min(max)
+            let mut generation = ws.selected().applied_config().generation.clone();
+            generation.iterations = generation.iterations.min(max);
+            generation
         })
     });
-    let angle = Memo::new(move |_| {
-        config_workspace.with(|ws| ws.selected().applied_config().generation.angle)
+    let color_config = Memo::new(move |_| {
+        config_workspace.with(|ws| ws.selected().applied_config().colors.clone())
     });
+    let iterations = Memo::new(move |_| generation_config.with(|g| g.iterations));
+    let angle = Memo::new(move |_| generation_config.with(|g| g.angle));
 
     let renderer: RendererState = StoredValue::new_local(None::<CanvasRenderer>);
     let last_pointer = StoredValue::new(None::<(i32, f64, f64)>);
 
-    let is_3d = move || matches!(base_config.get().generation.dimensions, Dimensions::ThreeD);
+    let is_3d = move || matches!(generation_config.get().dimensions, Dimensions::ThreeD);
     let is_3d_untracked = move || {
         matches!(
-            base_config.get_untracked().generation.dimensions,
+            generation_config.get_untracked().dimensions,
             Dimensions::ThreeD
         )
     };
@@ -245,9 +244,9 @@ pub(crate) fn App() -> impl IntoView {
 
     let rename_mode = RwSignal::new(false);
     let rename_draft = RwSignal::new(String::new());
-    let grammar_axiom = RwSignal::new(base_config.get_untracked().generation.axiom.clone());
+    let grammar_axiom = RwSignal::new(generation_config.get_untracked().axiom.clone());
     let grammar_rules: RwSignal<Vec<(String, String)>> = RwSignal::new(rules_to_editor_rows(
-        &base_config.get_untracked().generation.rules,
+        &generation_config.get_untracked().rules,
     ));
 
     let dims_3d_error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -255,12 +254,21 @@ pub(crate) fn App() -> impl IntoView {
     let save_format = RwSignal::new("png"); // "svg" | "png"
 
     let sync_grammar_editor = move || {
-        let generation = base_config.get_untracked().generation.clone();
+        let generation = generation_config.get_untracked();
         grammar_axiom.set(generation.axiom);
         grammar_rules.set(rules_to_editor_rows(&generation.rules));
     };
 
     let canvas_ref = NodeRef::<Canvas>::new();
+
+    let config_for_render = move || {
+        let max = max_iterations.get_untracked();
+        config_workspace.with_untracked(|ws| {
+            let mut config = ws.selected().applied_config().clone();
+            config.generation.iterations = config.generation.iterations.min(max);
+            config
+        })
+    };
 
     let recover_after_render =
         move |status: RenderStatus, canvas: web_sys::HtmlCanvasElement| match status {
@@ -279,9 +287,7 @@ pub(crate) fn App() -> impl IntoView {
                     };
                     match renderer_state.recover_surface(canvas.clone()).await {
                         Ok(_) => {
-                            let mut config = base_config.get_untracked();
-                            config.generation.iterations = iterations.get_untracked();
-                            config.generation.angle = angle.get_untracked();
+                            let config = config_for_render();
                             match renderer_state
                                 .set_config_preserving_camera_and_render(&canvas, &config)
                             {
@@ -316,35 +322,16 @@ pub(crate) fn App() -> impl IntoView {
             }
         };
 
-    let render_current = move || {
-        let Some(canvas) = canvas_ref.get_untracked() else {
-            return;
-        };
-        let mut config = base_config.get_untracked();
-        config.generation.iterations = iterations.get_untracked();
-        config.generation.angle = angle.get_untracked();
-        with_renderer(canvas, renderer, recover_after_render, |r, c| {
-            r.set_config_and_render(c, &config)
-        });
-    };
-
-    let render_current_colors = move || {
-        let Some(canvas) = canvas_ref.get_untracked() else {
-            return;
-        };
-        let config = base_config.get_untracked();
-        with_renderer(canvas, renderer, recover_after_render, |r, c| {
-            r.set_colors_and_render(c, &config)
-        });
-    };
-
     canvas_ref.on_load(move |canvas| {
         wasm_bindgen_futures::spawn_local(async move {
             match CanvasRenderer::new(canvas.clone()).await {
                 Ok(new_renderer) => {
                     gpu_error.set(None);
                     renderer.update_value(|opt| *opt = Some(new_renderer));
-                    render_current();
+                    let config = config_for_render();
+                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                        r.set_config_and_render(c, &config)
+                    });
                 }
                 Err(err) => {
                     log::error!("Failed to initialize GPU renderer: {err}");
@@ -358,7 +345,7 @@ pub(crate) fn App() -> impl IntoView {
 
     let refresh_color_memory = move || {
         color_memory.set(ColorControlMemory::from_colors(
-            &base_config.get_untracked().colors,
+            &color_config.get_untracked(),
         ));
     };
 
@@ -370,12 +357,6 @@ pub(crate) fn App() -> impl IntoView {
             with_renderer(canvas, renderer, recover_after_render, |r, c| {
                 r.animate_and_render(c, None, Some(0.0))
             });
-        }
-    };
-
-    let stop_auto_rotate_if_2d = move || {
-        if !is_3d_untracked() && auto_rotate.get_untracked() {
-            auto_rotate.set(false);
         }
     };
 
@@ -403,7 +384,7 @@ pub(crate) fn App() -> impl IntoView {
                 }
 
                 let auto_active = auto_rotate.get_untracked() && is_3d_untracked();
-                let line_color = base_config.with_untracked(line_color_of);
+                let line_color = color_config.with_untracked(|c| c.line);
                 if !(auto_active
                     || hsv_movement_is_active(hsv_movement.get_untracked(), &line_color))
                 {
@@ -441,10 +422,49 @@ pub(crate) fn App() -> impl IntoView {
     let resume_hsv_movement_if_active = move || {
         if hsv_movement_is_active(
             hsv_movement.get_untracked(),
-            &base_config.with_untracked(line_color_of),
+            &color_config.with_untracked(|c| c.line),
         ) {
             start_animation_loop();
         }
+    };
+
+    Effect::new(move |prev: Option<(GenerationConfig, ColorConfig)>| {
+        let generation = generation_config.get();
+        let color = color_config.get();
+
+        if let Some((prev_generation, prev_color)) = &prev {
+            let gen_changed = prev_generation != &generation;
+            let col_changed = prev_color != &color;
+            if (gen_changed || col_changed)
+                && let Some(canvas) = canvas_ref.get_untracked()
+            {
+                let config = config_for_render();
+                with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                    if gen_changed {
+                        r.set_config_and_render(c, &config)
+                    } else {
+                        r.set_colors_and_render(c, &config)
+                    }
+                });
+            }
+        }
+
+        (generation, color)
+    });
+
+    Effect::new(move |_| {
+        if !matches!(generation_config.get().dimensions, Dimensions::ThreeD)
+            && auto_rotate.get_untracked()
+        {
+            auto_rotate.set(false);
+        }
+    });
+
+    let select_current_config = move || {
+        error.set(None);
+        refresh_color_memory();
+        resume_hsv_movement_if_active();
+        sync_grammar_editor();
     };
 
     let apply_current = move || {
@@ -454,29 +474,13 @@ pub(crate) fn App() -> impl IntoView {
         let result = config_workspace
             .try_update(|workspace| workspace.apply().map(|_| ()).map_err(|e| e.to_string()));
         match result {
-            Some(Ok(())) => {
-                error.set(None);
-                refresh_color_memory();
-                stop_auto_rotate_if_2d();
-                render_current();
-                resume_hsv_movement_if_active();
-                sync_grammar_editor();
-            }
+            Some(Ok(())) => select_current_config(),
             Some(Err(msg)) => error.set(Some(msg)),
             None => {
                 log::error!("apply: config_workspace signal was unavailable");
                 error.set(Some("Internal error: could not apply config.".to_string()));
             }
         }
-    };
-
-    let select_current_config = move || {
-        error.set(None);
-        stop_auto_rotate_if_2d();
-        refresh_color_memory();
-        render_current();
-        resume_hsv_movement_if_active();
-        sync_grammar_editor();
     };
 
     let do_revert = move || {
@@ -541,7 +545,7 @@ pub(crate) fn App() -> impl IntoView {
     };
 
     let grammar_is_dirty = move || {
-        let generation = base_config.get().generation;
+        let generation = generation_config.get();
         let applied_rules = rules_to_editor_rows(&generation.rules);
         grammar_axiom.get() != generation.axiom || grammar_rules.get() != applied_rules
     };
@@ -574,13 +578,9 @@ pub(crate) fn App() -> impl IntoView {
             }
             rules.push((c, v));
         }
-        if update_clean_config(
-            config_workspace,
-            error,
-            render_current,
-            "grammar apply",
-            move |clean| clean.set_grammar(&axiom, &rules),
-        ) {
+        if update_clean_config(config_workspace, error, "grammar apply", move |clean| {
+            clean.set_grammar(&axiom, &rules)
+        }) {
             sync_grammar_editor();
         }
     };
@@ -606,7 +606,7 @@ pub(crate) fn App() -> impl IntoView {
             Dimensions::TwoD
         };
         if next == Dimensions::TwoD {
-            let generation = base_config.get_untracked().generation;
+            let generation = generation_config.get_untracked();
             if contains_3d_symbols(&generation.axiom)
                 || generation
                     .rules
@@ -621,16 +621,9 @@ pub(crate) fn App() -> impl IntoView {
             }
         }
         dims_3d_error.set(None);
-        update_clean_config(
-            config_workspace,
-            error,
-            render_current,
-            "set dimensions",
-            move |clean| clean.set_dimensions(next),
-        );
-        if next == Dimensions::TwoD && auto_rotate.get_untracked() {
-            auto_rotate.set(false);
-        }
+        update_clean_config(config_workspace, error, "set dimensions", move |clean| {
+            clean.set_dimensions(next)
+        });
     };
 
     let apply_hue_movement = move |dir: Option<HsvMovementDirection>| match dir {
@@ -652,7 +645,7 @@ pub(crate) fn App() -> impl IntoView {
         // this guard is a defensive fallback in case disabled_keys is miscalculated.
         if dir.is_some()
             && !matches!(
-                base_config.with_untracked(line_color_of),
+                color_config.with_untracked(|c| c.line),
                 LineColorConfig::HueCycle { .. }
             )
         {
@@ -787,14 +780,7 @@ pub(crate) fn App() -> impl IntoView {
                                             workspace.copy().map(|_| ()).map_err(|e| e.to_string())
                                         });
                                         match result {
-                                            Some(Ok(())) => {
-                                                error.set(None);
-                                                stop_auto_rotate_if_2d();
-                                                refresh_color_memory();
-                                                render_current();
-                                                resume_hsv_movement_if_active();
-                                                sync_grammar_editor();
-                                            }
+                                            Some(Ok(())) => select_current_config(),
                                             Some(Err(msg)) => error.set(Some(msg)),
                                             None => {
                                                 log::error!("copy: config_workspace signal was unavailable");
@@ -994,7 +980,7 @@ pub(crate) fn App() -> impl IntoView {
                         <div title=dirty_tooltip>
                         <crate::ui::SegmentedToggle
                             options=vec![("2d", "2D"), ("3d", "3D")]
-                            selected=Signal::derive(move || match base_config.get().generation.dimensions {
+                            selected=Signal::derive(move || match generation_config.get().dimensions {
                                 Dimensions::TwoD => "2d",
                                 Dimensions::ThreeD => "3d",
                             })
@@ -1017,7 +1003,7 @@ pub(crate) fn App() -> impl IntoView {
                                 if let Ok(v) = s.parse::<f32>() {
                                     let v = v.clamp(1.0, 180.0);
                                     update_clean_config(
-                                        config_workspace, error, render_current, "angle",
+                                        config_workspace, error, "angle",
                                         move |clean| clean.set_angle(v),
                                     );
                                 }
@@ -1037,7 +1023,7 @@ pub(crate) fn App() -> impl IntoView {
                             on_commit=move |s| {
                                 if let Ok(v) = s.parse::<f32>() {
                                     update_clean_config(
-                                        config_workspace, error, render_current, "initial_heading",
+                                        config_workspace, error, "initial_heading",
                                         move |clean| clean.set_initial_heading(v),
                                     );
                                 }
@@ -1055,7 +1041,7 @@ pub(crate) fn App() -> impl IntoView {
                                 if let Ok(v) = s.parse::<u32>() {
                                     let v = v.clamp(0, max_iterations.get_untracked());
                                     update_clean_config(
-                                        config_workspace, error, render_current, "iterations",
+                                        config_workspace, error, "iterations",
                                         move |clean| clean.set_iterations(v),
                                     );
                                 }
@@ -1073,11 +1059,11 @@ pub(crate) fn App() -> impl IntoView {
                         <input
                             id="background-override"
                             type="checkbox"
-                            prop:checked=move || base_config.with(|c| c.colors.background.is_some())
+                            prop:checked=move || color_config.with(|c| c.background.is_some())
                             disabled=is_dirty
                             on:change:target=move |ev| {
                                 let current_bg =
-                                    base_config.with_untracked(|c| c.colors.background);
+                                    color_config.with_untracked(|c| c.background);
                                 if let Some(background) = current_bg {
                                     color_memory.update(|memory| {
                                         memory.remember_background(background);
@@ -1092,7 +1078,6 @@ pub(crate) fn App() -> impl IntoView {
                                 update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "background checkbox",
                                     move |clean| clean.set_background(background),
                                 );
@@ -1103,14 +1088,14 @@ pub(crate) fn App() -> impl IntoView {
 
                     <div
                         class="color-row"
-                        class:hidden=move || base_config.with(|c| c.colors.background.is_none())
+                        class:hidden=move || color_config.with(|c| c.background.is_none())
                     >
                         <label for="background-color">"Background color"</label>
                         <input
                             id="background-color"
                             type="color"
                             prop:value=move || {
-                                rgb_to_hex(base_config.with(|c| c.colors.effective_background()))
+                                rgb_to_hex(color_config.with(|c| c.effective_background()))
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1121,7 +1106,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "background color input",
                                     move |clean| clean.set_background(Some(color)),
                                 ) {
@@ -1137,7 +1121,7 @@ pub(crate) fn App() -> impl IntoView {
                     <select
                         id="line-color-mode"
                         prop:value=move || {
-                            LineColorMode::from_line_color(&current_line_color(base_config))
+                            LineColorMode::from_line_color(&current_line_color(color_config))
                                 .key()
                                 .to_string()
                         }
@@ -1148,7 +1132,7 @@ pub(crate) fn App() -> impl IntoView {
                                 log::error!("unknown line color mode selected: {mode_key}");
                                 return;
                             };
-                            let current = base_config.with_untracked(line_color_of);
+                            let current = color_config.with_untracked(|c| c.line);
                             let Some(line_color) = color_memory.try_update(|memory| {
                                 memory.remember_line(current);
                                 memory.line_for(mode)
@@ -1164,7 +1148,6 @@ pub(crate) fn App() -> impl IntoView {
                             if update_clean_config(
                                 config_workspace,
                                 error,
-                                render_current_colors,
                                 "line color mode select",
                                 move |clean| clean.set_line_color(line_color),
                             ) {
@@ -1184,7 +1167,7 @@ pub(crate) fn App() -> impl IntoView {
                     <div
                         class="color-row"
                         class:hidden=move || {
-                            !matches!(current_line_color(base_config), LineColorConfig::Solid { .. })
+                            !matches!(current_line_color(color_config), LineColorConfig::Solid { .. })
                         }
                     >
                         <label for="line-solid-color">"Line color"</label>
@@ -1193,7 +1176,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 match line_color_for_mode(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::Solid,
                                 ) {
@@ -1211,7 +1194,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "solid line color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
@@ -1227,7 +1209,7 @@ pub(crate) fn App() -> impl IntoView {
                         class="color-row"
                         class:hidden=move || {
                             !matches!(
-                                current_line_color(base_config),
+                                current_line_color(color_config),
                                 LineColorConfig::DepthGradient { .. }
                             )
                         }
@@ -1238,7 +1220,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 match line_color_for_mode(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::DepthGradient,
                                 ) {
@@ -1257,7 +1239,7 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let current = line_color_for_mode_untracked(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::DepthGradient,
                                 );
@@ -1271,7 +1253,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "depth-gradient start color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
@@ -1288,7 +1269,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 match line_color_for_mode(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::DepthGradient,
                                 ) {
@@ -1305,7 +1286,7 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let current = line_color_for_mode_untracked(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::DepthGradient,
                                 );
@@ -1319,7 +1300,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "depth-gradient end color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
@@ -1335,7 +1315,7 @@ pub(crate) fn App() -> impl IntoView {
                         class="color-row"
                         class:hidden=move || {
                             !matches!(
-                                current_line_color(base_config),
+                                current_line_color(color_config),
                                 LineColorConfig::Gradient { .. }
                             )
                         }
@@ -1346,7 +1326,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 match line_color_for_mode(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::Gradient,
                                 ) {
@@ -1361,7 +1341,7 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let current = line_color_for_mode_untracked(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::Gradient,
                                 );
@@ -1373,7 +1353,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "gradient start color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
@@ -1390,7 +1369,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 match line_color_for_mode(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::Gradient,
                                 ) {
@@ -1405,7 +1384,7 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let current = line_color_for_mode_untracked(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::Gradient,
                                 );
@@ -1417,7 +1396,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "gradient end color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
@@ -1433,7 +1411,7 @@ pub(crate) fn App() -> impl IntoView {
                         class="color-row"
                         class:hidden=move || {
                             !matches!(
-                                current_line_color(base_config),
+                                current_line_color(color_config),
                                 LineColorConfig::HueCycle { .. }
                             )
                         }
@@ -1444,7 +1422,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 match line_color_for_mode(
-                                    base_config,
+                                    color_config,
                                     color_memory,
                                     LineColorMode::HueCycle,
                                 ) {
@@ -1462,7 +1440,6 @@ pub(crate) fn App() -> impl IntoView {
                                 if update_clean_config(
                                     config_workspace,
                                     error,
-                                    render_current_colors,
                                     "hue-cycle initial color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
@@ -1510,7 +1487,7 @@ pub(crate) fn App() -> impl IntoView {
 
                     <div style="display:flex;flex-direction:column;gap:6px">
                         <span class="section-label">"Hue movement"</span>
-                        <div title=move || if !matches!(current_line_color(base_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue movement" } else { "" }>
+                        <div title=move || if !matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue movement" } else { "" }>
                         <crate::ui::SegmentedToggle
                             options=vec![("off", "Off"), ("forward", "Forward"), ("backward", "Backward")]
                             selected=Signal::derive(move || {
@@ -1520,7 +1497,7 @@ pub(crate) fn App() -> impl IntoView {
                             })
                             on_change=move |key| try_set_hue_movement(key)
                             disabled_keys=Signal::derive(move || {
-                                if matches!(current_line_color(base_config), LineColorConfig::HueCycle { .. }) {
+                                if matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) {
                                     vec![]
                                 } else {
                                     vec!["forward", "backward"]
@@ -1579,9 +1556,7 @@ pub(crate) fn App() -> impl IntoView {
                     <button
                         type="button"
                         on:click=move |_| {
-                            let mut config = base_config.get_untracked();
-                            config.generation.iterations = iterations.get_untracked();
-                            config.generation.angle = angle.get_untracked();
+                            let config = config_for_render();
                             if save_format.get_untracked() == "svg" {
                                 export_svg(config);
                             } else {
@@ -1764,7 +1739,6 @@ fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec
 fn update_clean_config(
     config_workspace: RwSignal<ConfigWorkspace>,
     error: RwSignal<Option<String>>,
-    render_after_update: impl Fn(),
     event: &'static str,
     update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
 ) -> bool {
@@ -1784,7 +1758,6 @@ fn update_clean_config(
     match result {
         Some(Ok(true)) => {
             error.set(None);
-            render_after_update();
             true
         }
         Some(Ok(false)) => false,
@@ -1800,20 +1773,16 @@ fn update_clean_config(
     }
 }
 
-fn line_color_of(config: &Config) -> LineColorConfig {
-    config.colors.line
-}
-
-fn current_line_color(base_config: Memo<Config>) -> LineColorConfig {
-    base_config.with(|c| c.colors.line)
+fn current_line_color(color_config: Memo<ColorConfig>) -> LineColorConfig {
+    color_config.with(|c| c.line)
 }
 
 fn line_color_for_mode(
-    base_config: Memo<Config>,
+    color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
     mode: LineColorMode,
 ) -> LineColorConfig {
-    let current = current_line_color(base_config);
+    let current = current_line_color(color_config);
     if LineColorMode::from_line_color(&current) == mode {
         current
     } else {
@@ -1822,11 +1791,11 @@ fn line_color_for_mode(
 }
 
 fn line_color_for_mode_untracked(
-    base_config: Memo<Config>,
+    color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
     mode: LineColorMode,
 ) -> LineColorConfig {
-    let current = base_config.with_untracked(|c| c.colors.line);
+    let current = color_config.with_untracked(|c| c.line);
     if LineColorMode::from_line_color(&current) == mode {
         current
     } else {

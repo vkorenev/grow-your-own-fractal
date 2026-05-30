@@ -1,8 +1,8 @@
 use glam::Vec2;
 
 use crate::{
-    ColorConfig, Config, LineColorConfig, Segment2DWithTopologicalDepth, color_util::rgb_to_hsv,
-    generate, generate_with_topological_depth,
+    ColorConfig, Config, GenerationConfig, LineColorConfig, Segment2DWithTopologicalDepth,
+    color_util::rgb_to_hsv, generate, generate_with_topological_depth,
 };
 
 /// Generate an SVG string for the given config.
@@ -15,7 +15,7 @@ pub fn export_svg(config: &Config) -> String {
         let segments: Vec<Segment2DWithTopologicalDepth> =
             generate_with_topological_depth(&config.generation).collect();
         return export_svg_with_segments(
-            config,
+            &config.generation,
             &colors,
             segments.iter().map(|segment| segment.points),
             build_depth_body(&segments, &colors.line),
@@ -24,7 +24,7 @@ pub fn export_svg(config: &Config) -> String {
 
     let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
     export_svg_with_segments(
-        config,
+        &config.generation,
         &colors,
         segments.iter().copied(),
         build_body(&segments, &colors.line),
@@ -32,7 +32,7 @@ pub fn export_svg(config: &Config) -> String {
 }
 
 fn export_svg_with_segments(
-    config: &Config,
+    generation: &GenerationConfig,
     colors: &ColorConfig,
     segments: impl IntoIterator<Item = [Vec2; 2]>,
     body: String,
@@ -61,7 +61,7 @@ fn export_svg_with_segments(
     }
 
     // Pad degenerate (zero-width or zero-height) bounding boxes.
-    let pad = config.generation.step * 0.5;
+    let pad = generation.step * 0.5;
     if max_x == min_x {
         min_x -= pad;
         max_x += pad;
