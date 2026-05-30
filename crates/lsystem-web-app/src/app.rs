@@ -191,8 +191,8 @@ pub(crate) fn App() -> impl IntoView {
     let error = RwSignal::new(None::<String>);
     let png_width = RwSignal::new(2048u32);
     let gpu_error = RwSignal::new(None::<String>);
-    let auto_rotate = RwSignal::new(false);
-    let auto_rotate_speed = RwSignal::new(45.0f32);
+    let auto_rotate = RwSignal::new(true);
+    let auto_rotate_speed = RwSignal::new(20.0f32);
     let hsv_movement = RwSignal::new(false);
     let hsv_movement_speed = RwSignal::new(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
     let hsv_movement_direction = RwSignal::new(HsvMovementDirection::Forward);
@@ -202,6 +202,7 @@ pub(crate) fn App() -> impl IntoView {
     // Generation counter: bumped on each animation start so older rAF loops detect
     // they have been superseded and exit.
     let animation_token = RwSignal::new(0u32);
+    on_cleanup(move || animation_token.update(|t| *t = t.wrapping_add(1)));
 
     let toml_text =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().draft_text().into_owned()));
@@ -227,12 +228,6 @@ pub(crate) fn App() -> impl IntoView {
     let last_pointer = StoredValue::new(None::<(i32, f64, f64)>);
 
     let is_3d = move || matches!(generation_config.get().dimensions, Dimensions::ThreeD);
-    let is_3d_untracked = move || {
-        matches!(
-            generation_config.get_untracked().dimensions,
-            Dimensions::ThreeD
-        )
-    };
     let is_dirty = move || config_workspace.with(|workspace| workspace.selected().is_dirty());
     let dirty_tooltip = move || {
         if is_dirty() {
@@ -262,12 +257,10 @@ pub(crate) fn App() -> impl IntoView {
     let canvas_ref = NodeRef::<Canvas>::new();
 
     let config_for_render = move || {
-        let max = max_iterations.get_untracked();
-        config_workspace.with_untracked(|ws| {
-            let mut config = ws.selected().applied_config().clone();
-            config.generation.iterations = config.generation.iterations.min(max);
-            config
-        })
+        let mut config =
+            config_workspace.with_untracked(|ws| ws.selected().applied_config().clone());
+        config.generation = generation_config.get_untracked();
+        config
     };
 
     let recover_after_render =
@@ -322,43 +315,10 @@ pub(crate) fn App() -> impl IntoView {
             }
         };
 
-    canvas_ref.on_load(move |canvas| {
-        wasm_bindgen_futures::spawn_local(async move {
-            match CanvasRenderer::new(canvas.clone()).await {
-                Ok(new_renderer) => {
-                    gpu_error.set(None);
-                    renderer.update_value(|opt| *opt = Some(new_renderer));
-                    let config = config_for_render();
-                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                        r.set_config_and_render(c, &config)
-                    });
-                }
-                Err(err) => {
-                    log::error!("Failed to initialize GPU renderer: {err}");
-                    gpu_error.set(Some(err.to_string()));
-                }
-            }
-        });
+    let animation_active = Memo::new(move |_| {
+        (auto_rotate.get() && is_3d())
+            || hsv_movement_is_active(hsv_movement.get(), &color_config.with(|c| c.line))
     });
-
-    install_resize_listener(canvas_ref, renderer, recover_after_render);
-
-    let refresh_color_memory = move || {
-        color_memory.set(ColorControlMemory::from_colors(
-            &color_config.get_untracked(),
-        ));
-    };
-
-    let reset_hsv_movement = move || {
-        let was_active = hsv_movement.get_untracked() || hsv_movement_phase.get_untracked() != 0.0;
-        hsv_movement.set(false);
-        hsv_movement_phase.set(0.0);
-        if was_active && let Some(canvas) = canvas_ref.get_untracked() {
-            with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                r.animate_and_render(c, None, Some(0.0))
-            });
-        }
-    };
 
     let start_animation_loop = move || {
         animation_token.update(|t| *t = t.wrapping_add(1));
@@ -383,13 +343,15 @@ pub(crate) fn App() -> impl IntoView {
                     break;
                 }
 
-                let auto_active = auto_rotate.get_untracked() && is_3d_untracked();
-                let line_color = color_config.with_untracked(|c| c.line);
-                if !(auto_active
-                    || hsv_movement_is_active(hsv_movement.get_untracked(), &line_color))
-                {
+                if !animation_active.get_untracked() {
                     break;
                 }
+                let auto_active = auto_rotate.get_untracked()
+                    && matches!(
+                        generation_config.get_untracked().dimensions,
+                        Dimensions::ThreeD
+                    );
+                let line_color = color_config.with_untracked(|c| c.line);
                 let hsv_active = hsv_movement_is_active(hsv_movement.get_untracked(), &line_color);
 
                 // Clamp dt to 100 ms to prevent a large jump after the tab was backgrounded.
@@ -419,12 +381,44 @@ pub(crate) fn App() -> impl IntoView {
         });
     };
 
-    let resume_hsv_movement_if_active = move || {
-        if hsv_movement_is_active(
-            hsv_movement.get_untracked(),
-            &color_config.with_untracked(|c| c.line),
-        ) {
-            start_animation_loop();
+    canvas_ref.on_load(move |canvas| {
+        wasm_bindgen_futures::spawn_local(async move {
+            match CanvasRenderer::new(canvas.clone()).await {
+                Ok(new_renderer) => {
+                    gpu_error.set(None);
+                    renderer.update_value(|opt| *opt = Some(new_renderer));
+                    let config = config_for_render();
+                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                        r.set_config_and_render(c, &config)
+                    });
+                    if animation_active.get_untracked() {
+                        start_animation_loop();
+                    }
+                }
+                Err(err) => {
+                    log::error!("Failed to initialize GPU renderer: {err}");
+                    gpu_error.set(Some(err.to_string()));
+                }
+            }
+        });
+    });
+
+    install_resize_listener(canvas_ref, renderer, recover_after_render);
+
+    let refresh_color_memory = move || {
+        color_memory.set(ColorControlMemory::from_colors(
+            &color_config.get_untracked(),
+        ));
+    };
+
+    let reset_hsv_movement = move || {
+        let was_active = hsv_movement.get_untracked() || hsv_movement_phase.get_untracked() != 0.0;
+        hsv_movement.set(false);
+        hsv_movement_phase.set(0.0);
+        if was_active && let Some(canvas) = canvas_ref.get_untracked() {
+            with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                r.animate_and_render(c, None, Some(0.0))
+            });
         }
     };
 
@@ -432,38 +426,37 @@ pub(crate) fn App() -> impl IntoView {
         let generation = generation_config.get();
         let color = color_config.get();
 
-        if let Some((prev_generation, prev_color)) = &prev {
-            let gen_changed = prev_generation != &generation;
-            let col_changed = prev_color != &color;
-            if (gen_changed || col_changed)
-                && let Some(canvas) = canvas_ref.get_untracked()
-            {
-                let config = config_for_render();
-                with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                    if gen_changed {
-                        r.set_config_and_render(c, &config)
-                    } else {
-                        r.set_colors_and_render(c, &config)
-                    }
-                });
-            }
+        if let Some((prev_generation, prev_color)) = &prev
+            && (prev_generation != &generation || prev_color != &color)
+            && let Some(canvas) = canvas_ref.get_untracked()
+        {
+            let config = config_for_render();
+            with_renderer(canvas, renderer, recover_after_render, |r, c| {
+                if prev_generation != &generation {
+                    r.set_config_and_render(c, &config)
+                } else {
+                    r.set_colors_and_render(c, &config)
+                }
+            });
         }
 
         (generation, color)
     });
 
-    Effect::new(move |_| {
-        if !matches!(generation_config.get().dimensions, Dimensions::ThreeD)
-            && auto_rotate.get_untracked()
-        {
-            auto_rotate.set(false);
+    // Start the animation loop only on a false->true transition. The initial run
+    // (prev == None) is intentionally skipped because on_load already starts the
+    // loop when animation is active on mount.
+    Effect::new(move |prev: Option<bool>| {
+        let active = animation_active.get();
+        if active && prev == Some(false) {
+            start_animation_loop();
         }
+        active
     });
 
     let select_current_config = move || {
         error.set(None);
         refresh_color_memory();
-        resume_hsv_movement_if_active();
         sync_grammar_editor();
     };
 
@@ -593,7 +586,12 @@ pub(crate) fn App() -> impl IntoView {
     let try_apply_grammar = move || {
         // The Apply button is disabled when grammar has 3D symbols in 2D mode;
         // this guard is a defensive fallback.
-        if grammar_has_3d_symbols() && !is_3d_untracked() {
+        if grammar_has_3d_symbols()
+            && !matches!(
+                generation_config.get_untracked().dimensions,
+                Dimensions::ThreeD
+            )
+        {
             return;
         }
         do_apply_grammar();
@@ -631,7 +629,6 @@ pub(crate) fn App() -> impl IntoView {
         Some(d) => {
             hsv_movement_direction.set(d);
             hsv_movement.set(true);
-            start_animation_loop();
         }
     };
 
@@ -1154,7 +1151,6 @@ pub(crate) fn App() -> impl IntoView {
                                 color_memory.update(|memory| {
                                     memory.remember_line(line_color);
                                 });
-                                resume_hsv_movement_if_active();
                             }
                         }
                     >
@@ -1461,7 +1457,7 @@ pub(crate) fn App() -> impl IntoView {
                             options=vec![("off", "Off"), ("on", "On")]
                             selected=Signal::derive(move || if auto_rotate.get() { "on" } else { "off" })
                             on_change=move |key| {
-                                if key == "on" { auto_rotate.set(true); start_animation_loop(); }
+                                if key == "on" { auto_rotate.set(true); }
                                 else { auto_rotate.set(false); }
                             }
                             disabled=Signal::derive(move || !is_3d())
@@ -1475,7 +1471,7 @@ pub(crate) fn App() -> impl IntoView {
                                     step=5.0
                                     on_commit=move |s| {
                                         if let Ok(v) = s.parse::<f32>() {
-                                            auto_rotate_speed.set(v.clamp(10.0, 360.0));
+                                            auto_rotate_speed.set(v.clamp(5.0, 360.0));
                                         }
                                     }
                                 />
@@ -1664,7 +1660,10 @@ pub(crate) fn App() -> impl IntoView {
                                 recover_after_render,
                                 |r, c| r.reset_and_render(c),
                             );
-                        } else if is_3d_untracked() {
+                        } else if matches!(
+                            generation_config.get_untracked().dimensions,
+                            Dimensions::ThreeD
+                        ) {
                             let handled = match key.as_str() {
                                 "ArrowLeft" => {
                                     with_renderer(canvas, renderer, recover_after_render, |r, c| {
