@@ -261,49 +261,29 @@ pub(crate) fn App() -> impl IntoView {
         )
     };
     let is_dirty = move || config_workspace.with(|workspace| workspace.selected().is_dirty());
+    let dirty_tooltip = move || {
+        if is_dirty() {
+            "Apply or Revert TOML changes first"
+        } else {
+            ""
+        }
+    };
 
     let rename_mode = RwSignal::new(false);
     let rename_draft = RwSignal::new(String::new());
-    let reset_prompt = RwSignal::new(false);
-
     let grammar_axiom = RwSignal::new(base_config.get_untracked().generation.axiom.clone());
-    let grammar_rules: RwSignal<Vec<(String, String)>> = RwSignal::new(
-        base_config
-            .get_untracked()
-            .generation
-            .rules
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect(),
-    );
-    let grammar_prompt = RwSignal::new(false);
-    let grammar_3d_prompt = RwSignal::new(false);
+    let grammar_rules: RwSignal<Vec<(String, String)>> = RwSignal::new(rules_to_editor_rows(
+        &base_config.get_untracked().generation.rules,
+    ));
 
     let dims_3d_error: RwSignal<Option<String>> = RwSignal::new(None);
-    let params_pending: StoredValue<Option<Box<dyn Fn()>>, LocalStorage> =
-        StoredValue::new_local(None);
-    let params_prompt = RwSignal::new(false);
-
-    let colors_pending: StoredValue<Option<Box<dyn Fn()>>, LocalStorage> =
-        StoredValue::new_local(None);
-    let colors_prompt = RwSignal::new(false);
-
-    let hue_prompt = RwSignal::new(false);
-    let hue_pending_dir: StoredValue<Option<HsvMovementDirection>, LocalStorage> =
-        StoredValue::new_local(None);
 
     let save_format = RwSignal::new("png"); // "svg" | "png"
 
     let sync_grammar_editor = move || {
         let generation = base_config.get_untracked().generation.clone();
         grammar_axiom.set(generation.axiom);
-        grammar_rules.set(
-            generation
-                .rules
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone()))
-                .collect(),
-        );
+        grammar_rules.set(rules_to_editor_rows(&generation.rules));
     };
 
     let canvas_ref = NodeRef::<Canvas>::new();
@@ -527,14 +507,26 @@ pub(crate) fn App() -> impl IntoView {
         sync_grammar_editor();
     };
 
-    // Silently reverts any in-flight dirty draft; used by confirm callbacks that
-    // need a clean entry before applying a new operation.
-    let revert_dirty = move || {
-        let _ = config_workspace.try_update(|ws| {
-            if let EntryViewMut::Dirty(dirty) = ws.selected_mut().view_mut() {
-                dirty.revert();
+    let do_revert = move || {
+        let result =
+            config_workspace.try_update(|workspace| match workspace.selected_mut().view_mut() {
+                EntryViewMut::Dirty(dirty) => {
+                    dirty.revert();
+                    true
+                }
+                EntryViewMut::Clean(_) => {
+                    log::error!("revert fired while entry is clean; UI guards bypassed");
+                    false
+                }
+            });
+        match result {
+            Some(true) => select_current_config(),
+            Some(false) => {}
+            None => {
+                log::error!("revert: config_workspace signal was unavailable");
+                error.set(Some("Internal error: could not revert config.".to_string()));
             }
-        });
+        }
     };
 
     let commit_rename = move || {
@@ -557,14 +549,7 @@ pub(crate) fn App() -> impl IntoView {
                 .map_err(|e| e.to_string())
         });
         match result {
-            Some(Ok(true)) => {
-                error.set(None);
-                stop_auto_rotate_if_2d();
-                refresh_color_memory();
-                render_current();
-                resume_hsv_movement_if_active();
-                sync_grammar_editor();
-            }
+            Some(Ok(true)) => select_current_config(),
             Some(Ok(false)) => {
                 log::warn!(
                     "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
@@ -575,20 +560,25 @@ pub(crate) fn App() -> impl IntoView {
         }
     };
 
-    let try_reset = move || {
-        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
-            reset_prompt.set(true);
-        } else {
-            do_reset();
-        }
-    };
-
     let grammar_has_3d_symbols = move || {
-        contains_3d_symbols(&grammar_axiom.get_untracked())
+        contains_3d_symbols(&grammar_axiom.get())
             || grammar_rules
-                .get_untracked()
+                .get()
                 .iter()
                 .any(|(_, rhs)| contains_3d_symbols(rhs))
+    };
+
+    let grammar_is_dirty = move || {
+        let generation = base_config.get().generation;
+        let applied_rules = rules_to_editor_rows(&generation.rules);
+        grammar_axiom.get() != generation.axiom || grammar_rules.get() != applied_rules
+    };
+    let grammar_dirty_tooltip = move || {
+        if grammar_is_dirty() {
+            "Apply or Revert grammar changes first"
+        } else {
+            ""
+        }
     };
 
     let do_apply_grammar = move || {
@@ -612,48 +602,29 @@ pub(crate) fn App() -> impl IntoView {
             }
             rules.push((c, v));
         }
-        update_clean_config(
+        if update_clean_config(
             config_workspace,
             error,
             render_current,
             "grammar apply",
             move |clean| clean.set_grammar(&axiom, &rules),
-        );
+        ) {
+            sync_grammar_editor();
+        }
     };
 
+    // Grammar Apply is enabled only when grammar has changes, the entry is clean, and
+    // no 3D-only symbols are present in 2D mode.
+    let grammar_can_apply =
+        move || grammar_is_dirty() && (is_3d() || !grammar_has_3d_symbols()) && !is_dirty();
+
     let try_apply_grammar = move || {
-        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
-            grammar_prompt.set(true);
-            return;
-        }
-        if grammar_has_3d_symbols()
-            && !matches!(
-                base_config.get_untracked().generation.dimensions,
-                Dimensions::ThreeD
-            )
-        {
-            grammar_3d_prompt.set(true);
+        // The Apply button is disabled when grammar has 3D symbols in 2D mode;
+        // this guard is a defensive fallback.
+        if grammar_has_3d_symbols() && !is_3d_untracked() {
             return;
         }
         do_apply_grammar();
-    };
-
-    let try_clean_param = move |action: Box<dyn Fn()>| {
-        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
-            params_pending.set_value(Some(action));
-            params_prompt.set(true);
-        } else {
-            action();
-        }
-    };
-
-    let try_clean_color = move |action: Box<dyn Fn()>| {
-        if config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
-            colors_pending.set_value(Some(action));
-            colors_prompt.set(true);
-        } else {
-            action();
-        }
     };
 
     let try_set_dimensions = move |key: &'static str| {
@@ -678,18 +649,16 @@ pub(crate) fn App() -> impl IntoView {
             }
         }
         dims_3d_error.set(None);
-        try_clean_param(Box::new(move || {
-            update_clean_config(
-                config_workspace,
-                error,
-                render_current,
-                "set dimensions",
-                move |clean| clean.set_dimensions(next),
-            );
-            if next == Dimensions::TwoD && auto_rotate.get_untracked() {
-                auto_rotate.set(false);
-            }
-        }));
+        update_clean_config(
+            config_workspace,
+            error,
+            render_current,
+            "set dimensions",
+            move |clean| clean.set_dimensions(next),
+        );
+        if next == Dimensions::TwoD && auto_rotate.get_untracked() {
+            auto_rotate.set(false);
+        }
     };
 
     let apply_hue_movement = move |dir: Option<HsvMovementDirection>| match dir {
@@ -707,14 +676,18 @@ pub(crate) fn App() -> impl IntoView {
             "backward" => Some(HsvMovementDirection::Reverse),
             _ => None,
         };
+        // Forward/Backward buttons are disabled when not in Hue-cycle mode;
+        // this guard is a defensive fallback in case disabled_keys is miscalculated.
         if dir.is_some()
             && !matches!(
                 base_config.with_untracked(line_color_of),
                 LineColorConfig::HueCycle { .. }
             )
         {
-            hue_pending_dir.set_value(dir);
-            hue_prompt.set(true);
+            log::error!(
+                "try_set_hue_movement: direction set while not in HueCycle mode; \
+                 disabled_keys guard may have been bypassed"
+            );
             return;
         }
         apply_hue_movement(dir);
@@ -873,31 +846,21 @@ pub(crate) fn App() -> impl IntoView {
                                 <button
                                     type="button"
                                     disabled=move || config_workspace.with(|ws| !ws.can_reset())
-                                    on:click=move |_| try_reset()
+                                    on:click=move |_| do_reset()
                                 >"Reset"</button>
                             </div>
                         }.into_any()
                     }}
                 </div>
 
-                <Show when=move || reset_prompt.get()>
-                    <crate::ui::WarningPrompt
-                        message="You have unapplied TOML changes. Discard them and reset?"
-                        confirm_label="Discard & reset"
-                        on_confirm=move || {
-                            reset_prompt.set(false);
-                            revert_dirty();
-                            do_reset();
-                        }
-                        on_cancel=move || reset_prompt.set(false)
-                    />
-                </Show>
-
-                <crate::ui::Disclosure title="Edit TOML" open=false>
+                <crate::ui::Disclosure title="Edit TOML" open=false
+                    badge=Signal::derive(is_dirty)>
+                    <div title=grammar_dirty_tooltip>
                     <textarea
                         id="config"
                         spellcheck="false"
                         prop:value=move || toml_text.get()
+                        disabled=grammar_is_dirty
                         on:input:target=move |ev| {
                             let text = ev.target().value();
                             let updated = config_workspace.try_update(|workspace| {
@@ -911,49 +874,29 @@ pub(crate) fn App() -> impl IntoView {
                             }
                         }
                     />
+                    </div>
+                    <div title=grammar_dirty_tooltip>
                     <div class="btn-row">
                         <button
                             type="button"
-                            disabled=move || !is_dirty()
+                            disabled=move || !is_dirty() || grammar_is_dirty()
                             on:click=move |_| apply_current()
                         >
                             "Apply"
                         </button>
                         <button
                             type="button"
-                            disabled=move || !is_dirty()
-                            on:click=move |_| {
-                                let ok = config_workspace.try_update(|workspace| {
-                                    match workspace.selected_mut().view_mut() {
-                                        EntryViewMut::Dirty(dirty) => dirty.revert(),
-                                        EntryViewMut::Clean(_) => {
-                                            log::error!(
-                                                "revert fired while entry is clean; UI guards bypassed"
-                                            );
-                                        }
-                                    }
-                                });
-                                if ok.is_some() {
-                                    error.set(None);
-                                    stop_auto_rotate_if_2d();
-                                    refresh_color_memory();
-                                    render_current();
-                                    resume_hsv_movement_if_active();
-                                    sync_grammar_editor();
-                                } else {
-                                    log::error!("revert: config_workspace signal was unavailable");
-                                    error.set(Some(
-                                        "Internal error: could not revert config.".to_string(),
-                                    ));
-                                }
-                            }
+                            disabled=move || !is_dirty() || grammar_is_dirty()
+                            on:click=move |_| do_revert()
                         >
                             "Revert"
                         </button>
                     </div>
+                    </div>
                 </crate::ui::Disclosure>
 
-                <crate::ui::Disclosure title="Grammar">
+                <crate::ui::Disclosure title="Grammar" badge=Signal::derive(grammar_is_dirty)>
+                    <div title=dirty_tooltip>
                     <table class="grammar-table">
                         <tbody>
                             <tr>
@@ -965,6 +908,7 @@ pub(crate) fn App() -> impl IntoView {
                                         type="text"
                                         class="grammar-rhs"
                                         prop:value=move || grammar_axiom.get()
+                                        disabled=is_dirty
                                         on:input:target=move |ev| grammar_axiom.set(ev.target().value())
                                     />
                                 </td>
@@ -991,6 +935,7 @@ pub(crate) fn App() -> impl IntoView {
                                                     list=list_id.clone()
                                                     maxlength="1"
                                                     prop:value=sym.clone()
+                                                    disabled=is_dirty
                                                     on:input:target=move |ev| {
                                                         grammar_rules.update(|rules| {
                                                             if let Some(r) = rules.get_mut(idx) {
@@ -1011,6 +956,7 @@ pub(crate) fn App() -> impl IntoView {
                                                     type="text"
                                                     class="grammar-rhs"
                                                     prop:value=rhs.clone()
+                                                    disabled=is_dirty
                                                     on:input:target=move |ev| {
                                                         grammar_rules.update(|rules| {
                                                             if let Some(r) = rules.get_mut(idx) {
@@ -1024,6 +970,7 @@ pub(crate) fn App() -> impl IntoView {
                                                 <button
                                                     type="button"
                                                     class="grammar-delete-btn"
+                                                    disabled=is_dirty
                                                     on:click=move |_| {
                                                         grammar_rules.update(|rules| { rules.remove(idx); });
                                                     }
@@ -1035,60 +982,45 @@ pub(crate) fn App() -> impl IntoView {
                             }}
                         </tbody>
                     </table>
+                    </div>
 
                     <div class="btn-row">
+                        <div title=dirty_tooltip>
+                            <button
+                                type="button"
+                                disabled=is_dirty
+                                on:click=move |_| {
+                                    grammar_rules.update(|rules| rules.push((String::new(), String::new())));
+                                }
+                            >"Add rule"</button>
+                        </div>
+                        <div title=move || {
+                            if is_dirty() { "Apply or Revert TOML changes first" }
+                            else if grammar_has_3d_symbols() && !is_3d() {
+                                "Contains 3D-only symbols — switch to 3D mode in Parameters first"
+                            } else { "" }
+                        }>
+                            <button
+                                type="button"
+                                disabled=move || !grammar_can_apply()
+                                on:click=move |_| try_apply_grammar()
+                            >"Apply"</button>
+                        </div>
                         <button
                             type="button"
-                            on:click=move |_| {
-                                grammar_rules.update(|rules| rules.push((String::new(), String::new())));
-                            }
-                        >"Add rule"</button>
-                        <button
-                            type="button"
-                            on:click=move |_| try_apply_grammar()
-                        >"Apply"</button>
+                            disabled=move || !grammar_is_dirty()
+                            on:click=move |_| sync_grammar_editor()
+                        >"Revert"</button>
                     </div>
                     {move || error.get().map(|msg| view! {
                         <span class="inline-status error">{msg}</span>
                     })}
-
-                    <Show when=move || grammar_prompt.get()>
-                        <crate::ui::WarningPrompt
-                            message="You have unapplied TOML changes. Discard them and proceed?"
-                            confirm_label="Discard & apply"
-                            on_confirm=move || {
-                                grammar_prompt.set(false);
-                                revert_dirty();
-                                try_apply_grammar();
-                            }
-                            on_cancel=move || grammar_prompt.set(false)
-                        />
-                    </Show>
-
-                    <Show when=move || grammar_3d_prompt.get()>
-                        <crate::ui::WarningPrompt
-                            message="Grammar contains 3D-only symbols. Switch to 3D to apply it."
-                            confirm_label="Switch to 3D & apply"
-                            on_confirm=move || {
-                                grammar_3d_prompt.set(false);
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current,
-                                    "switch to 3D for grammar",
-                                    |clean| clean.set_dimensions(Dimensions::ThreeD),
-                                ) {
-                                    do_apply_grammar();
-                                }
-                            }
-                            on_cancel=move || grammar_3d_prompt.set(false)
-                        />
-                    </Show>
                 </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Parameters">
                     <div style="display:flex;flex-direction:column;gap:5px">
                         <span class="section-label">"Dimensions"</span>
+                        <div title=dirty_tooltip>
                         <crate::ui::SegmentedToggle
                             options=vec![("2d", "2D"), ("3d", "3D")]
                             selected=Signal::derive(move || match base_config.get().generation.dimensions {
@@ -1096,32 +1028,33 @@ pub(crate) fn App() -> impl IntoView {
                                 Dimensions::ThreeD => "3d",
                             })
                             on_change=move |key| try_set_dimensions(key)
+                            disabled=Signal::derive(is_dirty)
                         />
+                        </div>
                         {move || dims_3d_error.get().map(|msg| view! {
                             <span class="inline-status error">{msg}</span>
                         })}
                     </div>
 
-                    <div class="spinner-row">
+                    <div class="spinner-row" title=dirty_tooltip>
                         <span class="spinner-label">"Angle (°)"</span>
                         <crate::ui::Spinner
                             value=Signal::derive(move || format!("{:.1}", angle.get()))
                             step=0.5
+                            disabled=Signal::derive(is_dirty)
                             on_commit=move |s| {
                                 if let Ok(v) = s.parse::<f32>() {
                                     let v = v.clamp(1.0, 180.0);
-                                    try_clean_param(Box::new(move || {
-                                        update_clean_config(
-                                            config_workspace, error, render_current, "angle",
-                                            move |clean| clean.set_angle(v),
-                                        );
-                                    }));
+                                    update_clean_config(
+                                        config_workspace, error, render_current, "angle",
+                                        move |clean| clean.set_angle(v),
+                                    );
                                 }
                             }
                         />
                     </div>
 
-                    <div class="spinner-row">
+                    <div class="spinner-row" title=dirty_tooltip>
                         <span class="spinner-label">"Initial heading (°)"</span>
                         <crate::ui::Spinner
                             value=Signal::derive(move || format!(
@@ -1129,63 +1062,48 @@ pub(crate) fn App() -> impl IntoView {
                                 config_workspace.with(|ws| ws.selected().applied_config().generation.initial_heading)
                             ))
                             step=1.0
+                            disabled=Signal::derive(is_dirty)
                             on_commit=move |s| {
                                 if let Ok(v) = s.parse::<f32>() {
-                                    try_clean_param(Box::new(move || {
-                                        update_clean_config(
-                                            config_workspace, error, render_current, "initial_heading",
-                                            move |clean| clean.set_initial_heading(v),
-                                        );
-                                    }));
+                                    update_clean_config(
+                                        config_workspace, error, render_current, "initial_heading",
+                                        move |clean| clean.set_initial_heading(v),
+                                    );
                                 }
                             }
                         />
                     </div>
 
-                    <div class="spinner-row">
+                    <div class="spinner-row" title=dirty_tooltip>
                         <span class="spinner-label">"Iterations"</span>
                         <crate::ui::Spinner
                             value=Signal::derive(move || iterations.get().to_string())
                             step=1.0
+                            disabled=Signal::derive(is_dirty)
                             on_commit=move |s| {
                                 if let Ok(v) = s.parse::<u32>() {
                                     let v = v.clamp(0, max_iterations.get_untracked());
-                                    try_clean_param(Box::new(move || {
-                                        update_clean_config(
-                                            config_workspace, error, render_current, "iterations",
-                                            move |clean| clean.set_iterations(v),
-                                        );
-                                    }));
+                                    update_clean_config(
+                                        config_workspace, error, render_current, "iterations",
+                                        move |clean| clean.set_iterations(v),
+                                    );
                                 }
                             }
                         />
                     </div>
-
-                    <Show when=move || params_prompt.get()>
-                        <crate::ui::WarningPrompt
-                            message="You have unapplied TOML changes. Discard them and proceed?"
-                            confirm_label="Discard & proceed"
-                            on_confirm=move || {
-                                params_prompt.set(false);
-                                revert_dirty();
-                                sync_grammar_editor();
-                                if let Some(Some(action)) = params_pending.try_update_value(|v| v.take()) { action(); }
-                                params_pending.set_value(None);
-                            }
-                            on_cancel=move || {
-                                params_prompt.set(false);
-                                params_pending.set_value(None);
-                            }
-                        />
-                    </Show>
                 </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Colors">
+                    <div
+                        style="display:flex;flex-direction:column;gap:9px"
+                        title=dirty_tooltip
+                    >
                     <label class="check-row" for="background-override">
                         <input
                             id="background-override"
                             type="checkbox"
                             prop:checked=move || base_config.with(|c| c.colors.background.is_some())
+                            disabled=is_dirty
                             on:change:target=move |ev| {
                                 let current_bg =
                                     base_config.with_untracked(|c| c.colors.background);
@@ -1200,15 +1118,13 @@ pub(crate) fn App() -> impl IntoView {
                                 } else {
                                     None
                                 };
-                                try_clean_color(Box::new(move || {
-                                    update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "background checkbox",
-                                        move |clean| clean.set_background(background),
-                                    );
-                                }));
+                                update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "background checkbox",
+                                    move |clean| clean.set_background(background),
+                                );
                             }
                         />
                         <span>"Background"</span>
@@ -1225,24 +1141,23 @@ pub(crate) fn App() -> impl IntoView {
                             prop:value=move || {
                                 rgb_to_hex(base_config.with(|c| c.colors.effective_background()))
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(color) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "background color input",
-                                        move |clean| clean.set_background(Some(color)),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_background(color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "background color input",
+                                    move |clean| clean.set_background(Some(color)),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_background(color);
+                                    });
+                                }
                             }
                         />
                     </div>
@@ -1255,6 +1170,7 @@ pub(crate) fn App() -> impl IntoView {
                                 .key()
                                 .to_string()
                         }
+                        disabled=is_dirty
                         on:change:target=move |ev| {
                             let mode_key = ev.target().value();
                             let Some(mode) = LineColorMode::from_key(&mode_key) else {
@@ -1274,20 +1190,18 @@ pub(crate) fn App() -> impl IntoView {
                                 ));
                                 return;
                             };
-                            try_clean_color(Box::new(move || {
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    render_current_colors,
-                                    "line color mode select",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                    resume_hsv_movement_if_active();
-                                }
-                            }));
+                            if update_clean_config(
+                                config_workspace,
+                                error,
+                                render_current_colors,
+                                "line color mode select",
+                                move |clean| clean.set_line_color(line_color),
+                            ) {
+                                color_memory.update(|memory| {
+                                    memory.remember_line(line_color);
+                                });
+                                resume_hsv_movement_if_active();
+                            }
                         }
                     >
                         <option value="solid">"Solid"</option>
@@ -1316,25 +1230,24 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("solid mode must provide solid color"),
                                 }
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(color) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
                                 let line_color = LineColorConfig::Solid { color };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "solid line color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "solid line color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
                             }
                         />
                     </div>
@@ -1366,6 +1279,7 @@ pub(crate) fn App() -> impl IntoView {
                                     ),
                                 }
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(start) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
@@ -1383,19 +1297,17 @@ pub(crate) fn App() -> impl IntoView {
                                     ),
                                 };
                                 let line_color = LineColorConfig::DepthGradient { start, end };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "depth-gradient start color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "depth-gradient start color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
                             }
                         />
 
@@ -1415,6 +1327,7 @@ pub(crate) fn App() -> impl IntoView {
                                     ),
                                 }
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(end) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
@@ -1432,19 +1345,17 @@ pub(crate) fn App() -> impl IntoView {
                                     ),
                                 };
                                 let line_color = LineColorConfig::DepthGradient { start, end };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "depth-gradient end color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "depth-gradient end color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
                             }
                         />
                     </div>
@@ -1472,6 +1383,7 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 }
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(start) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
@@ -1487,19 +1399,17 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 };
                                 let line_color = LineColorConfig::Gradient { start, end };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "gradient start color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "gradient start color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
                             }
                         />
 
@@ -1517,6 +1427,7 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 }
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(end) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
@@ -1532,19 +1443,17 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 };
                                 let line_color = LineColorConfig::Gradient { start, end };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "gradient end color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "gradient end color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
                             }
                         />
                     </div>
@@ -1572,56 +1481,34 @@ pub(crate) fn App() -> impl IntoView {
                                     _ => unreachable!("hue-cycle mode must provide hue-cycle color"),
                                 }
                             }
+                            disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Some(initial) = hex_to_rgb(&ev.target().value()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
                                 let line_color = LineColorConfig::HueCycle { initial };
-                                try_clean_color(Box::new(move || {
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "hue-cycle initial color input",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|memory| {
-                                            memory.remember_line(line_color);
-                                        });
-                                    }
-                                }));
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    render_current_colors,
+                                    "hue-cycle initial color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
                             }
                         />
                     </div>
-
-                    <Show when=move || colors_prompt.get()>
-                        <crate::ui::WarningPrompt
-                            message="You have unapplied TOML changes. Discard them and proceed?"
-                            confirm_label="Discard & proceed"
-                            on_confirm=move || {
-                                colors_prompt.set(false);
-                                revert_dirty();
-                                sync_grammar_editor();
-                                if let Some(action) = colors_pending.try_update_value(|v| v.take()).flatten() {
-                                    action();
-                                }
-                            }
-                            on_cancel=move || {
-                                colors_prompt.set(false);
-                                colors_pending.set_value(None);
-                            }
-                        />
-                    </Show>
+                    </div>
                 </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Animations">
                     <div style="display:flex;flex-direction:column;gap:6px">
-                        <span class=move || {
-                            if is_3d() { "section-label" } else { "section-label dim" }
-                        }>
-                            {move || if is_3d() { "Auto-rotate" } else { "Auto-rotate (3D only)" }}
-                        </span>
+                        <span class="section-label">"Auto-rotate"</span>
+                        <div title=move || if !is_3d() { "Switch to 3D mode in Parameters to enable auto-rotate" } else { "" }>
                         <crate::ui::SegmentedToggle
                             options=vec![("off", "Off"), ("on", "On")]
                             selected=Signal::derive(move || if auto_rotate.get() { "on" } else { "off" })
@@ -1631,6 +1518,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=Signal::derive(move || !is_3d())
                         />
+                        </div>
                         <Show when=move || auto_rotate.get() && is_3d()>
                             <div class="spinner-row">
                                 <span class="spinner-label">"Speed (°/s)"</span>
@@ -1651,6 +1539,7 @@ pub(crate) fn App() -> impl IntoView {
 
                     <div style="display:flex;flex-direction:column;gap:6px">
                         <span class="section-label">"Hue movement"</span>
+                        <div title=move || if !matches!(current_line_color(base_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue movement" } else { "" }>
                         <crate::ui::SegmentedToggle
                             options=vec![("off", "Off"), ("forward", "Forward"), ("backward", "Backward")]
                             selected=Signal::derive(move || {
@@ -1659,7 +1548,15 @@ pub(crate) fn App() -> impl IntoView {
                                 else { "backward" }
                             })
                             on_change=move |key| try_set_hue_movement(key)
+                            disabled_keys=Signal::derive(move || {
+                                if matches!(current_line_color(base_config), LineColorConfig::HueCycle { .. }) {
+                                    vec![]
+                                } else {
+                                    vec!["forward", "backward"]
+                                }
+                            })
                         />
+                        </div>
                         <Show when=move || hsv_movement.get()>
                             <div class="spinner-row">
                                 <span class="spinner-label">"Speed (°/s)"</span>
@@ -1676,37 +1573,6 @@ pub(crate) fn App() -> impl IntoView {
                                     }
                                 />
                             </div>
-                        </Show>
-                        <Show when=move || hue_prompt.get()>
-                            <crate::ui::WarningPrompt
-                                message="Line color is not Hue cycle. Enabling this will switch it to Hue cycle."
-                                confirm_label="Switch & enable"
-                                on_confirm=move || {
-                                    let dir = hue_pending_dir
-                                        .try_update_value(|v| v.take())
-                                        .flatten()
-                                        .unwrap_or(HsvMovementDirection::Forward);
-                                    revert_dirty();
-                                    let line_color = color_memory
-                                        .with_untracked(|m| m.line_for(LineColorMode::HueCycle));
-                                    if update_clean_config(
-                                        config_workspace,
-                                        error,
-                                        render_current_colors,
-                                        "switch to hue cycle",
-                                        move |clean| clean.set_line_color(line_color),
-                                    ) {
-                                        color_memory.update(|m| m.remember_line(line_color));
-                                        resume_hsv_movement_if_active();
-                                        apply_hue_movement(Some(dir));
-                                    }
-                                    hue_prompt.set(false);
-                                }
-                                on_cancel=move || {
-                                    hue_prompt.set(false);
-                                    hue_pending_dir.set_value(None);
-                                }
-                            />
                         </Show>
                     </div>
                 </crate::ui::Disclosure>
@@ -1922,6 +1788,13 @@ pub(crate) fn App() -> impl IntoView {
             </section>
         </main>
     }
+}
+
+fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec<(String, String)> {
+    rules
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 fn update_clean_config(

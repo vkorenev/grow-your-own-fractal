@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use leptos::prelude::*;
 
 /// Collapsible disclosure section with a chevron header button.
@@ -6,6 +5,9 @@ use leptos::prelude::*;
 pub fn Disclosure(
     title: &'static str,
     #[prop(default = true)] open: bool,
+    /// Amber dot shown in the header when true (e.g. unsaved state).
+    #[prop(into, default = Signal::stored(false))]
+    badge: Signal<bool>,
     children: Children,
 ) -> impl IntoView {
     let is_open = RwSignal::new(open);
@@ -16,7 +18,12 @@ pub fn Disclosure(
                 class="disclosure-header"
                 on:click=move |_| is_open.update(|v| *v = !*v)
             >
-                <span>{title}</span>
+                <span>
+                    {title}
+                    <Show when=move || badge.get()>
+                        <span class="disclosure-badge">"●"</span>
+                    </Show>
+                </span>
                 <span
                     class="disclosure-chevron"
                     class:open=move || is_open.get()
@@ -40,7 +47,7 @@ pub fn Spinner(
     value: Signal<String>,
     on_commit: impl Fn(String) + 'static + Clone,
     #[prop(default = 1.0_f64)] step: f64,
-    #[prop(default = false)] disabled: bool,
+    #[prop(into, default = Signal::stored(false))] disabled: Signal<bool>,
 ) -> impl IntoView {
     let displayed = RwSignal::new(value.get_untracked());
 
@@ -70,14 +77,14 @@ pub fn Spinner(
             <button
                 type="button"
                 class="spinner-btn"
-                disabled=disabled
+                disabled=move || disabled.get()
                 on:click=step_down
             >"−"</button>
             <input
                 type="text"
                 class="spinner-input"
                 prop:value=move || displayed.get()
-                disabled=disabled
+                disabled=move || disabled.get()
                 on:input:target=move |ev| displayed.set(ev.target().value())
                 on:keydown=move |ev: web_sys::KeyboardEvent| {
                     if ev.key() == "Enter" {
@@ -94,7 +101,7 @@ pub fn Spinner(
             <button
                 type="button"
                 class="spinner-btn"
-                disabled=disabled
+                disabled=move || disabled.get()
                 on:click=step_up
             >"+"</button>
         </div>
@@ -109,13 +116,16 @@ fn format_step(n: f64) -> String {
 
 /// Segmented toggle (pill group). `options` is `(key, label)` pairs.
 /// Fires `on_change(key)` when a non-active option is clicked.
-/// `disabled` accepts a plain bool, a closure, or a signal via `#[prop(into)]`.
+/// `disabled` disables all buttons. `disabled_keys` disables specific option keys.
 #[component]
 pub fn SegmentedToggle(
     options: Vec<(&'static str, &'static str)>,
     selected: Signal<&'static str>,
     on_change: impl Fn(&'static str) + 'static + Clone,
     #[prop(into, default = Signal::stored(false))] disabled: Signal<bool>,
+    #[prop(into, default = Signal::stored(Vec::<&'static str>::new()))] disabled_keys: Signal<
+        Vec<&'static str>,
+    >,
 ) -> impl IntoView {
     view! {
         <div class="seg-toggle">
@@ -125,40 +135,17 @@ pub fn SegmentedToggle(
                     <button
                         type="button"
                         class:seg-active=move || selected.get() == key
-                        disabled=move || disabled.get() || selected.get() == key
+                        disabled=move || {
+                            disabled.get()
+                                || selected.get() == key
+                                || disabled_keys.get().contains(&key)
+                        }
                         on:click=move |_| on_change(key)
                     >
                         {label}
                     </button>
                 }
             }).collect_view()}
-        </div>
-    }
-}
-
-/// Inline amber warning box with a confirm action and a cancel button.
-#[component]
-pub fn WarningPrompt(
-    message: &'static str,
-    confirm_label: &'static str,
-    on_confirm: impl Fn() + 'static,
-    on_cancel: impl Fn() + 'static,
-) -> impl IntoView {
-    view! {
-        <div class="warning-prompt">
-            <span>{message}</span>
-            <div class="warning-prompt-actions">
-                <button
-                    type="button"
-                    class="warning-confirm-btn"
-                    on:click=move |_| on_confirm()
-                >{confirm_label}</button>
-                <button
-                    type="button"
-                    class="warning-cancel-btn"
-                    on:click=move |_| on_cancel()
-                >"Cancel"</button>
-            </div>
         </div>
     }
 }

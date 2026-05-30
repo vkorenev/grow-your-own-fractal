@@ -34,12 +34,6 @@ textarea {
   border-right: 1px solid #303642;
 }
 
-.controls h1 {
-  margin: 0 0 8px;
-  font-size: 20px;
-  font-weight: 650;
-}
-
 .controls label {
   font-size: 13px;
   color: #aeb6c3;
@@ -93,41 +87,6 @@ textarea {
   background: #3b707d;
 }
 
-.status {
-  min-height: 22px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.status.ok {
-  color: #65d894;
-}
-
-.status.error {
-  color: #ff7b7b;
-}
-
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #303642;
-}
-
-.row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px;
-  align-items: center;
-  gap: 8px;
-}
-
-.row output {
-  font-size: 13px;
-  text-align: right;
-  color: #cbd5e1;
-}
-
 .color-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;
@@ -139,12 +98,6 @@ textarea {
   width: 42px;
   min-height: 28px;
   padding: 2px;
-}
-
-.export-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
 }
 
 .viewport {
@@ -336,7 +289,24 @@ textarea {
 .seg-toggle button:not(:first-child) { border-left: 1px solid #3a4352; }
 .seg-toggle button.seg-active { background: #315d68; color: #e5e7eb; cursor: default; }
 .seg-toggle button:disabled:not(.seg-active) { opacity: 0.35; cursor: not-allowed; }
-.seg-toggle button.seg-active:disabled { cursor: default; }
+.seg-toggle button.seg-active:disabled { cursor: default; opacity: 1; }
+
+/* ── Disabled interactive controls ── */
+.controls button:disabled,
+.controls input:disabled,
+.controls select:disabled,
+.controls textarea:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.spinner-btn:disabled,
+.spinner-btn:disabled:hover {
+  opacity: 0.4;
+  background: #252932;
+  color: #aeb6c3;
+  cursor: not-allowed;
+}
 
 /* ── Spinner ── */
 .spinner {
@@ -401,8 +371,6 @@ textarea {
   color: #7a8899;
 }
 
-.section-label.dim { color: #4a5568; }
-
 .section-divider {
   border: none;
   border-top: 1px solid #252a35;
@@ -455,57 +423,7 @@ textarea {
 
 .grammar-delete-btn:hover { color: #f87171; background: #2a1a1a; }
 
-/* ── Warning prompt ── */
-.warning-prompt {
-  background: #1e1a0a;
-  border: 1px solid #5a4010;
-  border-radius: 5px;
-  padding: 8px 10px;
-  font-size: 12px;
-  color: #d4a840;
-  line-height: 1.45;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.warning-prompt-actions { display: flex; gap: 6px; }
-
-.warning-confirm-btn {
-  flex: 1;
-  background: #2a200a;
-  border: 1px solid #7a5a10;
-  border-radius: 5px;
-  color: #f6c85a;
-  font-size: 11px;
-  min-height: 28px;
-  cursor: pointer;
-  padding: 0 8px;
-}
-
-.warning-confirm-btn:hover { background: #3a2e0e; }
-
-.warning-cancel-btn {
-  flex: 1;
-  background: #252932;
-  border: 1px solid #3a4352;
-  border-radius: 5px;
-  color: #aeb6c3;
-  font-size: 11px;
-  min-height: 28px;
-  cursor: pointer;
-  padding: 0 8px;
-}
-
-.warning-cancel-btn:hover { background: #2e3545; }
-
 /* ── Top bar additions ── */
-.controls-title {
-  margin: 0 0 6px;
-  font-size: 20px;
-  font-weight: 650;
-}
-
 .preset-row { display: flex; gap: 5px; align-items: center; }
 .preset-row select { flex: 1; min-width: 0; }
 
@@ -514,6 +432,9 @@ textarea {
 
 .btn-row { display: flex; gap: 5px; }
 .btn-row button { flex: 1; }
+/* Tooltip wrapper divs inside btn-row — must behave like flex items */
+.btn-row > div { flex: 1; display: flex; }
+.btn-row > div > button { flex: 1; }
 
 .rename-input {
   flex: 1;
@@ -529,6 +450,14 @@ textarea {
 .inline-status { font-size: 12px; min-height: 16px; }
 .inline-status.ok { color: #65d894; }
 .inline-status.error { color: #ff7b7b; }
+
+/* ── Disclosure badge (amber dot for dirty state) ── */
+.disclosure-badge {
+  color: #d4a840;
+  font-size: 9px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
 
 /* ── Sidebar collapse (desktop only) ── */
 .controls { position: relative; }
