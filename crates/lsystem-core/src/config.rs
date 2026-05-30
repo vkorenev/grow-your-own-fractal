@@ -337,6 +337,35 @@ impl ConfigSource {
         );
     }
 
+    pub(crate) fn set_initial_heading(&mut self, initial_heading: f32) {
+        set_value_preserving_decor(
+            &mut self.document["turtle"]["initial_heading"],
+            Value::from(f64::from(initial_heading)),
+        );
+    }
+
+    pub(crate) fn set_dimensions(&mut self, dimensions: Dimensions) {
+        set_value_preserving_decor(
+            &mut self.document["l-system"]["dimensions"],
+            Value::from(match dimensions {
+                Dimensions::TwoD => 2i64,
+                Dimensions::ThreeD => 3i64,
+            }),
+        );
+    }
+
+    pub(crate) fn set_grammar(&mut self, axiom: &str, rules: &[(char, String)]) {
+        set_value_preserving_decor(&mut self.document["l-system"]["axiom"], Value::from(axiom));
+        // The rules table is replaced wholesale rather than patched in place.
+        // This intentionally discards per-rule TOML comments and whitespace —
+        // the grammar editor constructs a new set of rules, not incremental edits.
+        let mut rules_table = Table::new();
+        for (symbol, rhs) in rules {
+            rules_table[&symbol.to_string()] = value(rhs.as_str());
+        }
+        self.document["l-system"]["rules"] = Item::Table(rules_table);
+    }
+
     pub(crate) fn set_background(&mut self, background: Option<[f32; 3]>) {
         match background {
             Some(background) => {

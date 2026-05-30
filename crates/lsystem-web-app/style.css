@@ -34,12 +34,6 @@ textarea {
   border-right: 1px solid #303642;
 }
 
-.controls h1 {
-  margin: 0 0 8px;
-  font-size: 20px;
-  font-weight: 650;
-}
-
 .controls label {
   font-size: 13px;
   color: #aeb6c3;
@@ -93,41 +87,6 @@ textarea {
   background: #3b707d;
 }
 
-.status {
-  min-height: 22px;
-  margin: 0;
-  font-size: 13px;
-}
-
-.status.ok {
-  color: #65d894;
-}
-
-.status.error {
-  color: #ff7b7b;
-}
-
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #303642;
-}
-
-.row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 52px;
-  align-items: center;
-  gap: 8px;
-}
-
-.row output {
-  font-size: 13px;
-  text-align: right;
-  color: #cbd5e1;
-}
-
 .color-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;
@@ -139,12 +98,6 @@ textarea {
   width: 42px;
   min-height: 28px;
   padding: 2px;
-}
-
-.export-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
 }
 
 .viewport {
@@ -191,11 +144,306 @@ textarea {
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(240px, 42vh) minmax(0, 1fr);
+    grid-template-rows: 1fr;
   }
 
+  .viewport { position: fixed; inset: 0; z-index: 0; }
+
   .controls {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
     border-right: none;
-    border-bottom: 1px solid #303642;
+    border-top: 1px solid #303642;
+    border-radius: 12px 12px 0 0;
+    max-height: 80vh;
+    transform: translateY(calc(100% - 52px));
+    transition: transform 0.25s ease;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
+
+  .controls.sheet-open { transform: translateY(0); }
+
+  .sheet-handle-area {
+    flex-shrink: 0;
+    padding: 10px 14px 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .sheet-handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: #4a5568;
+    flex-shrink: 0;
+  }
+
+  .sheet-preset-name {
+    font-size: 12px;
+    color: #7a8899;
+  }
+
+  .controls-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
 }
+
+@media (min-width: 761px) {
+  .sheet-handle-area { display: none; }
+  .controls-scroll { display: contents; }
+}
+
+/* ── Disclosure sections ── */
+.disclosure {
+  border: 1px solid #2d3548;
+  border-radius: 7px;
+  /* No overflow:hidden — it clamps flex-item height inside a fixed-height
+     flex container, causing the card to stop short of its content. Corners
+     are handled by per-element border-radius instead. */
+}
+
+/* Higher specificity (.controls .disclosure-header = 0,2,0)
+   overrides the global .controls button rule (0,1,1). */
+.controls .disclosure-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  color: #8fa3b8;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: #1e2333;
+  border: none;
+  border-radius: 7px 7px 0 0;
+  min-height: 0;
+  width: 100%;
+  text-align: left;
+}
+
+.controls .disclosure-header:hover { background: #232840; }
+
+/* When closed the header rounds all four corners */
+.controls .disclosure-header:not(:has(+ .disclosure-body:not(.hidden))) {
+  border-radius: 7px;
+}
+
+.disclosure-chevron {
+  color: #5a6478;
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.disclosure-chevron.open { transform: rotate(90deg); }
+
+.disclosure-body {
+  padding: 10px 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border-top: 1px solid #2d3548;
+  background: #151820;
+  border-radius: 0 0 7px 7px;
+}
+
+/* ── Segmented toggle ── */
+.seg-toggle {
+  display: flex;
+  border: 1px solid #3a4352;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.seg-toggle button {
+  flex: 1;
+  padding: 5px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a8899;
+  background: #0f1117;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  min-height: 0;
+}
+
+.seg-toggle button:not(:first-child) { border-left: 1px solid #3a4352; }
+.seg-toggle button.seg-active { background: #315d68; color: #e5e7eb; cursor: default; }
+.seg-toggle button:disabled:not(.seg-active) { opacity: 0.35; cursor: not-allowed; }
+.seg-toggle button.seg-active:disabled { cursor: default; opacity: 1; }
+
+/* ── Disabled interactive controls ── */
+.controls button:disabled,
+.controls input:disabled,
+.controls select:disabled,
+.controls textarea:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.spinner-btn:disabled,
+.spinner-btn:disabled:hover {
+  opacity: 0.4;
+  background: #252932;
+  color: #aeb6c3;
+  cursor: not-allowed;
+}
+
+/* ── Spinner ── */
+.spinner {
+  display: flex;
+  align-items: center;
+  border: 1px solid #3a4352;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #0f1117;
+}
+
+.spinner-btn {
+  width: 28px;
+  height: 30px;
+  background: #252932;
+  border: none;
+  color: #aeb6c3;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  min-height: 0;
+}
+
+.spinner-btn:hover { background: #315d68; color: #fff; }
+
+.spinner-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid #3a4352;
+  border-right: 1px solid #3a4352;
+  color: #f3f4f6;
+  text-align: center;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.spinner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spinner-label {
+  flex: 0 0 126px;
+  font-size: 12px;
+  color: #aeb6c3;
+}
+
+/* ── Section label ── */
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #7a8899;
+}
+
+.section-divider {
+  border: none;
+  border-top: 1px solid #252a35;
+  margin: 2px 0;
+}
+
+/* ── Grammar table ── */
+.grammar-table { width: 100%; border-collapse: collapse; }
+
+.grammar-table td { padding: 2px 3px; vertical-align: middle; }
+.grammar-table td.g-symbol { width: 72px; }
+.grammar-table td.g-delete { width: 24px; text-align: center; }
+
+.grammar-axiom-label {
+  display: block;
+  text-align: center;
+  background: #0f1117;
+  border: 1px solid #3a4352;
+  border-radius: 4px;
+  color: #7ab8c8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.grammar-combo,
+.grammar-rhs {
+  width: 100%;
+  background: #0f1117;
+  border: 1px solid #3a4352;
+  border-radius: 4px;
+  color: #f3f4f6;
+  padding: 4px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.grammar-delete-btn {
+  background: none;
+  border: none;
+  color: #5a6478;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  min-height: 0;
+}
+
+.grammar-delete-btn:hover { color: #f87171; background: #2a1a1a; }
+
+/* ── Top bar additions ── */
+.preset-row { display: flex; gap: 5px; align-items: center; }
+.preset-row select { flex: 1; min-width: 0; }
+
+.preset-actions { display: flex; gap: 5px; margin-top: 4px; }
+.preset-actions button { flex: 1; }
+
+.btn-row { display: flex; gap: 5px; }
+.btn-row button { flex: 1; }
+/* Tooltip wrapper divs inside btn-row — must behave like flex items */
+.btn-row > div { flex: 1; display: flex; }
+.btn-row > div > button { flex: 1; }
+
+.rename-input { flex: 1; }
+
+.inline-status { font-size: 12px; min-height: 16px; }
+.inline-status.error { color: #ff7b7b; }
+
+/* ── Disclosure badge (amber dot for dirty state) ── */
+.disclosure-badge {
+  color: #d4a840;
+  font-size: 9px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
