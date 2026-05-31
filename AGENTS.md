@@ -39,7 +39,7 @@ cargo test -p lsystem-core --features svg svg_export
 
 ## Supplemental Rules
 
-When making code changes, check whether `README.md` and/or `AGENTS.md` need updates for the changed behavior, commands, architecture, or workflow. Update them in the same change when applicable.
+When making code changes, check whether `README.md`, `CONTRIBUTING.md`, and/or `AGENTS.md` need updates for the changed behavior, commands, architecture, or workflow. Update them in the same change when applicable.
 
 Successful CI runs on `main` trigger `.github/workflows/deploy.yml`, which deploys the Leptos browser app from `crates/lsystem-web-app/dist/` to GitHub Pages.
 

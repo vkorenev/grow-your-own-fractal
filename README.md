@@ -6,11 +6,7 @@ includes an Iced native/wasm app and a browser-first Leptos app with DOM
 controls and a GPU canvas that uses WebGPU with a WebGL2 fallback on browser
 wasm targets.
 
----
-
-## For Users
-
-### What are L-Systems?
+## What are L-Systems?
 
 L-Systems are formal string-rewriting grammars originally developed to model
 plant growth. You define a starting string (the *axiom*) and a set of
@@ -31,7 +27,7 @@ iter 1:  F-F++F-F  ++  F-F++F-F  ++  F-F++F-F
 
 Each `F` is replaced; `+` has no rule, so it passes through unchanged.
 
-### Alphabet
+## Alphabet
 
 Every character in the axiom and in rule right-hand sides must be one of the
 following:
@@ -60,7 +56,7 @@ following:
 
 Any other character is a validation error.
 
-### Config format
+## Config format
 
 Each L-System is defined in a TOML file:
 
@@ -117,35 +113,16 @@ flat TOML with top-level `name`, `axiom`, `[rules]`, `background_color`, or
 black when omitted. All present colors are RGB arrays with finite components in
 the 0-1 range, including `hue_cycle`'s RGB `initial` color.
 
+Whitespace inside `axiom` and rule strings is stripped before processing, so
+you can break long rules across lines for readability.
+
 HSV movement is a playback control in the UI for `hue_cycle` line colors. It
 temporarily offsets the rendered hue start while it is enabled; it is not a TOML
 field and does not change the stored `initial` color. If another line color mode
 is active, the saved movement state is ignored until `hue_cycle` is selected
 again.
 
-Config parsing is format-preserving: parsing and serializing an unchanged TOML
-document keeps comments, spacing, and string quoting intact. Newly generated
-TOML writes axiom/rule text as literal strings when possible and keeps color
-arrays inline.
-
-Each config entry keeps one last-applied TOML document and, only when needed,
-an unapplied draft while the app is open. The UI owns which entry is selected,
-and switching entries preserves unapplied edits. **Copy** creates a renamed
-custom copy of the selected entry, preserving that entry's draft text separately
-from the last-applied document, **Apply** validates and renders the current
-draft, **Revert** drops the unapplied draft, and **Reset** restores the bundled
-preset default after an applied preset has diverged from that default. Custom
-entries exist only for the current session and do not have a bundled default to
-reset to. While a draft differs from the last-applied TOML document,
-config-affecting controls and export buttons are hidden until the draft is
-applied or reverted. On a clean entry, changing the iteration, angle,
-background, or line color controls updates the last-applied TOML document as
-well as the rendered scene.
-
-Whitespace inside `axiom` and rule strings is stripped before processing, so
-you can break long rules across lines for readability.
-
-### Controls
+## Controls
 
 **2D**
 
@@ -170,7 +147,7 @@ hue cycle over time without changing the config text.
 | `F` | Reset camera to fit the fractal |
 | Auto-rotate toggle | Continuously orbit around the Y axis at the configured speed |
 
-### Exporting
+## Exporting
 
 The **Export SVG** button saves the current fractal as a resolution-independent
 SVG file. SVG export is only available for 2D fractals.
@@ -179,7 +156,7 @@ PNG width. For 3D fractals, PNG captures the current camera orientation.
 Exports use the static colors from the active config, not any transient HSV
 movement phase currently visible in the UI.
 
-### Bundled presets
+## Bundled presets
 
 | File | Name | Description |
 |------|------|-------------|
@@ -197,133 +174,7 @@ movement phase currently visible in the UI.
 | `presets/ternary_tree_3d.toml` | 3D Ternary Tree | Branching tree that splits into three pitched branches at each recursive step. |
 | `presets/tree_3d.toml` | 3D Tree | Symmetric 3D tree that combines yaw, pitch, and roll for multi-directional branching. |
 
----
-
-## For Developers
-
-### Prerequisites
-
-| Tool | Purpose |
-|------|---------|
-| [Rust](https://rustup.rs/) stable | compiler (version pinned in `rust-toolchain.toml`) |
-| [mise](https://mise.jdx.dev/) | installs pinned tools — trunk (version pinned in `mise.toml`) |
-| Modern browser | WebGPU support, or WebGL2 for the fallback renderer |
-
-```sh
-mise install   # installs trunk at the version pinned in mise.toml
-```
-
-The Iced dependency is pinned to a specific upstream git revision in the
-workspace manifest so the Iced renderer and the shared `wgpu` dependency stay on
-the same major version. Update them together.
-
-### Building
-
-**Native:**
-
-```sh
-cargo run -p lsystem-app
-```
-
-**Web — browser app development server:**
-
-```sh
-trunk serve --config crates/lsystem-web-app/Trunk.toml
-```
-
-This serves the Leptos/DOM app at <http://127.0.0.1:8081/>.
-
-**Web — browser app release build:**
-
-```sh
-trunk build --release --config crates/lsystem-web-app/Trunk.toml
-```
-
-The release output is written to `crates/lsystem-web-app/dist/`.
-
-**Web — Iced app:**
-
-```sh
-trunk serve --config crates/lsystem-app/Trunk.toml
-trunk build --release --config crates/lsystem-app/Trunk.toml
-```
-
-### Running tests
-
-```sh
-cargo test --workspace --all-features --all-targets
-```
-
-### Project structure
-
-```
-Cargo.toml                  workspace manifest
-rust-toolchain.toml         pins stable Rust + wasm32 target + components
-mise.toml                   pins trunk version (read by CI and local dev)
-.github/workflows/ci.yml    fmt · clippy · test · wasm-check · trunk-build
-.github/workflows/deploy.yml deploys the Leptos web app to GitHub Pages
-
-crates/
-  lsystem-core/             pure Rust, no rendering deps
-    src/
-      config.rs             ConfigSource (format-preserving TOML) → ConfigDocument (validated pair) → Config/GenerationConfig
-      alphabet.rs           reserved-symbol sets, validation
-      grammar.rs            axiom + rule expansion (N iterations); OwnedExpandIter for lifetime-free streaming
-      turtle/
-        turtle2d.rs         Segments2D<I>: pull iterator yielding [Vec2; 2] segments lazily
-        turtle3d.rs         Segments3D<I>: pull iterator yielding [Vec3; 2] segments using Quat orientation
-      svg_export.rs         SVG export — export_svg(config) -> String (enabled by the `svg` Cargo feature)
-  lsystem-renderer/         toolkit-independent wgpu renderer (no egui)
-    src/
-      camera.rs             shared pan/zoom/orbit state and view transform (2D and 3D)
-      line_renderer.rs      Vertex2D/Vertex3D, LinePipeline2D/LinePipeline3D, GrowableVertexBuffer, GpuContext
-      lsystem_bridge.rs     L-system→GPU adapters: geometry_to_vertices, geometry_to_vertices_3d, color_params_from_config
-      png_export.rs         offscreen wgpu PNG renderer (enabled by the `png` Cargo feature)
-      wgpu_util.rs          shared wgpu instance/device/error-handler helpers
-      shader.wgsl           2D vertex + fragment shaders
-      shader3d.wgsl         3D vertex + fragment shaders with MVP matrix uniform
-  lsystem-app/              Iced native app, plus retained Iced web entry point
-    src/
-      main.rs               native entry point
-      lib.rs                crate entry points for native and web
-      ui.rs                 Iced UI module shell
-      ui/app_state.rs       app state, update loop, async geometry generation, preset/config handling
-      ui/controls.rs        Iced controls and side panel layout
-      ui/fractal_canvas.rs  Iced shader widget integration and viewport input handling
-      export.rs             native/browser SVG and PNG export helpers
-  lsystem-web-app/          browser-first Leptos app with DOM controls and a GPU canvas
-    src/
-      lib.rs                wasm entry point
-      app.rs                Leptos app, DOM controls, viewport input, GPU error display
-      presets.rs            embedded preset loading and effective-config helpers
-      export.rs             browser SVG/PNG download helpers
-      renderer.rs           canvas-owned wgpu renderer using lsystem-renderer, including surface recovery
-
-crates/lsystem-app/index.html         Iced web Trunk entry
-crates/lsystem-app/Trunk.toml         Iced web Trunk config
-crates/lsystem-web-app/index.html     Leptos web Trunk entry
-crates/lsystem-web-app/Trunk.toml     Leptos web Trunk config
-
-presets/                    bundled TOML L-System definitions
-```
-
-### CI
-
-Every push and pull request to `main` runs five jobs:
-
-| Job | Commands |
-|-----|----------|
-| fmt | `cargo fmt --check --all` |
-| clippy | `cargo clippy --workspace -- -D warnings`; `cargo clippy --workspace --all-features -- -D warnings` |
-| test | `cargo test --workspace --all-features --all-targets` |
-| wasm-check | workspace `cargo check` and `cargo clippy` for `wasm32-unknown-unknown`, with default and all features |
-| trunk-build | release builds for `crates/lsystem-app/Trunk.toml` and `crates/lsystem-web-app/Trunk.toml` |
-
-Successful CI runs on `main` trigger the deploy workflow, which builds
-`crates/lsystem-web-app` with the repository GitHub Pages public URL and deploys
-`crates/lsystem-web-app/dist/`.
-
-### License
+## License
 
 Licensed under either of:
 
