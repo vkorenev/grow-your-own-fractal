@@ -4,8 +4,8 @@ use iced::widget::{
 };
 use iced::{Color, Element, Length, Theme};
 use lsystem_app_model::{
-    HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND, HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
-    HsvMovement, HsvMovementDirection, LineColorMode,
+    HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
+    HueRotation, HueRotationDirection, LineColorMode,
 };
 use lsystem_core::LineColorConfig;
 
@@ -61,7 +61,7 @@ impl FractalApp {
                     slider(1.0..=180.0, config.generation.angle, Message::AngleChanged).step(0.5),
                 );
 
-            controls = push_color_controls(controls, config, &self.hsv_movement);
+            controls = push_color_controls(controls, config, &self.hue_rotation);
 
             controls = controls.push(text("PNG width").size(13)).push(
                 text_input("2048", &self.png_width_text)
@@ -137,7 +137,7 @@ impl FractalApp {
 fn push_color_controls<'a>(
     mut controls: iced::widget::Column<'a, Message>,
     config: &'a lsystem_core::Config,
-    hsv_movement: &HsvMovement,
+    hue_rotation: &HueRotation,
 ) -> iced::widget::Column<'a, Message> {
     let background = config.colors.background;
     controls = controls.push(
@@ -184,38 +184,38 @@ fn push_color_controls<'a>(
                 Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
             })),
         LineColorConfig::HueCycle { initial } => {
-            let movement_label = if hsv_movement.is_enabled() {
-                "HSV movement: On"
+            let rotation_label = if hue_rotation.is_enabled() {
+                "Hue rotation: On"
             } else {
-                "HSV movement: Off"
+                "Hue rotation: Off"
             };
             controls
                 .push(rgb_controls("Initial RGB", initial, |initial| {
                     Message::LineColorChanged(LineColorConfig::HueCycle { initial })
                 }))
-                .push(button(movement_label).on_press(Message::ToggleHsvMovement))
+                .push(button(rotation_label).on_press(Message::ToggleHueRotation))
                 .push(
                     pick_list(
-                        Some(hsv_movement.direction()),
-                        HsvMovementDirection::ALL,
+                        Some(hue_rotation.direction()),
+                        HueRotationDirection::ALL,
                         |choice| choice.to_string(),
                     )
-                    .on_select(Message::SetHsvMovementDirection)
+                    .on_select(Message::SetHueRotationDirection)
                     .width(Length::Fill),
                 )
                 .push(
                     text(format!(
-                        "Movement speed: {:.0} °/s",
-                        hsv_movement.speed_degrees_per_second()
+                        "Rotation speed: {:.0} °/s",
+                        hue_rotation.speed_degrees_per_second()
                     ))
                     .size(13),
                 )
                 .push(
                     slider(
-                        HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND
-                            ..=HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-                        hsv_movement.speed_degrees_per_second(),
-                        Message::SetHsvMovementSpeed,
+                        HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND
+                            ..=HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+                        hue_rotation.speed_degrees_per_second(),
+                        Message::SetHueRotationSpeed,
                     )
                     .step(1.0),
                 )

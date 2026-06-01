@@ -4,8 +4,8 @@ use crate::renderer::{CanvasRenderer, RenderStatus};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HsvMovement, HsvMovementDirection,
-    LineColorMode, advance_hsv_phase_degrees, hex_to_rgb, load_presets, rgb_to_hex,
+    CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
+    LineColorMode, advance_hue_rotation_phase_degrees, hex_to_rgb, load_presets, rgb_to_hex,
 };
 use lsystem_core::{
     ColorConfig, ConfigError, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols,
@@ -31,8 +31,8 @@ pub(crate) fn App() -> impl IntoView {
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(true);
     let auto_rotate_speed = RwSignal::new(20.0f32);
-    let hsv_movement = RwSignal::new(HsvMovement::default());
-    let hsv_movement_phase = StoredValue::new(0.0f32);
+    let hue_rotation = RwSignal::new(HueRotation::default());
+    let hue_rotation_phase = StoredValue::new(0.0f32);
     let sheet_open = RwSignal::new(false);
     let sheet_drag_start: StoredValue<Option<f64>, LocalStorage> = StoredValue::new_local(None);
     // Generation counter: bumped on each animation start so older rAF loops detect
@@ -153,7 +153,7 @@ pub(crate) fn App() -> impl IntoView {
 
     let animation_active = Memo::new(move |_| {
         (auto_rotate.get() && is_3d())
-            || hsv_movement.with(|m| m.is_active(&color_config.with(|c| c.line)))
+            || hue_rotation.with(|m| m.is_active(&color_config.with(|c| c.line)))
     });
 
     let start_animation_loop = move || {
@@ -167,8 +167,8 @@ pub(crate) fn App() -> impl IntoView {
                     Err(reason) => {
                         log::error!("requestAnimationFrame failed ({reason}); stopping animation");
                         auto_rotate.set(false);
-                        hsv_movement.update(|m| m.stop());
-                        hsv_movement_phase.set_value(0.0);
+                        hue_rotation.update(|m| m.stop());
+                        hue_rotation_phase.set_value(0.0);
                         error.set(Some(
                             "Animation stopped unexpectedly. Try toggling it again.".to_string(),
                         ));
@@ -188,8 +188,8 @@ pub(crate) fn App() -> impl IntoView {
                         Dimensions::ThreeD
                     );
                 let line_color = color_config.with_untracked(|c| c.line);
-                let movement = hsv_movement.get_untracked();
-                let hsv_active = movement.is_active(&line_color);
+                let rotation = hue_rotation.get_untracked();
+                let rotation_active = rotation.is_active(&line_color);
 
                 // Clamp dt to 100 ms to prevent a large jump after the tab was backgrounded.
                 let dt = prev_ts
@@ -198,14 +198,14 @@ pub(crate) fn App() -> impl IntoView {
                 prev_ts = Some(ts);
 
                 let auto_degrees = auto_active.then(|| auto_rotate_speed.get_untracked() * dt);
-                let hue_phase = hsv_active.then(|| {
-                    let next = advance_hsv_phase_degrees(
-                        hsv_movement_phase.get_value(),
-                        movement.speed_degrees_per_second(),
+                let hue_phase = rotation_active.then(|| {
+                    let next = advance_hue_rotation_phase_degrees(
+                        hue_rotation_phase.get_value(),
+                        rotation.speed_degrees_per_second(),
                         dt,
-                        movement.direction(),
+                        rotation.direction(),
                     );
-                    hsv_movement_phase.set_value(next);
+                    hue_rotation_phase.set_value(next);
                     next
                 });
 
@@ -248,11 +248,11 @@ pub(crate) fn App() -> impl IntoView {
         ));
     };
 
-    let reset_hsv_movement = move || {
-        let was_active = hsv_movement.with_untracked(|m| m.is_enabled())
-            || hsv_movement_phase.get_value() != 0.0;
-        hsv_movement.update(|m| m.stop());
-        hsv_movement_phase.set_value(0.0);
+    let reset_hue_rotation = move || {
+        let was_active = hue_rotation.with_untracked(|m| m.is_enabled())
+            || hue_rotation_phase.get_value() != 0.0;
+        hue_rotation.update(|m| m.stop());
+        hue_rotation_phase.set_value(0.0);
         if was_active && let Some(canvas) = canvas_ref.get_untracked() {
             with_renderer(canvas, renderer, recover_after_render, |r, c| {
                 r.animate_and_render(c, None, Some(0.0))
@@ -462,18 +462,18 @@ pub(crate) fn App() -> impl IntoView {
         });
     };
 
-    let apply_hue_movement = move |dir: Option<HsvMovementDirection>| match dir {
-        None => reset_hsv_movement(),
-        Some(d) => hsv_movement.update(|m| {
+    let apply_hue_rotation = move |dir: Option<HueRotationDirection>| match dir {
+        None => reset_hue_rotation(),
+        Some(d) => hue_rotation.update(|m| {
             m.set_direction(d);
             m.start();
         }),
     };
 
-    let try_set_hue_movement = move |key: &'static str| {
+    let try_set_hue_rotation = move |key: &'static str| {
         let dir = match key {
-            "forward" => Some(HsvMovementDirection::Forward),
-            "backward" => Some(HsvMovementDirection::Reverse),
+            "forward" => Some(HueRotationDirection::Forward),
+            "backward" => Some(HueRotationDirection::Reverse),
             _ => None,
         };
         // Forward/Backward buttons are disabled when not in Hue-cycle mode;
@@ -485,12 +485,12 @@ pub(crate) fn App() -> impl IntoView {
             )
         {
             log::error!(
-                "try_set_hue_movement: direction set while not in HueCycle mode; \
+                "try_set_hue_rotation: direction set while not in HueCycle mode; \
                  disabled_keys guard may have been bypassed"
             );
             return;
         }
-        apply_hue_movement(dir);
+        apply_hue_rotation(dir);
     };
 
     view! {
@@ -1320,18 +1320,18 @@ pub(crate) fn App() -> impl IntoView {
                     <hr class="section-divider" />
 
                     <div style="display:flex;flex-direction:column;gap:6px">
-                        <span class="section-label">"Hue movement"</span>
-                        <div title=move || if !matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue movement" } else { "" }>
+                        <span class="section-label">"Hue rotation"</span>
+                        <div title=move || if !matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue rotation" } else { "" }>
                         <crate::ui::SegmentedToggle
                             options=vec![("off", "Off"), ("forward", "Forward"), ("backward", "Backward")]
                             selected=Signal::derive(move || {
-                                hsv_movement.with(|m| {
+                                hue_rotation.with(|m| {
                                     if !m.is_enabled() { "off" }
-                                    else if m.direction() == HsvMovementDirection::Forward { "forward" }
+                                    else if m.direction() == HueRotationDirection::Forward { "forward" }
                                     else { "backward" }
                                 })
                             })
-                            on_change=move |key| try_set_hue_movement(key)
+                            on_change=move |key| try_set_hue_rotation(key)
                             disabled_keys=Signal::derive(move || {
                                 if matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) {
                                     vec![]
@@ -1341,15 +1341,15 @@ pub(crate) fn App() -> impl IntoView {
                             })
                         />
                         </div>
-                        <Show when=move || hsv_movement.with(|m| m.is_enabled())>
+                        <Show when=move || hue_rotation.with(|m| m.is_enabled())>
                             <div class="spinner-row">
                                 <span class="spinner-label">"Speed (°/s)"</span>
                                 <crate::ui::Spinner
-                                    value=Signal::derive(move || hsv_movement.with(|m| format!("{:.0}", m.speed_degrees_per_second())))
+                                    value=Signal::derive(move || hue_rotation.with(|m| format!("{:.0}", m.speed_degrees_per_second())))
                                     step=1.0
                                     on_commit=move |s| {
                                         if let Ok(v) = s.parse::<f32>() {
-                                            hsv_movement.update(|m| m.set_speed(v));
+                                            hue_rotation.update(|m| m.set_speed(v));
                                         }
                                     }
                                 />
