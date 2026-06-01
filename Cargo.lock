@@ -2327,7 +2327,6 @@ name = "lsystem-core"
 version = "0.1.0"
 dependencies = [
  "glam 0.32.1",
- "log",
  "thiserror 2.0.18",
  "toml_edit",
 ]

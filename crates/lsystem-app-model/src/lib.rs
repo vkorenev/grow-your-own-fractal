@@ -5,9 +5,8 @@ pub(crate) mod presets;
 pub(crate) mod util;
 
 pub use animation::{
-    HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND, HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-    HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND, HsvMovement, HsvMovementDirection,
-    advance_hsv_phase_degrees,
+    HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND, HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
+    HsvMovement, HsvMovementDirection, advance_hsv_phase_degrees,
 };
 pub use color::{ColorControlMemory, LineColorMode};
 pub use config_workspace::{
