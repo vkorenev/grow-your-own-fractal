@@ -9,8 +9,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lsystem-core = { workspace = true, features = ["svg"] }
+lsystem-app-model = { workspace = true }
 lsystem-renderer = { workspace = true, features = ["png"] }
-include_dir.workspace = true
 log.workspace = true
 wgpu.workspace = true
 

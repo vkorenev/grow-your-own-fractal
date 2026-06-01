@@ -99,6 +99,7 @@ mise.toml                   pins trunk version (read by CI and local dev)
 crates/
   lsystem-core/             L-system config parsing, validation, expansion, turtle geometry, SVG export
   lsystem-renderer/         toolkit-independent wgpu camera, line rendering, and PNG export
+  lsystem-app-model/        toolkit-free shared app model (config workspace, presets, color, animation, utilities)
   lsystem-app/              Iced native app and retained Iced web app
   lsystem-web-app/          browser-first Leptos app with DOM controls and GPU canvas
 

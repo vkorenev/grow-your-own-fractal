@@ -1,154 +1,22 @@
+use crate::export::{export_png, export_svg};
+use crate::presets::max_iterations_for_config;
+use crate::renderer::{CanvasRenderer, RenderStatus};
 use leptos::html::Canvas;
 use leptos::prelude::*;
+use lsystem_app_model::{
+    CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HsvMovement, HsvMovementDirection,
+    LineColorMode, advance_hsv_phase_degrees, hex_to_rgb, load_presets, rgb_to_hex,
+};
 use lsystem_core::{
-    CleanMut, ColorConfig, ConfigError, ConfigWorkspace, Dimensions, EntryViewMut,
-    GenerationConfig, LineColorConfig,
+    ColorConfig, ConfigError, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
-use crate::color_input::{hex_to_rgb, rgb_to_hex};
-use crate::export::{export_png, export_svg};
-use crate::hsv_movement::{HsvMovement, HsvMovementDirection, advance_hsv_phase_degrees};
-use crate::presets::{load_presets, max_iterations_for_config};
-use crate::renderer::{CanvasRenderer, RenderStatus};
-
 type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
 
 const ROTATION_STEP_DEG: f32 = 5.0;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LineColorMode {
-    Solid,
-    Gradient,
-    HueCycle,
-    DepthGradient,
-}
-
-impl LineColorMode {
-    fn from_line_color(line_color: &LineColorConfig) -> Self {
-        match line_color {
-            LineColorConfig::Solid { .. } => Self::Solid,
-            LineColorConfig::Gradient { .. } => Self::Gradient,
-            LineColorConfig::HueCycle { .. } => Self::HueCycle,
-            LineColorConfig::DepthGradient { .. } => Self::DepthGradient,
-        }
-    }
-
-    fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "solid" => Some(Self::Solid),
-            "gradient" => Some(Self::Gradient),
-            "hue_cycle" => Some(Self::HueCycle),
-            "depth_gradient" => Some(Self::DepthGradient),
-            _ => None,
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            Self::Solid => "solid",
-            Self::Gradient => "gradient",
-            Self::HueCycle => "hue_cycle",
-            Self::DepthGradient => "depth_gradient",
-        }
-    }
-
-    fn default_line_color(self) -> LineColorConfig {
-        match self {
-            Self::Solid => LineColorConfig::DEFAULT_SOLID,
-            Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
-            Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
-            Self::DepthGradient => LineColorConfig::DEFAULT_DEPTH_GRADIENT,
-        }
-    }
-}
-
-fn contains_3d_symbols(s: &str) -> bool {
-    s.contains(['&', '^', '/', '\\'])
-}
-
-#[derive(Clone, Copy)]
-struct ColorControlMemory {
-    background: [f32; 3],
-    solid: Option<[f32; 3]>,
-    gradient: Option<([f32; 3], [f32; 3])>,
-    hue_cycle: Option<[f32; 3]>,
-    depth_gradient: Option<([f32; 3], [f32; 3])>,
-}
-
-impl ColorControlMemory {
-    fn from_colors(colors: &ColorConfig) -> Self {
-        let mut memory = Self {
-            background: colors.background.unwrap_or(ColorConfig::DEFAULT_BACKGROUND),
-            solid: None,
-            gradient: None,
-            hue_cycle: None,
-            depth_gradient: None,
-        };
-        memory.remember_line(colors.line);
-        memory
-    }
-
-    fn background(&self) -> [f32; 3] {
-        self.background
-    }
-
-    fn remember_background(&mut self, background: [f32; 3]) {
-        self.background = background;
-    }
-
-    fn remember_line(&mut self, line_color: LineColorConfig) {
-        match line_color {
-            LineColorConfig::Solid { color } => self.solid = Some(color),
-            LineColorConfig::Gradient { start, end } => self.gradient = Some((start, end)),
-            LineColorConfig::HueCycle { initial } => self.hue_cycle = Some(initial),
-            LineColorConfig::DepthGradient { start, end } => {
-                self.depth_gradient = Some((start, end));
-            }
-        }
-    }
-
-    fn line_for(&self, mode: LineColorMode) -> LineColorConfig {
-        match (mode, self) {
-            (
-                LineColorMode::Solid,
-                Self {
-                    solid: Some(color), ..
-                },
-            ) => LineColorConfig::Solid { color: *color },
-            (
-                LineColorMode::Gradient,
-                Self {
-                    gradient: Some((start, end)),
-                    ..
-                },
-            ) => LineColorConfig::Gradient {
-                start: *start,
-                end: *end,
-            },
-            (
-                LineColorMode::HueCycle,
-                Self {
-                    hue_cycle: Some(initial),
-                    ..
-                },
-            ) => LineColorConfig::HueCycle { initial: *initial },
-            (
-                LineColorMode::DepthGradient,
-                Self {
-                    depth_gradient: Some((start, end)),
-                    ..
-                },
-            ) => LineColorConfig::DepthGradient {
-                start: *start,
-                end: *end,
-            },
-            _ => mode.default_line_color(),
-        }
-    }
-}
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
@@ -1834,112 +1702,4 @@ async fn next_animation_frame() -> Result<f64, &'static str> {
         .ok()
         .and_then(|v| v.as_f64())
         .ok_or("animation frame timestamp was not a number")
-}
-
-#[cfg(test)]
-mod tests {
-    use lsystem_core::{ColorConfig, LineColorConfig};
-
-    use super::{ColorControlMemory, LineColorMode};
-    use crate::hsv_movement::{HsvMovementDirection, advance_hsv_phase_degrees};
-
-    #[test]
-    fn line_color_mode_key_round_trip() {
-        for mode in [
-            LineColorMode::Solid,
-            LineColorMode::Gradient,
-            LineColorMode::HueCycle,
-            LineColorMode::DepthGradient,
-        ] {
-            assert_eq!(LineColorMode::from_key(mode.key()), Some(mode));
-        }
-        assert_eq!(LineColorMode::from_key("unknown"), None);
-    }
-
-    #[test]
-    fn hsv_movement_phase_advances_by_speed_direction_and_wraps() {
-        assert_eq!(
-            advance_hsv_phase_degrees(350.0, 20.0, 1.0, HsvMovementDirection::Forward),
-            10.0
-        );
-        assert_eq!(
-            advance_hsv_phase_degrees(10.0, 20.0, 1.0, HsvMovementDirection::Reverse),
-            350.0
-        );
-    }
-
-    #[test]
-    fn line_color_mode_from_line_color() {
-        assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_SOLID),
-            LineColorMode::Solid
-        );
-        assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_GRADIENT),
-            LineColorMode::Gradient
-        );
-        assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_HUE_CYCLE),
-            LineColorMode::HueCycle
-        );
-        assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_DEPTH_GRADIENT),
-            LineColorMode::DepthGradient
-        );
-    }
-
-    #[test]
-    fn color_memory_remembers_solid_across_mode_switch() {
-        let solid = LineColorConfig::Solid {
-            color: [1.0, 0.0, 0.0],
-        };
-        let colors = ColorConfig {
-            background: None,
-            line: solid,
-        };
-        let mut memory = ColorControlMemory::from_colors(&colors);
-
-        // switch to gradient — solid is remembered
-        memory.remember_line(LineColorConfig::DEFAULT_GRADIENT);
-        assert_eq!(memory.line_for(LineColorMode::Solid), solid);
-        // switch back — gradient default is returned, solid still intact
-        assert_eq!(memory.line_for(LineColorMode::Solid), solid);
-    }
-
-    #[test]
-    fn color_memory_falls_back_to_default_when_slot_unset() {
-        let colors = ColorConfig {
-            background: None,
-            line: LineColorConfig::DEFAULT_SOLID,
-        };
-        let memory = ColorControlMemory::from_colors(&colors);
-        // gradient and hue_cycle slots were never set
-        assert_eq!(
-            memory.line_for(LineColorMode::Gradient),
-            LineColorMode::Gradient.default_line_color()
-        );
-        assert_eq!(
-            memory.line_for(LineColorMode::HueCycle),
-            LineColorMode::HueCycle.default_line_color()
-        );
-        assert_eq!(
-            memory.line_for(LineColorMode::DepthGradient),
-            LineColorMode::DepthGradient.default_line_color()
-        );
-    }
-
-    #[test]
-    fn color_memory_background_remembered() {
-        let bg = [0.1, 0.2, 0.3];
-        let colors = ColorConfig {
-            background: Some(bg),
-            line: LineColorConfig::DEFAULT_SOLID,
-        };
-        let mut memory = ColorControlMemory::from_colors(&colors);
-        assert_eq!(memory.background(), bg);
-
-        let new_bg = [0.9, 0.8, 0.7];
-        memory.remember_background(new_bg);
-        assert_eq!(memory.background(), new_bg);
-    }
 }

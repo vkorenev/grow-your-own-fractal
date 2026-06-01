@@ -312,7 +312,7 @@ impl ConfigSource {
         self.document.to_string()
     }
 
-    pub(crate) fn set_name(&mut self, name: &str) {
+    pub fn set_name(&mut self, name: &str) {
         if self
             .document
             .get("metadata")
@@ -323,28 +323,28 @@ impl ConfigSource {
         self.document["metadata"]["name"] = value(name);
     }
 
-    pub(crate) fn set_iterations(&mut self, iterations: u32) {
+    pub fn set_iterations(&mut self, iterations: u32) {
         set_value_preserving_decor(
             &mut self.document["l-system"]["iterations"],
             Value::from(i64::from(iterations)),
         );
     }
 
-    pub(crate) fn set_angle(&mut self, angle: f32) {
+    pub fn set_angle(&mut self, angle: f32) {
         set_value_preserving_decor(
             &mut self.document["turtle"]["angle"],
             Value::from(f64::from(angle)),
         );
     }
 
-    pub(crate) fn set_initial_heading(&mut self, initial_heading: f32) {
+    pub fn set_initial_heading(&mut self, initial_heading: f32) {
         set_value_preserving_decor(
             &mut self.document["turtle"]["initial_heading"],
             Value::from(f64::from(initial_heading)),
         );
     }
 
-    pub(crate) fn set_dimensions(&mut self, dimensions: Dimensions) {
+    pub fn set_dimensions(&mut self, dimensions: Dimensions) {
         set_value_preserving_decor(
             &mut self.document["l-system"]["dimensions"],
             Value::from(match dimensions {
@@ -354,7 +354,7 @@ impl ConfigSource {
         );
     }
 
-    pub(crate) fn set_grammar(&mut self, axiom: &str, rules: &[(char, String)]) {
+    pub fn set_grammar(&mut self, axiom: &str, rules: &[(char, String)]) {
         set_value_preserving_decor(&mut self.document["l-system"]["axiom"], Value::from(axiom));
         // The rules table is replaced wholesale rather than patched in place.
         // This intentionally discards per-rule TOML comments and whitespace —
@@ -366,7 +366,7 @@ impl ConfigSource {
         self.document["l-system"]["rules"] = Item::Table(rules_table);
     }
 
-    pub(crate) fn set_background(&mut self, background: Option<[f32; 3]>) {
+    pub fn set_background(&mut self, background: Option<[f32; 3]>) {
         match background {
             Some(background) => {
                 set_color_value_preserving_decor(
@@ -382,7 +382,7 @@ impl ConfigSource {
         }
     }
 
-    pub(crate) fn set_line_color(&mut self, line_color: &LineColorConfig) {
+    pub fn set_line_color(&mut self, line_color: &LineColorConfig) {
         let line = line_table_mut(&mut self.document);
         set_value_preserving_decor(&mut line["mode"], Value::from(line_color.mode_key()));
         match line_color {

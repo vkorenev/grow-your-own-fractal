@@ -1,3 +1,4 @@
+use lsystem_app_model::sanitize_filename;
 use lsystem_core::Config;
 use lsystem_renderer::camera::Camera;
 
@@ -106,20 +107,6 @@ pub(crate) fn choose_export_path(name: &str, kind: ExportKind) -> Option<PathBuf
 
 fn suggested_filename(name: &str, kind: ExportKind) -> String {
     sanitize_filename(name, kind.extension())
-}
-
-fn sanitize_filename(name: &str, extension: &str) -> String {
-    let base: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("{base}.{extension}")
 }
 
 #[cfg(not(target_arch = "wasm32"))]

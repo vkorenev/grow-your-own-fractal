@@ -1,11 +1,11 @@
 use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
-use include_dir::{Dir, include_dir};
-use lsystem_core::{
-    CleanMut, ColorConfig, Config, ConfigError, ConfigWorkspace, Dimensions, EntryViewMut,
-    LineColorConfig,
+use lsystem_app_model::{
+    CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HsvMovement, HsvMovementDirection,
+    LineColorMode, advance_hsv_phase_degrees, load_presets,
 };
+use lsystem_core::{Config, ConfigError, Dimensions, LineColorConfig};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -18,230 +18,8 @@ use crate::export::{ExportKind, ExportOutcome, ExportRequest, handle_export};
 use super::fractal_canvas::{Scene, SceneBuildResult, build_scene};
 use super::{PNG_MAX_WIDTH, PNG_MIN_WIDTH};
 
-static PRESETS_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
-
 const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
-const HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND: f32 = 15.0;
-pub(super) const HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND: f32 = 1.0;
-pub(super) const HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND: f32 = 60.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LineColorMode {
-    Solid,
-    Gradient,
-    HueCycle,
-    DepthGradient,
-}
-
-impl LineColorMode {
-    pub(super) const ALL: &'static [Self] = &[
-        Self::Solid,
-        Self::Gradient,
-        Self::HueCycle,
-        Self::DepthGradient,
-    ];
-
-    pub(super) fn from_line_color(line_color: &LineColorConfig) -> Self {
-        match line_color {
-            LineColorConfig::Solid { .. } => Self::Solid,
-            LineColorConfig::Gradient { .. } => Self::Gradient,
-            LineColorConfig::HueCycle { .. } => Self::HueCycle,
-            LineColorConfig::DepthGradient { .. } => Self::DepthGradient,
-        }
-    }
-
-    fn default_line_color(self) -> LineColorConfig {
-        match self {
-            Self::Solid => LineColorConfig::DEFAULT_SOLID,
-            Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
-            Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
-            Self::DepthGradient => LineColorConfig::DEFAULT_DEPTH_GRADIENT,
-        }
-    }
-}
-
-impl std::fmt::Display for LineColorMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Solid => "Solid",
-            Self::Gradient => "Gradient",
-            Self::HueCycle => "Hue cycle",
-            Self::DepthGradient => "Depth gradient",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HsvMovementDirection {
-    Forward,
-    Reverse,
-}
-
-impl HsvMovementDirection {
-    pub(super) const ALL: &'static [Self] = &[Self::Forward, Self::Reverse];
-
-    fn sign(self) -> f32 {
-        match self {
-            Self::Forward => 1.0,
-            Self::Reverse => -1.0,
-        }
-    }
-}
-
-impl std::fmt::Display for HsvMovementDirection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Forward => "Forward",
-            Self::Reverse => "Reverse",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct HsvMovement {
-    enabled: bool,
-    speed_degrees_per_second: f32,
-    direction: HsvMovementDirection,
-    phase_degrees: f32,
-}
-
-impl HsvMovement {
-    pub(super) fn is_enabled(self) -> bool {
-        self.enabled
-    }
-
-    pub(super) fn speed_degrees_per_second(self) -> f32 {
-        self.speed_degrees_per_second
-    }
-
-    pub(super) fn direction(self) -> HsvMovementDirection {
-        self.direction
-    }
-
-    #[cfg(test)]
-    fn phase_degrees(self) -> f32 {
-        self.phase_degrees
-    }
-
-    fn stop_and_reset(&mut self) {
-        self.enabled = false;
-        self.phase_degrees = 0.0;
-    }
-
-    fn start(&mut self) {
-        self.enabled = true;
-    }
-
-    fn set_speed(&mut self, speed: f32) {
-        self.speed_degrees_per_second = speed.clamp(
-            HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
-            HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-        );
-    }
-
-    fn set_direction(&mut self, direction: HsvMovementDirection) {
-        self.direction = direction;
-    }
-
-    fn advance(&mut self, dt_seconds: f32) {
-        self.phase_degrees = (self.phase_degrees
-            + self.direction.sign() * self.speed_degrees_per_second * dt_seconds)
-            .rem_euclid(360.0);
-    }
-}
-
-impl Default for HsvMovement {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            speed_degrees_per_second: HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND,
-            direction: HsvMovementDirection::Forward,
-            phase_degrees: 0.0,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ColorControlMemory {
-    background: [f32; 3],
-    solid: Option<[f32; 3]>,
-    gradient: Option<([f32; 3], [f32; 3])>,
-    hue_cycle: Option<[f32; 3]>,
-    depth_gradient: Option<([f32; 3], [f32; 3])>,
-}
-
-impl ColorControlMemory {
-    fn from_colors(colors: &ColorConfig) -> Self {
-        let mut memory = Self {
-            background: colors.background.unwrap_or(ColorConfig::DEFAULT_BACKGROUND),
-            solid: None,
-            gradient: None,
-            hue_cycle: None,
-            depth_gradient: None,
-        };
-        memory.remember_line(colors.line);
-        memory
-    }
-
-    fn background(&self) -> [f32; 3] {
-        self.background
-    }
-
-    fn remember_background(&mut self, background: [f32; 3]) {
-        self.background = background;
-    }
-
-    fn remember_line(&mut self, line_color: LineColorConfig) {
-        match line_color {
-            LineColorConfig::Solid { color } => self.solid = Some(color),
-            LineColorConfig::Gradient { start, end } => self.gradient = Some((start, end)),
-            LineColorConfig::HueCycle { initial } => self.hue_cycle = Some(initial),
-            LineColorConfig::DepthGradient { start, end } => {
-                self.depth_gradient = Some((start, end));
-            }
-        }
-    }
-
-    fn line_for(&self, mode: LineColorMode) -> LineColorConfig {
-        match (mode, self) {
-            (
-                LineColorMode::Solid,
-                Self {
-                    solid: Some(color), ..
-                },
-            ) => LineColorConfig::Solid { color: *color },
-            (
-                LineColorMode::Gradient,
-                Self {
-                    gradient: Some((start, end)),
-                    ..
-                },
-            ) => LineColorConfig::Gradient {
-                start: *start,
-                end: *end,
-            },
-            (
-                LineColorMode::HueCycle,
-                Self {
-                    hue_cycle: Some(initial),
-                    ..
-                },
-            ) => LineColorConfig::HueCycle { initial: *initial },
-            (
-                LineColorMode::DepthGradient,
-                Self {
-                    depth_gradient: Some((start, end)),
-                    ..
-                },
-            ) => LineColorConfig::DepthGradient {
-                start: *start,
-                end: *end,
-            },
-            _ => mode.default_line_color(),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
@@ -304,6 +82,7 @@ pub(super) struct FractalApp {
     pub(super) auto_rotate: bool,
     pub(super) auto_rotate_speed: f32,
     pub(super) hsv_movement: HsvMovement,
+    pub(super) hsv_phase_degrees: f32,
     color_memory: ColorControlMemory,
     scene_generation: Arc<AtomicU64>,
 }
@@ -330,6 +109,7 @@ impl FractalApp {
             auto_rotate: false,
             auto_rotate_speed: 45.0,
             hsv_movement: HsvMovement::default(),
+            hsv_phase_degrees: 0.0,
             color_memory,
             scene_generation: Arc::new(AtomicU64::new(0)),
         };
@@ -526,10 +306,17 @@ impl FractalApp {
                     self.scene
                         .auto_rotate_by(self.auto_rotate_speed * AUTO_ROTATE_DT_SECS);
                 }
-                if self.hsv_movement.is_enabled() && self.line_color_is_hue_cycle() {
-                    self.hsv_movement.advance(AUTO_ROTATE_DT_SECS);
-                    self.scene
-                        .set_hue_offset_degrees(self.hsv_movement.phase_degrees);
+                if self
+                    .hsv_movement
+                    .is_active(&self.selected_config().colors.line)
+                {
+                    self.hsv_phase_degrees = advance_hsv_phase_degrees(
+                        self.hsv_phase_degrees,
+                        self.hsv_movement.speed_degrees_per_second(),
+                        AUTO_ROTATE_DT_SECS,
+                        self.hsv_movement.direction(),
+                    );
+                    self.scene.set_hue_offset_degrees(self.hsv_phase_degrees);
                 }
                 Task::none()
             }
@@ -545,7 +332,9 @@ impl FractalApp {
     pub(super) fn subscription(&self) -> Subscription<Message> {
         let is_3d = self.scene.is_3d();
         let auto_rotate = self.auto_rotate;
-        let hsv_movement = self.hsv_movement.is_enabled() && self.line_color_is_hue_cycle();
+        let hsv_movement = self
+            .hsv_movement
+            .is_active(&self.selected_config().colors.line);
 
         let key_sub = event::listen_with(|event, status, _window| {
             if status == event::Status::Captured {
@@ -714,7 +503,8 @@ impl FractalApp {
     }
 
     fn reset_hsv_movement(&mut self) {
-        self.hsv_movement.stop_and_reset();
+        self.hsv_movement.stop();
+        self.hsv_phase_degrees = 0.0;
         self.scene.set_hue_offset_degrees(0.0);
     }
 
@@ -841,21 +631,6 @@ impl FractalApp {
         self.png_width_text = width.to_string();
         Ok(width)
     }
-}
-
-fn load_presets() -> Vec<(String, String)> {
-    let mut files: Vec<_> = PRESETS_DIR
-        .files()
-        .filter(|file| file.path().extension().and_then(|ext| ext.to_str()) == Some("toml"))
-        .collect();
-    files.sort_by_key(|file| file.path());
-    files
-        .into_iter()
-        .filter_map(|file| {
-            let label = file.path().display().to_string();
-            Some((label, file.contents_utf8()?.to_string()))
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1010,13 +785,13 @@ mod tests {
         let _ = app.update(Message::AnimationTick);
 
         assert!(app.hsv_movement.is_enabled());
-        assert_ne!(app.hsv_movement.phase_degrees(), 0.0);
+        assert_ne!(app.hsv_phase_degrees, 0.0);
         assert_ne!(app.scene.hue_offset_degrees(), 0.0);
 
         let _ = app.update(Message::ToggleHsvMovement);
 
         assert!(!app.hsv_movement.is_enabled());
-        assert_eq!(app.hsv_movement.phase_degrees(), 0.0);
+        assert_eq!(app.hsv_phase_degrees, 0.0);
         assert_eq!(app.scene.hue_offset_degrees(), 0.0);
     }
 
@@ -1030,7 +805,7 @@ mod tests {
         let _ = app.update(Message::ToggleHsvMovement);
 
         assert!(!app.hsv_movement.is_enabled());
-        assert_eq!(app.hsv_movement.phase_degrees(), 0.0);
+        assert_eq!(app.hsv_phase_degrees, 0.0);
     }
 
     #[test]
@@ -1056,7 +831,7 @@ mod tests {
         ));
         let _ = app.update(Message::AnimationTick);
 
-        assert_eq!(app.hsv_movement.phase_degrees(), 359.0);
+        assert_eq!(app.hsv_phase_degrees, 359.0);
     }
 
     #[test]
@@ -1066,13 +841,13 @@ mod tests {
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::HueCycle));
         let _ = app.update(Message::ToggleHsvMovement);
         let _ = app.update(Message::AnimationTick);
-        let phase_before_mode_change = app.hsv_movement.phase_degrees();
+        let phase_before_mode_change = app.hsv_phase_degrees;
 
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
         let _ = app.update(Message::AnimationTick);
 
         assert!(app.hsv_movement.is_enabled());
-        assert_eq!(app.hsv_movement.phase_degrees(), phase_before_mode_change);
+        assert_eq!(app.hsv_phase_degrees, phase_before_mode_change);
     }
 
     #[test]

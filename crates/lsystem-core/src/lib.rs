@@ -4,16 +4,13 @@ pub mod svg_export;
 pub(crate) mod alphabet;
 pub mod color_util;
 pub mod config;
-pub mod config_workspace;
 pub mod grammar;
 pub(crate) mod turtle;
 
+pub use alphabet::contains_3d_symbols;
 pub use config::{
     ColorConfig, Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, GenerationConfig,
     LineColorConfig,
-};
-pub use config_workspace::{
-    CleanMut, ConfigEntry, ConfigWorkspace, ConfigWorkspaceError, DirtyMut, EntryViewMut,
 };
 pub use grammar::max_safe_iterations;
 

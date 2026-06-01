@@ -9,10 +9,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 lsystem-core = { workspace = true, features = ["svg"] }
+lsystem-app-model = { workspace = true }
 lsystem-renderer = { workspace = true, features = ["png"] }
 console_error_panic_hook.workspace = true
 console_log.workspace = true
-include_dir.workspace = true
 js-sys.workspace = true
 leptos = { version = "0.8", features = ["csr"] }
 log.workspace = true
@@ -21,7 +21,6 @@ wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = [
     "Blob",
     "BlobPropertyBag",
-    "CssStyleDeclaration",
     "Document",
     "DomRect",
     "Element",
@@ -30,9 +29,6 @@ web-sys = { workspace = true, features = [
     "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",
-    "HtmlInputElement",
-    "HtmlSelectElement",
-    "HtmlTextAreaElement",
     "KeyboardEvent",
     "MouseEvent",
     "PointerEvent",
