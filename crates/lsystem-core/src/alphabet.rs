@@ -61,3 +61,25 @@ pub fn validate_bracket_balance(chars: &str, field: &str) -> Result<(), ConfigEr
     }
     Ok(())
 }
+
+pub fn contains_3d_symbols(s: &str) -> bool {
+    s.chars().any(|c| TERMINALS_3D.contains(c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_3d_symbols;
+
+    #[test]
+    fn recognizes_all_3d_symbols() {
+        assert!(contains_3d_symbols("F&F"));
+        assert!(contains_3d_symbols("F^F"));
+        assert!(contains_3d_symbols("F/F"));
+        assert!(contains_3d_symbols("F\\F"));
+    }
+
+    #[test]
+    fn returns_false_for_2d_only_strings() {
+        assert!(!contains_3d_symbols("F+F-F|[]"));
+    }
+}

@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::{Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig};
+use lsystem_core::{
+    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig,
+};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {

@@ -45,24 +45,35 @@ Successful CI runs on `main` trigger `.github/workflows/deploy.yml`, which deplo
 
 ## Architecture
 
-Four-crate workspace under `crates/`:
+Five-crate workspace under `crates/`:
 
 ### `lsystem-core` — pure library, zero rendering deps
 
 | Module | Role |
 |--------|------|
 | `config.rs` | Two-phase config pipeline: `ConfigSource` wraps a `toml_edit::DocumentMut` (format-preserving, parse-only); `TryFrom<ConfigSource> for ConfigDocument` validates and produces a `ConfigDocument` that pairs the source with its validated `Config`; `From<ConfigDocument> for Config` extracts ownership. Validates symbols, rules, step/angle finiteness, bracket balance, optional background color, line colors including `depth_gradient`, and per-component RGB color ranges |
-| `config_workspace.rs` | Shared session config workspace: tracks optional draft TOML, a last-applied `ConfigDocument`, and an optional bundled default document per entry; exposes indexed copy/apply/revert/reset operations while each UI owns selection. Clean entry control changes mutate the entry's last-applied TOML through validated `ConfigEntry` setters, including iteration, angle, background, and line color changes. Invalid presets are skipped with a warning at load time |
-| `alphabet.rs` | Reserved symbols (`F f + - \| [ ]` for 2D; additionally `& ^ / \` for 3D), character set validation per `dimensions` |
+| `alphabet.rs` | Reserved symbols (`F f + - \| [ ]` for 2D; additionally `& ^ / \` for 3D), character set validation per `dimensions`; `contains_3d_symbols(s: &str) -> bool` re-exported from `lsystem-core` |
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
 | `turtle/mod.rs` | Declares `turtle2d` and `turtle3d` submodules |
 | `turtle/turtle2d.rs` | `Segments2D<I>` — pull iterator over `[Vec2; 2]` segments; owns position, heading, and bracket stack; yields one segment per `'F'` without collecting |
 | `turtle/turtle3d.rs` | `Segments3D<I>` — pull iterator over `[Vec3; 2]` segments; uses `glam::Quat` orientation (heading = `orientation * Vec3::X`); dispatches `& ^ / \` pitch/roll symbols in addition to the 2D set |
 | `svg_export.rs` | `export_svg(config) -> String` — generates an SVG string; gated behind the `svg` Cargo feature |
-| `lib.rs` | Public API: `generate(generation_config) -> impl Iterator<Item = [Vec2; 2]>`, `generate_3d(generation_config) -> impl Iterator<Item = [Vec3; 2]>`, `generate_with_topological_depth(generation_config) -> impl Iterator<Item = Segment2DWithTopologicalDepth>`, and `generate_3d_with_topological_depth(generation_config) -> impl Iterator<Item = Segment3DWithTopologicalDepth>`; exposes `svg_export` when the `svg` feature is enabled |
+| `lib.rs` | Public API: `generate(generation_config) -> impl Iterator<Item = [Vec2; 2]>`, `generate_3d(generation_config) -> impl Iterator<Item = [Vec3; 2]>`, `generate_with_topological_depth(generation_config) -> impl Iterator<Item = Segment2DWithTopologicalDepth>`, and `generate_3d_with_topological_depth(generation_config) -> impl Iterator<Item = Segment3DWithTopologicalDepth>`; re-exports `contains_3d_symbols`; exposes `svg_export` when the `svg` feature is enabled |
 
 Data flow (2D): `ConfigSource::parse` → `ConfigDocument::try_from` → `Config::from` → `GenerationConfig` → `OwnedExpandIter` → `Segments2D` → streaming `[Vec2; 2]` segments.
 Data flow (3D): `ConfigSource::parse` → `ConfigDocument::try_from` → `Config::from` → `GenerationConfig` → `OwnedExpandIter` → `Segments3D` → streaming `[Vec3; 2]` segments.
+
+### `lsystem-app-model` — toolkit-independent application model
+
+Depends on `lsystem-core`. Renderer-free and toolkit-free; must not depend on `iced`, `leptos`, `web-sys`, `wasm-bindgen`, `wgpu`, or `lsystem-renderer`.
+
+| Module | Role |
+|--------|------|
+| `config_workspace.rs` | Moved from `lsystem-core`: shared session config workspace; tracks optional draft TOML, a last-applied `ConfigDocument`, and an optional bundled default document per entry; exposes indexed copy/apply/revert/reset operations while each UI owns selection |
+| `presets.rs` | `load_presets() -> Vec<(String, String)>` — embeds the `presets/` directory at compile time via `include_dir!` and returns sorted `(label, TOML text)` pairs; replaces identical helpers that previously lived in each GUI crate |
+| `color.rs` | `LineColorMode` — unified enum with `ALL`, `Display`, `from_key`/`key`, `from_line_color`, `default_line_color`; `ColorControlMemory` — per-mode color slot store for UI color picker memory |
+| `animation.rs` | `HsvMovement` (no `phase_degrees` field), `HsvMovementDirection` (with `ALL`, `Display`, `sign`), speed constants, and `advance_hsv_phase_degrees(phase, speed, dt, direction) -> f32` free function; phase accumulator stored separately by each GUI |
+| `util.rs` | `sanitize_filename`, `rgb_to_hex`, `hex_to_rgb` — pure utilities with no toolkit dependencies |
 
 ### `lsystem-renderer` — toolkit-independent wgpu renderer
 
@@ -80,7 +91,7 @@ Depends on `lsystem-core` and `wgpu`.
 
 ### `lsystem-app` — entry points and Iced UI
 
-Depends on `lsystem-core`, `lsystem-renderer`, `iced`, and browser/native export support crates.
+Depends on `lsystem-core`, `lsystem-app-model`, `lsystem-renderer`, `iced`, and browser/native export support crates.
 
 | File | Role |
 |------|------|
@@ -94,13 +105,13 @@ Depends on `lsystem-core`, `lsystem-renderer`, `iced`, and browser/native export
 
 ### `lsystem-web-app` — browser-first Leptos UI
 
-Depends on `lsystem-core`, `lsystem-renderer`, `leptos`, and browser `web-sys`/`wasm-bindgen` APIs.
+Depends on `lsystem-core`, `lsystem-app-model`, `lsystem-renderer`, `leptos`, and browser `web-sys`/`wasm-bindgen` APIs.
 
 | File | Role |
 |------|------|
 | `lib.rs` | Leptos CSR entry point |
 | `app.rs` | DOM controls for presets, TOML, overrides, viewport input, export buttons, and GPU rendering error display |
-| `presets.rs` | Embedded preset loading and effective-config helpers |
+| `presets.rs` | Effective-config helpers (`max_iterations_for_config`); preset loading delegated to `lsystem_app_model::load_presets` |
 | `export.rs` | Browser SVG/PNG download helpers |
 | `renderer.rs` | `CanvasRenderer` — owns `GpuContext`, `LinePipeline2D`, `LinePipeline3D`, `Camera`, and an `ActiveScene` enum (2D or 3D); dispatches drag to pan (2D) or orbit (3D); handles canvas resize, zoom, orbit, roll, auto-rotate, reset, and surface-loss recovery |
 | `index.html` | Trunk entry that mounts the Leptos app |
@@ -108,7 +119,7 @@ Depends on `lsystem-core`, `lsystem-renderer`, `leptos`, and browser `web-sys`/`
 
 ### `presets/`
 
-Bundled TOML L-System definitions. New fractals are added here; they are embedded at compile time via `include_dir!` in each app crate and auto-discovered — no registration step needed.
+Bundled TOML L-System definitions. New fractals are added here; they are embedded at compile time via `include_dir!` in `lsystem-app-model` (via `load_presets()`) and auto-discovered — no registration step needed.
 
 ## Key Design Decisions
 
@@ -119,7 +130,7 @@ Bundled TOML L-System definitions. New fractals are added here; they are embedde
 - **3D turtle uses quaternion orientation**: `Segments3D<I>` stores a `glam::Quat` orientation instead of a scalar heading angle. Heading = `orientation * Vec3::X`; left = `* Vec3::Y`; up = `* Vec3::Z`. Each rotation symbol applies `orientation *= Quat::from_rotation_*(angle)` in local space, so rotations compose correctly regardless of prior orientation.
 - **Whitespace in axiom/rules is stripped**: whitespace inside `axiom` and rule RHS strings is removed before validation and expansion, allowing multi-line formatting in TOML configs.
 - **Two-phase config parse/validate**: `ConfigSource` (a `toml_edit::DocumentMut` wrapper) is the output of `ConfigSource::parse`; it is format-preserving but carries no validity guarantee. `TryFrom<ConfigSource> for ConfigDocument` validates the document and, on success, stores both the source and the resulting `Config` together. Holding a `ConfigDocument` is a runtime invariant that `config()` always returns a valid value. `From<ConfigDocument> for Config` transfers ownership of the cached `Config` without re-parsing. Config parsing accepts nested v2 field paths, explicit tables, dotted keys, and implicit parent tables; canonical TOML uses explicit `[metadata]`, `[l-system]`, `[l-system.rules]`, `[turtle]`, `[colors]`, and `[colors.line]` tables. `colors.background` is optional; missing background is stored as `None` and render/export paths fall back to black.
-- **Session config workspace**: `ConfigWorkspace` is the shared source of config entry state for both UIs, while each client owns its selected entry index. Each entry stores only an optional dirty draft, a last-applied `ConfigDocument`, and an optional bundled default document; names, applied text, and `Config` values are derived from those on demand. Indexed Copy creates a renamed custom copy that preserves dirty draft text separately from the last-applied document and returns the new entry index, failed Apply keeps the current rendered scene, Revert drops the dirty draft, Reset restores bundled defaults for preset entries when the last-applied document differs from the default, custom entries have no bundled default, clean iteration/angle/background/line color changes update the entry's last-applied TOML through validated `ConfigEntry` setters, and dirty drafts disable config-affecting controls until Apply/Revert.
+- **Session config workspace**: `ConfigWorkspace` (in `lsystem-app-model`) is the shared source of config entry state for both UIs, while each client owns its selected entry index. Each entry stores only an optional dirty draft, a last-applied `ConfigDocument`, and an optional bundled default document; names, applied text, and `Config` values are derived from those on demand. Indexed Copy creates a renamed custom copy that preserves dirty draft text separately from the last-applied document and returns the new entry index, failed Apply keeps the current rendered scene, Revert drops the dirty draft, Reset restores bundled defaults for preset entries when the last-applied document differs from the default, custom entries have no bundled default, clean iteration/angle/background/line color changes update the entry's last-applied TOML through validated `ConfigEntry` setters, and dirty drafts disable config-affecting controls until Apply/Revert.
 - **Line color modes**: `LineColorConfig` supports solid RGB, traversal-order gradient, hue-cycle, and topological-depth gradient. `HueCycle { initial }` stores the starting color as an RGB array and derives HSV at the output boundary. Both UIs also expose transient HSV movement for hue-cycle mode; it advances a phase value and writes an adjusted `hue_start` color uniform, without changing TOML, presets, geometry, exports, or the config schema. The movement state is preserved but ignored while another line color mode is active. `DepthGradient { start, end }` uses turtle topological depth: the first drawn `F` segment is depth 0, each drawn `F` increments depth, `f` does not, and bracket stack push/pop restores depth with turtle position and orientation. Topological-depth geometry (`TopologicalDepthSegment2D`/`3D`) is generated when `GenerationConfig::has_stack_directives()` is true — i.e., the axiom or any rule RHS contains `[` — independent of the active color mode. On bracketless fractals `DepthGradient` is normalized to `Gradient` by `effective_colors()` before reaching the shader; the two modes produce identical output because on bracketless fractals topological depth equals segment index. All render and export paths call `Config::effective_colors()` instead of reading `config.colors` directly; `effective_colors()` normalizes `DepthGradient` to `Gradient` for bracketless fractals, ensuring PNG/SVG export never allocates the larger depth-segment buffer when it is not needed. The stored `Config.colors` and the UI color-mode picker are unaffected — a user may select `DepthGradient` before adding brackets, and the correct depth geometry activates as soon as the fractal gains a stack directive. Color-mode changes and HSV movement never trigger geometry recomputation; both pipelines handle all color modes by dispatching on `color_params.mode` in the vertex shader.
 - **Fractal lives in an Iced shader widget**: `lsystem-app` renders the fractal through `iced::widget::shader`. Iced owns the window, surface, event loop, and render pass; the custom primitive owns only the fractal GPU pipeline state.
 - **Async scene generation**: `FractalApp` schedules geometry generation with `Task::perform` when presets, TOML, iterations, or angle change. Each request gets a monotonic generation token; stale results are ignored, so rapid slider changes do not block the UI with outdated work.

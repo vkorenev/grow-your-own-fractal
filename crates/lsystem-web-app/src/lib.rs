@@ -1,9 +1,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod app;
-mod color_input;
 mod export;
-mod hsv_movement;
 mod presets;
 mod renderer;
 pub(crate) mod ui;

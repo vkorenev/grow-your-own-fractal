@@ -3,13 +3,13 @@ use iced::widget::{
     text_input,
 };
 use iced::{Color, Element, Length, Theme};
+use lsystem_app_model::{
+    HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND, HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
+    HsvMovement, HsvMovementDirection, LineColorMode,
+};
 use lsystem_core::LineColorConfig;
 
-use super::app_state::{
-    FractalApp, HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-    HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND, HsvMovement, HsvMovementDirection, LineColorMode,
-    Message,
-};
+use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {

@@ -1,0 +1,11 @@
+[package]
+name = "lsystem-app-model"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+lsystem-core = { workspace = true }
+log.workspace = true
+thiserror = "2"
+include_dir.workspace = true
