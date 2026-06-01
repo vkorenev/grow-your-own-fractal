@@ -10,15 +10,13 @@ use wasm_bindgen::closure::Closure;
 
 use crate::color_input::{hex_to_rgb, rgb_to_hex};
 use crate::export::{export_png, export_svg};
+use crate::hsv_movement::{HsvMovement, HsvMovementDirection, advance_hsv_phase_degrees};
 use crate::presets::{load_presets, max_iterations_for_config};
 use crate::renderer::{CanvasRenderer, RenderStatus};
 
 type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
 
 const ROTATION_STEP_DEG: f32 = 5.0;
-const HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND: f32 = 15.0;
-const HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND: f32 = 1.0;
-const HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND: f32 = 60.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LineColorMode {
@@ -65,34 +63,6 @@ impl LineColorMode {
             Self::DepthGradient => LineColorConfig::DEFAULT_DEPTH_GRADIENT,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HsvMovementDirection {
-    Forward,
-    Reverse,
-}
-
-impl HsvMovementDirection {
-    fn sign(self) -> f32 {
-        match self {
-            Self::Forward => 1.0,
-            Self::Reverse => -1.0,
-        }
-    }
-}
-
-fn advance_hsv_phase_degrees(
-    phase_degrees: f32,
-    speed_degrees_per_second: f32,
-    dt_seconds: f32,
-    direction: HsvMovementDirection,
-) -> f32 {
-    (phase_degrees + direction.sign() * speed_degrees_per_second * dt_seconds).rem_euclid(360.0)
-}
-
-fn hsv_movement_is_active(enabled: bool, line_color: &LineColorConfig) -> bool {
-    enabled && matches!(line_color, LineColorConfig::HueCycle { .. })
 }
 
 fn contains_3d_symbols(s: &str) -> bool {
@@ -193,10 +163,8 @@ pub(crate) fn App() -> impl IntoView {
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(true);
     let auto_rotate_speed = RwSignal::new(20.0f32);
-    let hsv_movement = RwSignal::new(false);
-    let hsv_movement_speed = RwSignal::new(HSV_MOVEMENT_DEFAULT_SPEED_DEGREES_PER_SECOND);
-    let hsv_movement_direction = RwSignal::new(HsvMovementDirection::Forward);
-    let hsv_movement_phase = RwSignal::new(0.0f32);
+    let hsv_movement = RwSignal::new(HsvMovement::default());
+    let hsv_movement_phase = StoredValue::new(0.0f32);
     let sheet_open = RwSignal::new(false);
     let sheet_drag_start: StoredValue<Option<f64>, LocalStorage> = StoredValue::new_local(None);
     // Generation counter: bumped on each animation start so older rAF loops detect
@@ -317,7 +285,7 @@ pub(crate) fn App() -> impl IntoView {
 
     let animation_active = Memo::new(move |_| {
         (auto_rotate.get() && is_3d())
-            || hsv_movement_is_active(hsv_movement.get(), &color_config.with(|c| c.line))
+            || hsv_movement.with(|m| m.is_active(&color_config.with(|c| c.line)))
     });
 
     let start_animation_loop = move || {
@@ -331,8 +299,8 @@ pub(crate) fn App() -> impl IntoView {
                     Err(reason) => {
                         log::error!("requestAnimationFrame failed ({reason}); stopping animation");
                         auto_rotate.set(false);
-                        hsv_movement.set(false);
-                        hsv_movement_phase.set(0.0);
+                        hsv_movement.update(|m| m.stop());
+                        hsv_movement_phase.set_value(0.0);
                         error.set(Some(
                             "Animation stopped unexpectedly. Try toggling it again.".to_string(),
                         ));
@@ -352,7 +320,8 @@ pub(crate) fn App() -> impl IntoView {
                         Dimensions::ThreeD
                     );
                 let line_color = color_config.with_untracked(|c| c.line);
-                let hsv_active = hsv_movement_is_active(hsv_movement.get_untracked(), &line_color);
+                let movement = hsv_movement.get_untracked();
+                let hsv_active = movement.is_active(&line_color);
 
                 // Clamp dt to 100 ms to prevent a large jump after the tab was backgrounded.
                 let dt = prev_ts
@@ -363,12 +332,12 @@ pub(crate) fn App() -> impl IntoView {
                 let auto_degrees = auto_active.then(|| auto_rotate_speed.get_untracked() * dt);
                 let hue_phase = hsv_active.then(|| {
                     let next = advance_hsv_phase_degrees(
-                        hsv_movement_phase.get_untracked(),
-                        hsv_movement_speed.get_untracked(),
+                        hsv_movement_phase.get_value(),
+                        movement.speed_degrees_per_second(),
                         dt,
-                        hsv_movement_direction.get_untracked(),
+                        movement.direction(),
                     );
-                    hsv_movement_phase.set(next);
+                    hsv_movement_phase.set_value(next);
                     next
                 });
 
@@ -412,9 +381,10 @@ pub(crate) fn App() -> impl IntoView {
     };
 
     let reset_hsv_movement = move || {
-        let was_active = hsv_movement.get_untracked() || hsv_movement_phase.get_untracked() != 0.0;
-        hsv_movement.set(false);
-        hsv_movement_phase.set(0.0);
+        let was_active = hsv_movement.with_untracked(|m| m.is_enabled())
+            || hsv_movement_phase.get_value() != 0.0;
+        hsv_movement.update(|m| m.stop());
+        hsv_movement_phase.set_value(0.0);
         if was_active && let Some(canvas) = canvas_ref.get_untracked() {
             with_renderer(canvas, renderer, recover_after_render, |r, c| {
                 r.animate_and_render(c, None, Some(0.0))
@@ -626,10 +596,10 @@ pub(crate) fn App() -> impl IntoView {
 
     let apply_hue_movement = move |dir: Option<HsvMovementDirection>| match dir {
         None => reset_hsv_movement(),
-        Some(d) => {
-            hsv_movement_direction.set(d);
-            hsv_movement.set(true);
-        }
+        Some(d) => hsv_movement.update(|m| {
+            m.set_direction(d);
+            m.start();
+        }),
     };
 
     let try_set_hue_movement = move |key: &'static str| {
@@ -1487,9 +1457,11 @@ pub(crate) fn App() -> impl IntoView {
                         <crate::ui::SegmentedToggle
                             options=vec![("off", "Off"), ("forward", "Forward"), ("backward", "Backward")]
                             selected=Signal::derive(move || {
-                                if !hsv_movement.get() { "off" }
-                                else if hsv_movement_direction.get() == HsvMovementDirection::Forward { "forward" }
-                                else { "backward" }
+                                hsv_movement.with(|m| {
+                                    if !m.is_enabled() { "off" }
+                                    else if m.direction() == HsvMovementDirection::Forward { "forward" }
+                                    else { "backward" }
+                                })
                             })
                             on_change=move |key| try_set_hue_movement(key)
                             disabled_keys=Signal::derive(move || {
@@ -1501,18 +1473,15 @@ pub(crate) fn App() -> impl IntoView {
                             })
                         />
                         </div>
-                        <Show when=move || hsv_movement.get()>
+                        <Show when=move || hsv_movement.with(|m| m.is_enabled())>
                             <div class="spinner-row">
                                 <span class="spinner-label">"Speed (°/s)"</span>
                                 <crate::ui::Spinner
-                                    value=Signal::derive(move || format!("{:.0}", hsv_movement_speed.get()))
+                                    value=Signal::derive(move || hsv_movement.with(|m| format!("{:.0}", m.speed_degrees_per_second())))
                                     step=1.0
                                     on_commit=move |s| {
                                         if let Ok(v) = s.parse::<f32>() {
-                                            hsv_movement_speed.set(v.clamp(
-                                                HSV_MOVEMENT_MIN_SPEED_DEGREES_PER_SECOND,
-                                                HSV_MOVEMENT_MAX_SPEED_DEGREES_PER_SECOND,
-                                            ));
+                                            hsv_movement.update(|m| m.set_speed(v));
                                         }
                                     }
                                 />
@@ -1871,10 +1840,8 @@ async fn next_animation_frame() -> Result<f64, &'static str> {
 mod tests {
     use lsystem_core::{ColorConfig, LineColorConfig};
 
-    use super::{
-        ColorControlMemory, HsvMovementDirection, LineColorMode, advance_hsv_phase_degrees,
-        hsv_movement_is_active,
-    };
+    use super::{ColorControlMemory, LineColorMode};
+    use crate::hsv_movement::{HsvMovementDirection, advance_hsv_phase_degrees};
 
     #[test]
     fn line_color_mode_key_round_trip() {
@@ -1899,22 +1866,6 @@ mod tests {
             advance_hsv_phase_degrees(10.0, 20.0, 1.0, HsvMovementDirection::Reverse),
             350.0
         );
-    }
-
-    #[test]
-    fn hsv_movement_is_only_active_for_hue_cycle_line_color() {
-        assert!(hsv_movement_is_active(
-            true,
-            &LineColorConfig::DEFAULT_HUE_CYCLE
-        ));
-        assert!(!hsv_movement_is_active(
-            true,
-            &LineColorConfig::DEFAULT_SOLID
-        ));
-        assert!(!hsv_movement_is_active(
-            false,
-            &LineColorConfig::DEFAULT_HUE_CYCLE
-        ));
     }
 
     #[test]
