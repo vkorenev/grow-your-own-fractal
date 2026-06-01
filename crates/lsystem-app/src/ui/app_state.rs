@@ -288,7 +288,10 @@ impl FractalApp {
             Message::ToggleHsvMovement => {
                 if self.hsv_movement.is_enabled() {
                     self.reset_hsv_movement();
-                } else if self.line_color_is_hue_cycle() {
+                } else if matches!(
+                    self.selected_config().colors.line,
+                    LineColorConfig::HueCycle { .. }
+                ) {
                     self.hsv_movement.start();
                 }
                 Task::none()
@@ -506,13 +509,6 @@ impl FractalApp {
         self.hsv_movement.stop();
         self.hsv_phase_degrees = 0.0;
         self.scene.set_hue_offset_degrees(0.0);
-    }
-
-    fn line_color_is_hue_cycle(&self) -> bool {
-        matches!(
-            self.selected_config().colors.line,
-            LineColorConfig::HueCycle { .. }
-        )
     }
 
     fn sync_controls_from_workspace(&mut self) {
@@ -800,7 +796,10 @@ mod tests {
         let (mut app, _) = FractalApp::new();
 
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
-        assert!(!app.line_color_is_hue_cycle());
+        assert!(!matches!(
+            app.selected_config().colors.line,
+            LineColorConfig::HueCycle { .. }
+        ));
 
         let _ = app.update(Message::ToggleHsvMovement);
 
