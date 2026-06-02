@@ -57,29 +57,70 @@ pub enum Dimensions {
     ThreeD,
 }
 
+/// Validated RGB color with components in `0.0..=1.0`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rgb {
+    components: [f32; 3],
+}
+
+impl Rgb {
+    pub const BLACK: Self = Self::from_array_unchecked([0.0, 0.0, 0.0]);
+    pub const DEFAULT_SOLID_LINE: Self = Self::from_array_unchecked([0.0, 0.9, 0.5]);
+    pub const DEFAULT_GRADIENT_START: Self = Self::from_array_unchecked([0.05, 0.35, 0.05]);
+    pub const DEFAULT_GRADIENT_END: Self = Self::from_array_unchecked([0.6, 0.9, 0.1]);
+    pub const DEFAULT_HUE_CYCLE_INITIAL: Self = Self::from_array_unchecked([0.9, 0.0, 0.0]);
+
+    const fn from_array_unchecked(components: [f32; 3]) -> Self {
+        Self { components }
+    }
+
+    pub fn try_new(components: [f32; 3]) -> Option<Self> {
+        components
+            .into_iter()
+            .all(|component| component.is_finite() && (0.0..=1.0).contains(&component))
+            .then_some(Self { components })
+    }
+
+    pub const fn red(self) -> f32 {
+        self.components[0]
+    }
+
+    pub const fn green(self) -> f32 {
+        self.components[1]
+    }
+
+    pub const fn blue(self) -> f32 {
+        self.components[2]
+    }
+
+    pub const fn to_array(self) -> [f32; 3] {
+        self.components
+    }
+}
+
 /// Color mode for the fractal lines.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineColorConfig {
-    Solid { color: [f32; 3] },
-    Gradient { start: [f32; 3], end: [f32; 3] },
-    HueCycle { initial: [f32; 3] },
-    DepthGradient { start: [f32; 3], end: [f32; 3] },
+    Solid { color: Rgb },
+    Gradient { start: Rgb, end: Rgb },
+    HueCycle { initial: Rgb },
+    DepthGradient { start: Rgb, end: Rgb },
 }
 
 impl LineColorConfig {
     pub const DEFAULT_SOLID: Self = Self::Solid {
-        color: [0.0, 0.9, 0.5],
+        color: Rgb::DEFAULT_SOLID_LINE,
     };
     pub const DEFAULT_GRADIENT: Self = Self::Gradient {
-        start: [0.05, 0.35, 0.05],
-        end: [0.6, 0.9, 0.1],
+        start: Rgb::DEFAULT_GRADIENT_START,
+        end: Rgb::DEFAULT_GRADIENT_END,
     };
     pub const DEFAULT_HUE_CYCLE: Self = Self::HueCycle {
-        initial: [0.9, 0.0, 0.0],
+        initial: Rgb::DEFAULT_HUE_CYCLE_INITIAL,
     };
     pub const DEFAULT_DEPTH_GRADIENT: Self = Self::DepthGradient {
-        start: [0.05, 0.35, 0.05],
-        end: [0.6, 0.9, 0.1],
+        start: Rgb::DEFAULT_GRADIENT_START,
+        end: Rgb::DEFAULT_GRADIENT_END,
     };
 
     fn mode_key(&self) -> &'static str {
@@ -105,14 +146,14 @@ impl Default for LineColorConfig {
 /// Visual color settings for background and fractal lines.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ColorConfig {
-    pub background: Option<[f32; 3]>,
+    pub background: Option<Rgb>,
     pub line: LineColorConfig,
 }
 
 impl ColorConfig {
-    pub const DEFAULT_BACKGROUND: [f32; 3] = [0.0, 0.0, 0.0];
+    pub const DEFAULT_BACKGROUND: Rgb = Rgb::BLACK;
 
-    pub fn effective_background(&self) -> [f32; 3] {
+    pub fn effective_background(&self) -> Rgb {
         self.background.unwrap_or(Self::DEFAULT_BACKGROUND)
     }
 }
@@ -425,7 +466,7 @@ impl Visitor<'_> for NumberVisitor {
     }
 }
 
-fn validate_color_components(color: [f64; 3], field: &str) -> Result<[f32; 3], ConfigError> {
+fn validate_color_components(color: [f64; 3], field: &str) -> Result<Rgb, ConfigError> {
     let color = color.map(|component| component as f32);
     for (component, value) in color.into_iter().enumerate() {
         if !value.is_finite() || !(0.0..=1.0).contains(&value) {
@@ -436,7 +477,7 @@ fn validate_color_components(color: [f64; 3], field: &str) -> Result<[f32; 3], C
             });
         }
     }
-    Ok(color)
+    Ok(Rgb::from_array_unchecked(color))
 }
 
 /// Format-preserving TOML document for an L-system configuration.
@@ -510,7 +551,7 @@ impl ConfigSource {
         self.document["l-system"]["rules"] = Item::Table(rules_table);
     }
 
-    pub fn set_background(&mut self, background: Option<[f32; 3]>) {
+    pub fn set_background(&mut self, background: Option<Rgb>) {
         match background {
             Some(background) => {
                 set_color_value_preserving_decor(
@@ -614,7 +655,7 @@ fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
     *item = Item::Value(next_value);
 }
 
-fn set_color_value_preserving_decor(item: &mut Item, color: [f32; 3]) {
+fn set_color_value_preserving_decor(item: &mut Item, color: Rgb) {
     let can_update_components = item.as_array().is_some_and(|array| {
         array.len() == 3 && array.iter().all(|value| value_as_f32(value).is_some())
     });
@@ -623,7 +664,7 @@ fn set_color_value_preserving_decor(item: &mut Item, color: [f32; 3]) {
         let array = item
             .as_array_mut()
             .expect("array shape was checked before mutation");
-        for (idx, component) in color.into_iter().enumerate() {
+        for (idx, component) in color.to_array().into_iter().enumerate() {
             array.replace(idx, color_component_value(component));
         }
     } else {
@@ -631,8 +672,12 @@ fn set_color_value_preserving_decor(item: &mut Item, color: [f32; 3]) {
     }
 }
 
-fn color_value(color: [f32; 3]) -> Value {
-    color.into_iter().map(color_component_value).collect()
+fn color_value(color: Rgb) -> Value {
+    color
+        .to_array()
+        .into_iter()
+        .map(color_component_value)
+        .collect()
 }
 
 fn color_component_value(component: f32) -> Value {
@@ -688,6 +733,33 @@ mod tests {
 
     fn parse_config(toml_str: &str) -> Result<Config, ConfigError> {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
+    }
+
+    fn rgb(components: [f32; 3]) -> Rgb {
+        Rgb::try_new(components).unwrap()
+    }
+
+    #[test]
+    fn rgb_constructs_valid_color() {
+        let rgb = rgb([0.1, 0.2, 0.3]);
+
+        assert_eq!(rgb.red(), 0.1);
+        assert_eq!(rgb.green(), 0.2);
+        assert_eq!(rgb.blue(), 0.3);
+        assert_eq!(rgb.to_array(), [0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn rgb_rejects_non_finite_and_out_of_range_components() {
+        for color in [
+            [f32::NAN, 0.0, 0.0],
+            [0.0, f32::INFINITY, 0.0],
+            [0.0, 0.0, f32::NEG_INFINITY],
+            [-0.1, 0.0, 0.0],
+            [0.0, 1.1, 0.0],
+        ] {
+            assert!(Rgb::try_new(color).is_none(), "{color:?} should fail");
+        }
     }
 
     fn assert_toml_deserialize_error_contains(err: ConfigError, fragments: &[&str]) -> String {
@@ -922,9 +994,9 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(cfg.generation.initial_heading, 0.0);
         assert_eq!(cfg.generation.iterations, 4);
         assert_eq!(cfg.generation.rules[&'F'], "F-F++F-F");
-        assert_eq!(cfg.colors.background, Some([0.0, 0.0, 0.0]));
+        assert_eq!(cfg.colors.background, Some(rgb([0.0, 0.0, 0.0])));
         match cfg.colors.line {
-            LineColorConfig::HueCycle { initial } => assert_eq!(initial, [0.25, 0.5, 0.5]),
+            LineColorConfig::HueCycle { initial } => assert_eq!(initial, rgb([0.25, 0.5, 0.5])),
             other => panic!("expected hue cycle line color, got {other:?}"),
         }
     }
@@ -945,7 +1017,10 @@ color = [0.0, 0.9, 0.5]
         );
         let cfg = parse_config(&toml).unwrap();
 
-        assert_eq!(cfg.colors.background, Some([0.2, 0.3, 0.4]));
+        assert_eq!(
+            cfg.colors.background.map(Rgb::to_array),
+            Some([0.2, 0.3, 0.4])
+        );
     }
 
     #[test]
@@ -955,11 +1030,14 @@ color = [0.0, 0.9, 0.5]
             .replace("initial = [0.25, 0.5, 0.5]", "initial = [1, 0, 0]");
         let cfg = parse_config(&toml).unwrap();
 
-        assert_eq!(cfg.colors.background, Some([0.0, 0.0, 1.0]));
+        assert_eq!(
+            cfg.colors.background.map(Rgb::to_array),
+            Some([0.0, 0.0, 1.0])
+        );
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::HueCycle {
-                initial: [1.0, 0.0, 0.0],
+                initial: rgb([1.0, 0.0, 0.0]),
             }
         );
     }
@@ -990,28 +1068,28 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(
             LineColorConfig::DEFAULT_SOLID,
             LineColorConfig::Solid {
-                color: [0.0, 0.9, 0.5],
+                color: rgb([0.0, 0.9, 0.5]),
             }
         );
         assert_eq!(LineColorConfig::default(), LineColorConfig::DEFAULT_SOLID);
         assert_eq!(
             LineColorConfig::DEFAULT_GRADIENT,
             LineColorConfig::Gradient {
-                start: [0.05, 0.35, 0.05],
-                end: [0.6, 0.9, 0.1],
+                start: rgb([0.05, 0.35, 0.05]),
+                end: rgb([0.6, 0.9, 0.1]),
             }
         );
         assert_eq!(
             LineColorConfig::DEFAULT_HUE_CYCLE,
             LineColorConfig::HueCycle {
-                initial: [0.9, 0.0, 0.0],
+                initial: rgb([0.9, 0.0, 0.0]),
             }
         );
         assert_eq!(
             LineColorConfig::DEFAULT_DEPTH_GRADIENT,
             LineColorConfig::DepthGradient {
-                start: [0.05, 0.35, 0.05],
-                end: [0.6, 0.9, 0.1],
+                start: rgb([0.05, 0.35, 0.05]),
+                end: rgb([0.6, 0.9, 0.1]),
             }
         );
     }
@@ -1032,7 +1110,7 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::Solid {
-                color: [0.0, 0.9, 0.5],
+                color: rgb([0.0, 0.9, 0.5]),
             }
         );
     }
@@ -1052,8 +1130,8 @@ end = [0.7, 0.8, 0.9]"#,
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::Gradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             }
         );
     }
@@ -1073,8 +1151,8 @@ end = [0.7, 0.8, 0.9]"#,
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::DepthGradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             }
         );
     }
@@ -1691,8 +1769,8 @@ end = [1.0, 1.0, 1.0]"#,
     fn effective_colors_normalizes_depth_gradient_to_gradient_for_bracketless() {
         let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
-        let start = [0.1, 0.2, 0.3];
-        let end = [0.7, 0.8, 0.9];
+        let start = rgb([0.1, 0.2, 0.3]);
+        let end = rgb([0.7, 0.8, 0.9]);
         cfg.colors.line = LineColorConfig::DepthGradient { start, end };
         let effective = cfg.effective_colors();
         assert_eq!(
@@ -1723,8 +1801,8 @@ end = [1.0, 1.0, 1.0]"#,
             "F = \"F[+F]F[-F]F\"",
         );
         let mut cfg = parse_config(&toml).unwrap();
-        let start = [0.1, 0.2, 0.3];
-        let end = [0.7, 0.8, 0.9];
+        let start = rgb([0.1, 0.2, 0.3]);
+        let end = rgb([0.7, 0.8, 0.9]);
         cfg.colors.line = LineColorConfig::DepthGradient { start, end };
         let effective = cfg.effective_colors();
         assert_eq!(
@@ -1748,8 +1826,8 @@ end = [1.0, 1.0, 1.0]"#,
         let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         cfg.colors.line = LineColorConfig::Gradient {
-            start: [1.0, 0.0, 0.0],
-            end: [0.0, 0.0, 1.0],
+            start: rgb([1.0, 0.0, 0.0]),
+            end: rgb([0.0, 0.0, 1.0]),
         };
         let effective = cfg.effective_colors();
         assert_eq!(effective.line, cfg.colors.line);
@@ -1761,7 +1839,7 @@ end = [1.0, 1.0, 1.0]"#,
         let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         cfg.colors.line = LineColorConfig::HueCycle {
-            initial: [1.0, 0.0, 0.0],
+            initial: rgb([1.0, 0.0, 0.0]),
         };
         let effective = cfg.effective_colors();
         assert_eq!(effective.line, cfg.colors.line);

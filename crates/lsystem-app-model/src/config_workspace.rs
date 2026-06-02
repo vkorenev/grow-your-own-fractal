@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use lsystem_core::{
-    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig,
+    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig, Rgb,
 };
 
 #[derive(Debug, Error)]
@@ -374,7 +374,7 @@ impl CleanMut<'_> {
             .update_last_applied_source(|source| source.set_grammar(axiom, rules))
     }
 
-    pub fn set_background(&mut self, background: Option<[f32; 3]>) -> Result<(), ConfigError> {
+    pub fn set_background(&mut self, background: Option<Rgb>) -> Result<(), ConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_background(background))
     }
@@ -396,6 +396,10 @@ impl DirtyMut<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rgb(components: [f32; 3]) -> Rgb {
+        Rgb::try_new(components).unwrap()
+    }
 
     fn config_text(name: &str, axiom: &str, angle: f32) -> String {
         format!(
@@ -949,14 +953,14 @@ color = [0.0, 0.9, 0.5]
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_background(Some([0.1, 0.2, 0.3]))
+            .set_background(Some(rgb([0.1, 0.2, 0.3])))
             .unwrap();
 
         let entry = workspace.selected();
         assert!(entry.draft_text().contains("background = [0.1, 0.2, 0.3]"));
         assert_eq!(
             entry.applied_config().colors.background,
-            Some([0.1, 0.2, 0.3])
+            Some(rgb([0.1, 0.2, 0.3]))
         );
         assert!(!entry.is_dirty());
     }
@@ -975,114 +979,61 @@ color = [0.0, 0.9, 0.5]
     }
 
     #[test]
-    fn clean_entry_set_background_rejects_invalid_value_and_leaves_entry_unchanged() {
-        let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        let previous_text = workspace.selected().draft_text().into_owned();
-        let previous_config = workspace.selected().applied_config().clone();
-
-        let error = clean_mut(&mut workspace)
-            .set_background(Some([0.1, 1.2, 0.3]))
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::InvalidColorComponent {
-                ref field,
-                component: 1,
-                value
-            } if field == "colors.background" && value == 1.2
-        ));
-        let entry = workspace.selected();
-        assert_eq!(entry.draft_text(), previous_text);
-        assert_eq!(entry.applied_config(), &previous_config);
-        assert!(!entry.is_dirty());
-    }
-
-    #[test]
     fn clean_entry_set_line_color_updates_solid_gradient_and_hue_cycle_configs() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: [0.2, 0.3, 0.4],
+                color: rgb([0.2, 0.3, 0.4]),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::Solid {
-                color: [0.2, 0.3, 0.4],
+                color: rgb([0.2, 0.3, 0.4]),
             }
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::Gradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             }
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::HueCycle {
-                initial: [0.25, 0.5, 0.75],
+                initial: rgb([0.25, 0.5, 0.75]),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::HueCycle {
-                initial: [0.25, 0.5, 0.75],
+                initial: rgb([0.25, 0.5, 0.75]),
             }
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::DepthGradient {
-                start: [0.2, 0.3, 0.4],
-                end: [0.5, 0.6, 0.7],
+                start: rgb([0.2, 0.3, 0.4]),
+                end: rgb([0.5, 0.6, 0.7]),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::DepthGradient {
-                start: [0.2, 0.3, 0.4],
-                end: [0.5, 0.6, 0.7],
+                start: rgb([0.2, 0.3, 0.4]),
+                end: rgb([0.5, 0.6, 0.7]),
             }
         );
-    }
-
-    #[test]
-    fn clean_entry_set_line_color_rejects_invalid_value_and_leaves_entry_unchanged() {
-        let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        let previous_text = workspace.selected().draft_text().into_owned();
-        let previous_config = workspace.selected().applied_config().clone();
-
-        let error = clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Gradient {
-                start: [0.1, 1.2, 0.3],
-                end: [0.7, 0.8, 0.9],
-            })
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            ConfigError::InvalidColorComponent {
-                ref field,
-                component: 1,
-                value
-            } if field == "colors.line.start" && value == 1.2
-        ));
-        let entry = workspace.selected();
-        assert_eq!(entry.draft_text(), previous_text);
-        assert_eq!(entry.applied_config(), &previous_config);
-        assert!(!entry.is_dirty());
     }
 
     #[test]
@@ -1092,8 +1043,8 @@ color = [0.0, 0.9, 0.5]
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1105,7 +1056,7 @@ color = [0.0, 0.9, 0.5]
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::HueCycle {
-                initial: [0.4, 0.5, 0.6],
+                initial: rgb([0.4, 0.5, 0.6]),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1117,7 +1068,7 @@ color = [0.0, 0.9, 0.5]
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: [0.2, 0.3, 0.4],
+                color: rgb([0.2, 0.3, 0.4]),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1129,8 +1080,8 @@ color = [0.0, 0.9, 0.5]
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::DepthGradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.4, 0.5, 0.6],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.4, 0.5, 0.6]),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1170,11 +1121,11 @@ color = [0.0, 0.9, 0.5] # keep line color comment
             ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_background(Some([0.1, 0.2, 0.3]))
+            .set_background(Some(rgb([0.1, 0.2, 0.3])))
             .unwrap();
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: [0.4, 0.5, 0.6],
+                color: rgb([0.4, 0.5, 0.6]),
             })
             .unwrap();
 
@@ -1217,12 +1168,12 @@ end = [ 1.0, 1.0, 1.0 ]
             ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_background(Some([0.1, 0.2, 0.3]))
+            .set_background(Some(rgb([0.1, 0.2, 0.3])))
             .unwrap();
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
-                start: [0.4, 0.5, 0.6],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.4, 0.5, 0.6]),
+                end: rgb([0.7, 0.8, 0.9]),
             })
             .unwrap();
 
@@ -1239,7 +1190,7 @@ end = [ 1.0, 1.0, 1.0 ]
         assert!(!workspace.can_reset());
 
         clean_mut(&mut workspace)
-            .set_background(Some([0.1, 0.2, 0.3]))
+            .set_background(Some(rgb([0.1, 0.2, 0.3])))
             .unwrap();
 
         assert!(workspace.can_reset());
@@ -1249,7 +1200,7 @@ end = [ 1.0, 1.0, 1.0 ]
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: [0.1, 0.2, 0.3],
+                color: rgb([0.1, 0.2, 0.3]),
             })
             .unwrap();
 
@@ -1285,11 +1236,11 @@ end = [ 1.0, 1.0, 1.0 ]
 
         {
             let mut clean = clean_mut(&mut workspace);
-            clean.set_background(Some([0.1, 0.2, 0.3])).unwrap();
+            clean.set_background(Some(rgb([0.1, 0.2, 0.3]))).unwrap();
             clean
                 .set_line_color(LineColorConfig::Gradient {
-                    start: [0.4, 0.5, 0.6],
-                    end: [0.7, 0.8, 0.9],
+                    start: rgb([0.4, 0.5, 0.6]),
+                    end: rgb([0.7, 0.8, 0.9]),
                 })
                 .unwrap();
         }
@@ -1304,13 +1255,13 @@ end = [ 1.0, 1.0, 1.0 ]
         assert!(!text.contains("[colors.line]"));
         assert_eq!(
             entry.applied_config().colors.background,
-            Some([0.1, 0.2, 0.3])
+            Some(rgb([0.1, 0.2, 0.3]))
         );
         assert_eq!(
             entry.applied_config().colors.line,
             LineColorConfig::Gradient {
-                start: [0.4, 0.5, 0.6],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.4, 0.5, 0.6]),
+                end: rgb([0.7, 0.8, 0.9]),
             }
         );
         assert!(!entry.is_dirty());

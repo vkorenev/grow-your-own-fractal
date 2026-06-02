@@ -186,7 +186,7 @@ impl CanvasRenderer {
             self.scene.max_topological_depth(),
         );
         self.hue_offset_degrees = 0.0;
-        let [r, g, b] = colors.effective_background();
+        let [r, g, b] = colors.effective_background().to_array();
         self.background = wgpu::Color {
             r: r as f64,
             g: g as f64,
@@ -207,7 +207,7 @@ impl CanvasRenderer {
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
         );
-        let [r, g, b] = colors.effective_background();
+        let [r, g, b] = colors.effective_background().to_array();
         self.background = wgpu::Color {
             r: r as f64,
             g: g as f64,

@@ -7,7 +7,7 @@ use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, LineColorMode,
 };
-use lsystem_core::LineColorConfig;
+use lsystem_core::{LineColorConfig, Rgb};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
@@ -225,14 +225,15 @@ fn push_color_controls<'a>(
 
 fn rgb_controls<'a>(
     label: &'a str,
-    color: [f32; 3],
-    message: impl Fn([f32; 3]) -> Message + Clone + 'a,
+    color: Rgb,
+    message: impl Fn(Rgb) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
+    let components = color.to_array();
     column![
         row![text(label).size(13), color_swatch(color)].spacing(8),
-        color_slider("R", color, 0, message.clone()),
-        color_slider("G", color, 1, message.clone()),
-        color_slider("B", color, 2, message),
+        color_slider("R", components, 0, message.clone()),
+        color_slider("G", components, 1, message.clone()),
+        color_slider("B", components, 2, message),
     ]
     .spacing(6)
     .into()
@@ -242,14 +243,14 @@ fn color_slider<'a>(
     label: &'a str,
     color: [f32; 3],
     component: usize,
-    message: impl Fn([f32; 3]) -> Message + 'a,
+    message: impl Fn(Rgb) -> Message + 'a,
 ) -> Element<'a, Message> {
     row![
         text(label).size(12).width(Length::Fixed(16.0)),
         slider(0.0..=1.0, color[component], move |value| {
             let mut next = color;
             next[component] = value;
-            message(next)
+            message(Rgb::try_new(next).expect("slider values are constrained to valid RGB"))
         })
         .step(0.01),
         text(format!("{:.0}", color[component] * 255.0))
@@ -261,8 +262,8 @@ fn color_slider<'a>(
     .into()
 }
 
-fn color_swatch(color: [f32; 3]) -> Element<'static, Message> {
-    let [r, g, b] = color;
+fn color_swatch(color: Rgb) -> Element<'static, Message> {
+    let [r, g, b] = color.to_array();
     container(text(""))
         .width(Length::Fixed(28.0))
         .height(Length::Fixed(18.0))
