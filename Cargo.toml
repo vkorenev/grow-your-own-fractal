@@ -14,7 +14,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 console_error_panic_hook = "0.1"
 console_log = "1"
-glam = "0.32"
+glam = "0.33"
 iced = { git = "https://github.com/iced-rs/iced", rev = "51e9c2d06613efe42c591397c91769761640570d", default-features = false }
 include_dir = "0.7"
 js-sys = "0.3"
@@ -22,6 +22,7 @@ log = "0.4"
 lsystem-core = { path = "crates/lsystem-core" }
 lsystem-renderer = { path = "crates/lsystem-renderer" }
 lsystem-app-model = { path = "crates/lsystem-app-model" }
+thiserror = "2"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = "0.3"
