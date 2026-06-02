@@ -20,7 +20,7 @@ pub fn sanitize_filename(name: &str, extension: &str) -> String {
 pub fn rgb_to_hex(rgb: Rgb) -> String {
     let [r, g, b] = rgb
         .to_array()
-        .map(|component| (component.clamp(0.0, 1.0) * 255.0).round() as u8);
+        .map(|component| (component * 255.0).round() as u8);
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
@@ -37,7 +37,7 @@ pub fn hex_to_rgb(hex: &str) -> Option<Rgb> {
     let r = parse_pair(0..2)?;
     let g = parse_pair(2..4)?;
     let b = parse_pair(4..6)?;
-    Rgb::try_new([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
+    Rgb::try_from([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]).ok()
 }
 
 #[cfg(test)]
@@ -78,11 +78,11 @@ mod tests {
     #[test]
     fn rgb_to_hex_rounds_components_to_byte_values() {
         assert_eq!(
-            rgb_to_hex(Rgb::try_new([0.0, 0.5, 1.0]).unwrap()),
+            rgb_to_hex(Rgb::try_from([0.0, 0.5, 1.0]).unwrap()),
             "#0080ff"
         );
         assert_eq!(
-            rgb_to_hex(Rgb::try_new([1.0, 0.0, 0.25]).unwrap()),
+            rgb_to_hex(Rgb::try_from([1.0, 0.0, 0.25]).unwrap()),
             "#ff0040"
         );
     }
@@ -90,12 +90,12 @@ mod tests {
     #[test]
     fn hex_to_rgb_parses_css_color_input_values() {
         assert_eq!(
-            hex_to_rgb("#0080ff").map(Rgb::to_array),
-            Some([0.0, 128.0 / 255.0, 1.0])
+            hex_to_rgb("#0080ff"),
+            Some(Rgb::try_from([0.0, 128.0 / 255.0, 1.0]).unwrap())
         );
         assert_eq!(
-            hex_to_rgb("#FF0040").map(Rgb::to_array),
-            Some([1.0, 0.0, 64.0 / 255.0])
+            hex_to_rgb("#FF0040"),
+            Some(Rgb::try_from([1.0, 0.0, 64.0 / 255.0]).unwrap())
         );
     }
 

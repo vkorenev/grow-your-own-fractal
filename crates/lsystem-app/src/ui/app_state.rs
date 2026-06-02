@@ -635,7 +635,7 @@ mod tests {
     use super::*;
 
     fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_new(components).unwrap()
+        Rgb::try_from(components).unwrap()
     }
 
     #[test]

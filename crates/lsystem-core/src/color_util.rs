@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn converts_rgb_to_hsv() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_new([0.25, 0.5, 0.5]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([0.25, 0.5, 0.5]).unwrap());
 
         assert!(close(hue, 180.0));
         assert!(close(saturation, 0.5));
@@ -43,7 +43,7 @@ mod tests {
 
     #[test]
     fn grayscale_has_zero_saturation_and_hue() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_new([0.4, 0.4, 0.4]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([0.4, 0.4, 0.4]).unwrap());
 
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
@@ -52,7 +52,7 @@ mod tests {
 
     #[test]
     fn pure_blue_maps_to_blue_hue() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_new([0.0, 0.0, 1.0]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([0.0, 0.0, 1.0]).unwrap());
 
         assert!(close(hue, 240.0));
         assert!(close(saturation, 1.0));
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn red_dominant_negative_hue_wraps() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_new([1.0, 0.0, 0.5]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([1.0, 0.0, 0.5]).unwrap());
 
         assert!(close(hue, 330.0));
         assert!(close(saturation, 1.0));

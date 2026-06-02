@@ -63,6 +63,10 @@ pub struct Rgb {
     components: [f32; 3],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("RGB components must be finite and in 0.0..=1.0")]
+pub struct RgbError;
+
 impl Rgb {
     pub const BLACK: Self = Self::from_array_unchecked([0.0, 0.0, 0.0]);
     pub const DEFAULT_SOLID_LINE: Self = Self::from_array_unchecked([0.0, 0.9, 0.5]);
@@ -72,13 +76,6 @@ impl Rgb {
 
     const fn from_array_unchecked(components: [f32; 3]) -> Self {
         Self { components }
-    }
-
-    pub fn try_new(components: [f32; 3]) -> Option<Self> {
-        components
-            .into_iter()
-            .all(|component| component.is_finite() && (0.0..=1.0).contains(&component))
-            .then_some(Self { components })
     }
 
     pub const fn red(self) -> f32 {
@@ -95,6 +92,17 @@ impl Rgb {
 
     pub const fn to_array(self) -> [f32; 3] {
         self.components
+    }
+}
+
+impl TryFrom<[f32; 3]> for Rgb {
+    type Error = RgbError;
+
+    fn try_from(components: [f32; 3]) -> Result<Self, Self::Error> {
+        invalid_rgb_component(components)
+            .is_none()
+            .then_some(Self { components })
+            .ok_or(RgbError)
     }
 }
 
@@ -468,16 +476,21 @@ impl Visitor<'_> for NumberVisitor {
 
 fn validate_color_components(color: [f64; 3], field: &str) -> Result<Rgb, ConfigError> {
     let color = color.map(|component| component as f32);
-    for (component, value) in color.into_iter().enumerate() {
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            return Err(ConfigError::InvalidColorComponent {
-                field: field.to_string(),
-                component,
-                value,
-            });
-        }
+    if let Some((component, value)) = invalid_rgb_component(color) {
+        return Err(ConfigError::InvalidColorComponent {
+            field: field.to_string(),
+            component,
+            value,
+        });
     }
     Ok(Rgb::from_array_unchecked(color))
+}
+
+fn invalid_rgb_component(color: [f32; 3]) -> Option<(usize, f32)> {
+    color
+        .into_iter()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite() || !(0.0..=1.0).contains(value))
 }
 
 /// Format-preserving TOML document for an L-system configuration.
@@ -681,17 +694,9 @@ fn color_value(color: Rgb) -> Value {
 }
 
 fn color_component_value(component: f32) -> Value {
-    let raw = if component.is_nan() {
-        "nan".to_string()
-    } else if component == f32::INFINITY {
-        "inf".to_string()
-    } else if component == f32::NEG_INFINITY {
-        "-inf".to_string()
-    } else {
-        component.to_string()
-    };
+    let raw = component.to_string();
     raw.parse()
-        .expect("f32 display output must parse as a TOML float")
+        .expect("validated RGB component display output must parse as a TOML number")
 }
 
 const LINE_COLOR_VALUE_KEYS: &[&str] = &["color", "start", "end", "initial"];
@@ -736,7 +741,7 @@ mod tests {
     }
 
     fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_new(components).unwrap()
+        Rgb::try_from(components).unwrap()
     }
 
     #[test]
@@ -758,8 +763,20 @@ mod tests {
             [-0.1, 0.0, 0.0],
             [0.0, 1.1, 0.0],
         ] {
-            assert!(Rgb::try_new(color).is_none(), "{color:?} should fail");
+            assert_eq!(Rgb::try_from(color), Err(RgbError), "{color:?} should fail");
         }
+    }
+
+    #[test]
+    fn rgb_accepts_boundary_values() {
+        assert_eq!(Rgb::try_from([0.0, 0.0, 0.0]), Ok(Rgb::BLACK));
+        assert_eq!(Rgb::try_from([1.0, 1.0, 1.0]), Ok(rgb([1.0, 1.0, 1.0])));
+    }
+
+    #[test]
+    fn rgb_try_from_array_uses_validated_constructor() {
+        assert_eq!(Rgb::try_from([0.1, 0.2, 0.3]), Ok(rgb([0.1, 0.2, 0.3])));
+        assert_eq!(Rgb::try_from([0.1, 1.2, 0.3]), Err(RgbError));
     }
 
     fn assert_toml_deserialize_error_contains(err: ConfigError, fragments: &[&str]) -> String {

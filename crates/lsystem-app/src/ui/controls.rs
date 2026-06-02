@@ -249,8 +249,8 @@ fn color_slider<'a>(
         text(label).size(12).width(Length::Fixed(16.0)),
         slider(0.0..=1.0, color[component], move |value| {
             let mut next = color;
-            next[component] = value;
-            message(Rgb::try_new(next).expect("slider values are constrained to valid RGB"))
+            next[component] = value.clamp(0.0, 1.0);
+            message(Rgb::try_from(next).expect("clamped f32 is always valid RGB"))
         })
         .step(0.01),
         text(format!("{:.0}", color[component] * 255.0))
