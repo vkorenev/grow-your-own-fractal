@@ -132,7 +132,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                colors.effective_background(),
+                colors.effective_background().to_array(),
                 |pass| {
                     pipeline.draw(pass);
                 },
@@ -169,7 +169,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                colors.effective_background(),
+                colors.effective_background().to_array(),
                 |pass| {
                     pipeline.draw(pass);
                 },

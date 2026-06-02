@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
 use lsystem_core::{
-    LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
+    LineColorConfig, Rgb, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
     color_util::rgb_to_hsv,
 };
 
@@ -327,15 +327,15 @@ pub fn color_params_from_config(
             mode: ColorMode::Solid,
             total_segments,
             max_topological_depth: 0,
-            color_start: [c[0], c[1], c[2], 1.0],
+            color_start: rgb_to_rgba(c),
             ..Default::default()
         },
         LineColorConfig::Gradient { start, end } => ColorParams {
             mode: ColorMode::Gradient,
             total_segments,
             max_topological_depth: 0,
-            color_start: [start[0], start[1], start[2], 1.0],
-            color_end: [end[0], end[1], end[2], 1.0],
+            color_start: rgb_to_rgba(start),
+            color_end: rgb_to_rgba(end),
             ..Default::default()
         },
         LineColorConfig::HueCycle { initial } => {
@@ -354,11 +354,16 @@ pub fn color_params_from_config(
             mode: ColorMode::DepthGradient,
             total_segments,
             max_topological_depth,
-            color_start: [start[0], start[1], start[2], 1.0],
-            color_end: [end[0], end[1], end[2], 1.0],
+            color_start: rgb_to_rgba(start),
+            color_end: rgb_to_rgba(end),
             ..Default::default()
         },
     }
+}
+
+fn rgb_to_rgba(rgb: Rgb) -> [f32; 4] {
+    let [r, g, b] = rgb.to_array();
+    [r, g, b, 1.0]
 }
 
 pub fn fitted_pixels_per_unit(
@@ -393,7 +398,7 @@ pub fn viewport_transform(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{Dimensions, GenerationConfig, generate};
+    use lsystem_core::{Dimensions, GenerationConfig, Rgb, generate};
     use std::collections::BTreeMap;
 
     use super::*;
@@ -404,11 +409,15 @@ mod tests {
         (a - b).abs() < EPS
     }
 
+    fn rgb(components: [f32; 3]) -> Rgb {
+        Rgb::try_from(components).unwrap()
+    }
+
     #[test]
     fn solid_maps_to_mode_solid_with_color() {
         let params = color_params_from_config(
             &LineColorConfig::Solid {
-                color: [0.2, 0.4, 0.6],
+                color: rgb([0.2, 0.4, 0.6]),
             },
             10,
             0,
@@ -424,8 +433,8 @@ mod tests {
     fn gradient_maps_to_mode_gradient_with_start_and_end_colors() {
         let params = color_params_from_config(
             &LineColorConfig::Gradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             },
             7,
             0,
@@ -442,7 +451,7 @@ mod tests {
     fn hue_cycle_initial_rgb_maps_to_hsv_uniforms() {
         let params = color_params_from_config(
             &LineColorConfig::HueCycle {
-                initial: [0.25, 0.5, 0.5],
+                initial: rgb([0.25, 0.5, 0.5]),
             },
             9,
             0,
@@ -459,8 +468,8 @@ mod tests {
     fn depth_gradient_maps_to_mode_three_with_max_topological_depth() {
         let params = color_params_from_config(
             &LineColorConfig::DepthGradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             },
             5,
             3,
@@ -477,8 +486,8 @@ mod tests {
     fn depth_gradient_preserves_zero_max_topological_depth() {
         let params = color_params_from_config(
             &LineColorConfig::DepthGradient {
-                start: [0.1, 0.2, 0.3],
-                end: [0.7, 0.8, 0.9],
+                start: rgb([0.1, 0.2, 0.3]),
+                end: rgb([0.7, 0.8, 0.9]),
             },
             1,
             0,

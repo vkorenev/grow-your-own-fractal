@@ -5,7 +5,7 @@ use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
     LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
 };
-use lsystem_core::{Config, ConfigError, Dimensions, LineColorConfig};
+use lsystem_core::{Config, ConfigError, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -32,7 +32,7 @@ pub(super) enum Message {
     IterationsChanged(u32),
     AngleChanged(f32),
     BackgroundOverrideToggled(bool),
-    BackgroundColorChanged([f32; 3]),
+    BackgroundColorChanged(Rgb),
     LineColorModeSelected(LineColorMode),
     LineColorChanged(LineColorConfig),
     PngWidthChanged(String),
@@ -634,26 +634,30 @@ impl FractalApp {
 mod tests {
     use super::*;
 
+    fn rgb(components: [f32; 3]) -> Rgb {
+        Rgb::try_from(components).unwrap()
+    }
+
     #[test]
     fn color_control_memory_uses_defaults_and_restores_edits() {
         let solid = LineColorConfig::Solid {
-            color: [0.1, 0.2, 0.3],
+            color: rgb([0.1, 0.2, 0.3]),
         };
         let gradient = LineColorConfig::Gradient {
-            start: [0.4, 0.5, 0.6],
-            end: [0.7, 0.8, 0.9],
+            start: rgb([0.4, 0.5, 0.6]),
+            end: rgb([0.7, 0.8, 0.9]),
         };
         let depth_gradient = LineColorConfig::DepthGradient {
-            start: [0.2, 0.3, 0.4],
-            end: [0.5, 0.6, 0.7],
+            start: rgb([0.2, 0.3, 0.4]),
+            end: rgb([0.5, 0.6, 0.7]),
         };
 
         let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
-            background: Some([0.8, 0.8, 0.8]),
+            background: Some(rgb([0.8, 0.8, 0.8])),
             line: solid,
         });
 
-        assert_eq!(memory.background(), [0.8, 0.8, 0.8]);
+        assert_eq!(memory.background(), rgb([0.8, 0.8, 0.8]));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
@@ -668,11 +672,11 @@ mod tests {
             LineColorConfig::DEFAULT_DEPTH_GRADIENT
         );
 
-        memory.remember_background([0.9, 0.1, 0.2]);
+        memory.remember_background(rgb([0.9, 0.1, 0.2]));
         memory.remember_line(gradient);
         memory.remember_line(depth_gradient);
 
-        assert_eq!(memory.background(), [0.9, 0.1, 0.2]);
+        assert_eq!(memory.background(), rgb([0.9, 0.1, 0.2]));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(memory.line_for(LineColorMode::Gradient), gradient);
         assert_eq!(
@@ -685,8 +689,8 @@ mod tests {
     fn clean_apply_preserves_inactive_line_color_memory() {
         let (mut app, _) = FractalApp::new();
         let gradient = LineColorConfig::Gradient {
-            start: [0.4, 0.5, 0.6],
-            end: [0.7, 0.8, 0.9],
+            start: rgb([0.4, 0.5, 0.6]),
+            end: rgb([0.7, 0.8, 0.9]),
         };
         app.color_memory.remember_line(gradient);
 
@@ -726,7 +730,7 @@ mod tests {
     #[test]
     fn background_toggle_restores_last_selected_color() {
         let (mut app, _) = FractalApp::new();
-        let background = [0.2, 0.3, 0.4];
+        let background = rgb([0.2, 0.3, 0.4]);
 
         let _ = app.update(Message::BackgroundColorChanged(background));
         let _ = app.update(Message::BackgroundOverrideToggled(false));

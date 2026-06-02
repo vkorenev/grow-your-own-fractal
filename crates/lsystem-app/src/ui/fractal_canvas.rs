@@ -106,7 +106,7 @@ impl Scene {
             ),
             geometry,
             hue_offset_degrees: 0.0,
-            background: colors.effective_background(),
+            background: colors.effective_background().to_array(),
             camera,
             geometry_revision: revision,
             color_revision: 0,
@@ -132,7 +132,7 @@ impl Scene {
             ),
             geometry,
             hue_offset_degrees: 0.0,
-            background: colors.effective_background(),
+            background: colors.effective_background().to_array(),
             camera,
             geometry_revision: revision,
             color_revision: 0,
@@ -160,7 +160,7 @@ impl Scene {
             ),
             geometry,
             hue_offset_degrees: 0.0,
-            background: colors.effective_background(),
+            background: colors.effective_background().to_array(),
             camera,
             geometry_revision: revision,
             color_revision: 0,
@@ -188,7 +188,7 @@ impl Scene {
             ),
             geometry,
             hue_offset_degrees: 0.0,
-            background: colors.effective_background(),
+            background: colors.effective_background().to_array(),
             camera,
             geometry_revision: revision,
             color_revision: 0,
@@ -281,7 +281,7 @@ impl Scene {
             self.geometry.max_topological_depth(),
         );
         self.hue_offset_degrees = 0.0;
-        self.background = colors.effective_background();
+        self.background = colors.effective_background().to_array();
         self.color_revision = self.color_revision.wrapping_add(1);
     }
 
@@ -529,7 +529,7 @@ impl Default for Scene {
             },
             color_params: ColorParams::default(),
             hue_offset_degrees: 0.0,
-            background: ColorConfig::DEFAULT_BACKGROUND,
+            background: ColorConfig::DEFAULT_BACKGROUND.to_array(),
             camera: Camera::new(),
             geometry_revision: 0,
             color_revision: 0,
