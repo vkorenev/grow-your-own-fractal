@@ -2,7 +2,7 @@
 name = "3D Plant"
 
 [l-system]
-dimensions = 3
+dimensions = "3D"
 axiom = "X"
 iterations = 6
 
@@ -12,7 +12,6 @@ F = "FF"
 
 [turtle]
 angle = 30.0
-step = 1.0
 initial_heading = 90.0
 
 [colors]

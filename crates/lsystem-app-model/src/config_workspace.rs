@@ -403,7 +403,7 @@ mod tests {
 name = "{name}"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "{axiom}"
 iterations = 1
 
@@ -433,7 +433,7 @@ color = [0.0, 0.9, 0.5]
 
     fn dotted_config_text() -> String {
         r#"metadata.name = "Dotted"
-l-system.dimensions = 2
+l-system.dimensions = "2D"
 l-system.axiom = "F"
 l-system.iterations = 1
 l-system.rules.F = "FF"
@@ -452,7 +452,7 @@ colors.line.color = [0.0, 0.9, 0.5]
 name = "Decorated"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F"
 iterations = 1 # keep iterations comment
 
@@ -912,7 +912,12 @@ color = [0.0, 0.9, 0.5]
             workspace.selected().applied_config().generation.dimensions,
             Dimensions::ThreeD
         );
-        assert!(workspace.selected().draft_text().contains("dimensions = 3"));
+        assert!(
+            workspace
+                .selected()
+                .draft_text()
+                .contains("dimensions = \"3D\"")
+        );
     }
 
     #[test]
@@ -1142,7 +1147,7 @@ color = [0.0, 0.9, 0.5]
 name = "Decorated Color"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F"
 iterations = 1
 
@@ -1184,7 +1189,7 @@ color = [0.0, 0.9, 0.5] # keep line color comment
 name = "Decorated Arrays"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F"
 iterations = 1
 

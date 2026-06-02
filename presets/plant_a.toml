@@ -2,7 +2,7 @@
 name = "Plant A"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "X"
 iterations = 7
 
@@ -12,7 +12,6 @@ F = "FF"
 
 [turtle]
 angle = 25.0
-step = 1.0
 initial_heading = 90.0
 
 [colors]

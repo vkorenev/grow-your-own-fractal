@@ -2,7 +2,7 @@
 name = "Snowflake"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "[F]+[F]+[F]+[F]+[F]+[F]"
 iterations = 4
 
@@ -11,13 +11,11 @@ F = "F[+FF][-FF]FF[+F][-F]FF"
 
 [turtle]
 angle = 60.0
-step = 1.0
-initial_heading = 0.0
 
 [colors]
 background = [0.0, 0.0, 0.0]
 
 [colors.line]
 mode = "depth_gradient"
-start = [0.9, 0.6, 1]
-end = [0.1, 0.5, 1]
+start = [0.9, 0.6, 1.0]
+end = [0.1, 0.5, 1.0]

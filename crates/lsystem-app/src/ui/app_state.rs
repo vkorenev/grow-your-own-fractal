@@ -857,7 +857,7 @@ mod tests {
 name = "3D"
 
 [l-system]
-dimensions = 3
+dimensions = "3D"
 axiom = "F"
 iterations = 1
 

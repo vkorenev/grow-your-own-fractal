@@ -220,7 +220,7 @@ mod tests {
 name = "Test"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "{axiom}"
 iterations = 1
 
@@ -248,7 +248,7 @@ background = [0.0, 0.0, 0.0]
 name = "Empty"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "+"
 iterations = 1
 
@@ -276,7 +276,7 @@ color = [0.0, 0.9, 0.5]
 name = "No Background"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F+F"
 iterations = 1
 
