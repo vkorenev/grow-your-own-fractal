@@ -2,7 +2,7 @@
 name = "Gosper Curve"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "XF"
 iterations = 4
 
@@ -12,8 +12,6 @@ Y = "-FX+YFYF++YF+FX--FX-Y"
 
 [turtle]
 angle = 60.0
-step = 1.0
-initial_heading = 0.0
 
 [colors]
 background = [0.0, 0.0, 0.0]

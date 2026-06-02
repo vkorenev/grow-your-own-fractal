@@ -2,7 +2,7 @@
 name = "Peano Curve"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "L"
 iterations = 4
 
@@ -12,8 +12,6 @@ R = "RFLFR+F+LFRFL-F-RFLFR"
 
 [turtle]
 angle = 90.0
-step = 1.0
-initial_heading = 0.0
 
 [colors]
 background = [0.0, 0.0, 0.0]

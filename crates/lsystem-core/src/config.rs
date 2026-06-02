@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Table, Value, value};
 
@@ -10,17 +12,8 @@ pub enum ConfigError {
     #[error("TOML parse error: {0}")]
     TomlParse(#[from] toml_edit::TomlError),
 
-    #[error("missing required field `{0}`")]
-    MissingField(String),
-
-    #[error("invalid value for `{field}`: expected {expected}")]
-    InvalidField {
-        field: String,
-        expected: &'static str,
-    },
-
-    #[error("unknown field `{0}`")]
-    UnknownField(String),
+    #[error("TOML deserialization error: {0}")]
+    TomlDeserialize(#[from] toml_edit::de::Error),
 
     #[error("rule key {key:?} must be a single ASCII letter")]
     InvalidRuleKey { key: String },
@@ -31,9 +24,6 @@ pub enum ConfigError {
         field: String,
         position: usize,
     },
-
-    #[error("unsupported dimensions value {0} (must be 2 or 3)")]
-    InvalidDimensions(i64),
 
     #[error("unmatched `]` at position {position} in `{field}`")]
     UnmatchedClose { field: String, position: usize },
@@ -180,33 +170,108 @@ impl GenerationConfig {
     }
 }
 
-/// Format-preserving TOML document for an L-system configuration.
-#[derive(Debug, Clone)]
-pub struct ConfigSource {
-    document: DocumentMut,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawConfig {
+    metadata: RawMetadata,
+    #[serde(rename = "l-system")]
+    l_system: RawLSystem,
+    turtle: RawTurtle,
+    colors: RawColors,
 }
 
-impl ConfigSource {
-    pub fn parse(toml_str: &str) -> Result<Self, ConfigError> {
-        Ok(Self {
-            document: toml_str.parse()?,
-        })
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawMetadata {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLSystem {
+    dimensions: RawDimensions,
+    axiom: String,
+    iterations: u32,
+    rules: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+enum RawDimensions {
+    #[serde(rename = "2D", alias = "2d")]
+    TwoD,
+    #[serde(rename = "3D", alias = "3d")]
+    ThreeD,
+}
+
+impl From<RawDimensions> for Dimensions {
+    fn from(dimensions: RawDimensions) -> Self {
+        match dimensions {
+            RawDimensions::TwoD => Self::TwoD,
+            RawDimensions::ThreeD => Self::ThreeD,
+        }
     }
+}
 
-    fn to_config(&self) -> Result<Config, ConfigError> {
-        validate_schema(&self.document)?;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTurtle {
+    #[serde(deserialize_with = "deserialize_number")]
+    angle: f64,
+    #[serde(default = "default_step", deserialize_with = "deserialize_number")]
+    step: f64,
+    #[serde(default, deserialize_with = "deserialize_number")]
+    initial_heading: f64,
+}
 
-        let metadata = required_table(&self.document, "metadata")?;
-        let l_system = required_table(&self.document, "l-system")?;
-        let rules_table = required_table(l_system, "rules")?;
-        let turtle = required_table(&self.document, "turtle")?;
-        let colors_table = required_table(&self.document, "colors")?;
-        let line_table = required_table(colors_table, "line")?;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawColors {
+    #[serde(default, deserialize_with = "deserialize_optional_rgb")]
+    background: Option<[f64; 3]>,
+    line: RawLineColor,
+}
 
-        let dimensions = required_dimensions(l_system, "l-system.dimensions")?;
-        let step = required_f32(turtle, "turtle.step")?;
-        let angle = required_f32(turtle, "turtle.angle")?;
-        let initial_heading = required_f32(turtle, "turtle.initial_heading")?;
+#[derive(Debug, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+enum RawLineColor {
+    Solid(RawSolidColor),
+    Gradient(RawGradientColors),
+    HueCycle(RawHueCycleColor),
+    DepthGradient(RawGradientColors),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSolidColor {
+    #[serde(deserialize_with = "deserialize_rgb")]
+    color: [f64; 3],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGradientColors {
+    #[serde(deserialize_with = "deserialize_rgb")]
+    start: [f64; 3],
+    #[serde(deserialize_with = "deserialize_rgb")]
+    end: [f64; 3],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHueCycleColor {
+    #[serde(deserialize_with = "deserialize_rgb")]
+    initial: [f64; 3],
+}
+
+impl TryFrom<RawConfig> for Config {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawConfig) -> Result<Self, Self::Error> {
+        let dimensions = Dimensions::from(raw.l_system.dimensions);
+
+        let angle = raw.turtle.angle as f32;
+        let step = raw.turtle.step as f32;
+        let initial_heading = raw.turtle.initial_heading as f32;
         if !step.is_finite() || step <= 0.0 {
             return Err(ConfigError::InvalidStep(step));
         }
@@ -217,94 +282,173 @@ impl ConfigSource {
             return Err(ConfigError::InvalidInitialHeading(initial_heading));
         }
 
-        // Strip whitespace from axiom and rule RHS, then validate symbols.
-        let axiom_raw = required_str(l_system, "l-system.axiom")?;
-        let axiom: String = axiom_raw.chars().filter(|c| !c.is_whitespace()).collect();
+        let axiom: String = raw
+            .l_system
+            .axiom
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         validate_symbols(&axiom, "axiom", dimensions)?;
         validate_bracket_balance(&axiom, "axiom")?;
 
         let mut rules = BTreeMap::new();
-        for (key_str, item) in rules_table.iter() {
-            let mut key_chars = key_str.chars();
-            let key = key_chars
+        for (key, rhs_raw) in raw.l_system.rules {
+            let mut key_chars = key.chars();
+            let rule_key = key_chars
                 .next()
                 .filter(|c| c.is_ascii_alphabetic())
-                .ok_or_else(|| ConfigError::InvalidRuleKey {
-                    key: key_str.to_string(),
-                })?;
+                .ok_or_else(|| ConfigError::InvalidRuleKey { key: key.clone() })?;
             if key_chars.next().is_some() {
-                return Err(ConfigError::InvalidRuleKey {
-                    key: key_str.to_string(),
-                });
+                return Err(ConfigError::InvalidRuleKey { key });
             }
 
-            let rhs_raw = item.as_str().ok_or_else(|| ConfigError::InvalidField {
-                field: format!("l-system.rules.{key}"),
-                expected: "string",
-            })?;
+            let field = format!("l-system.rules.{rule_key}");
             let rhs: String = rhs_raw.chars().filter(|c| !c.is_whitespace()).collect();
-            validate_symbols(&rhs, &format!("l-system.rules.{key}"), dimensions)?;
-            validate_bracket_balance(&rhs, &format!("l-system.rules.{key}"))?;
-            rules.insert(key, rhs);
+            validate_symbols(&rhs, &field, dimensions)?;
+            validate_bracket_balance(&rhs, &field)?;
+            rules.insert(rule_key, rhs);
         }
 
-        let background = optional_color(colors_table, "colors.background")?;
-        if let Some(background) = background {
-            validate_color(background, "colors.background")?;
-        }
-
-        let mode = required_str(line_table, "colors.line.mode")?;
-        let line = match mode {
-            "solid" => {
-                validate_keys(line_table, "colors.line", &["mode", "color"])?;
-                let color = required_color(line_table, "colors.line.color")?;
-                validate_color(color, "colors.line.color")?;
-                LineColorConfig::Solid { color }
-            }
-            "gradient" => {
-                validate_keys(line_table, "colors.line", &["mode", "start", "end"])?;
-                let start = required_color(line_table, "colors.line.start")?;
-                let end = required_color(line_table, "colors.line.end")?;
-                validate_color(start, "colors.line.start")?;
-                validate_color(end, "colors.line.end")?;
-                LineColorConfig::Gradient { start, end }
-            }
-            "hue_cycle" => {
-                validate_keys(line_table, "colors.line", &["mode", "initial"])?;
-                let initial = required_color(line_table, "colors.line.initial")?;
-                validate_color(initial, "colors.line.initial")?;
-                LineColorConfig::HueCycle { initial }
-            }
-            "depth_gradient" => {
-                validate_keys(line_table, "colors.line", &["mode", "start", "end"])?;
-                let start = required_color(line_table, "colors.line.start")?;
-                let end = required_color(line_table, "colors.line.end")?;
-                validate_color(start, "colors.line.start")?;
-                validate_color(end, "colors.line.end")?;
-                LineColorConfig::DepthGradient { start, end }
-            }
-            _ => {
-                return Err(ConfigError::InvalidField {
-                    field: "colors.line.mode".to_string(),
-                    expected: "\"solid\", \"gradient\", \"hue_cycle\", or \"depth_gradient\"",
-                });
-            }
-        };
-
-        let colors = ColorConfig { background, line };
-
-        Ok(Config {
-            name: required_str(metadata, "metadata.name")?.to_string(),
+        Ok(Self {
+            name: raw.metadata.name,
             generation: GenerationConfig {
                 dimensions,
                 axiom,
-                iterations: required_u32(l_system, "l-system.iterations")?,
+                iterations: raw.l_system.iterations,
                 angle,
                 step,
                 initial_heading,
                 rules,
             },
-            colors,
+            colors: ColorConfig {
+                background: raw
+                    .colors
+                    .background
+                    .map(|color| validate_color_components(color, "colors.background"))
+                    .transpose()?,
+                line: raw.colors.line.try_into()?,
+            },
+        })
+    }
+}
+
+impl TryFrom<RawLineColor> for LineColorConfig {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawLineColor) -> Result<Self, Self::Error> {
+        Ok(match raw {
+            RawLineColor::Solid(raw) => Self::Solid {
+                color: validate_color_components(raw.color, "colors.line.color")?,
+            },
+            RawLineColor::Gradient(raw) => Self::Gradient {
+                start: validate_color_components(raw.start, "colors.line.start")?,
+                end: validate_color_components(raw.end, "colors.line.end")?,
+            },
+            RawLineColor::HueCycle(raw) => Self::HueCycle {
+                initial: validate_color_components(raw.initial, "colors.line.initial")?,
+            },
+            RawLineColor::DepthGradient(raw) => Self::DepthGradient {
+                start: validate_color_components(raw.start, "colors.line.start")?,
+                end: validate_color_components(raw.end, "colors.line.end")?,
+            },
+        })
+    }
+}
+
+fn default_step() -> f64 {
+    1.0
+}
+
+fn deserialize_number<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(TomlNumber::deserialize(deserializer)?.0)
+}
+
+fn deserialize_rgb<'de, D>(deserializer: D) -> Result<[f64; 3], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = <[TomlNumber; 3]>::deserialize(deserializer)?;
+    Ok(values.map(|value| value.0))
+}
+
+fn deserialize_optional_rgb<'de, D>(deserializer: D) -> Result<Option<[f64; 3]>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<[TomlNumber; 3]>::deserialize(deserializer)?
+        .map(|values| values.map(|value| value.0)))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TomlNumber(f64);
+
+impl<'de> Deserialize<'de> for TomlNumber {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NumberVisitor)
+    }
+}
+
+struct NumberVisitor;
+
+impl Visitor<'_> for NumberVisitor {
+    type Value = TomlNumber;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a TOML integer or float")
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TomlNumber(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TomlNumber(value as f64))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TomlNumber(value as f64))
+    }
+}
+
+fn validate_color_components(color: [f64; 3], field: &str) -> Result<[f32; 3], ConfigError> {
+    let color = color.map(|component| component as f32);
+    for (component, value) in color.into_iter().enumerate() {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(ConfigError::InvalidColorComponent {
+                field: field.to_string(),
+                component,
+                value,
+            });
+        }
+    }
+    Ok(color)
+}
+
+/// Format-preserving TOML document for an L-system configuration.
+#[derive(Debug, Clone)]
+pub struct ConfigSource {
+    document: DocumentMut,
+}
+
+impl ConfigSource {
+    pub fn parse(toml_str: &str) -> Result<Self, ConfigError> {
+        Ok(Self {
+            document: toml_str.parse()?,
         })
     }
 
@@ -320,7 +464,7 @@ impl ConfigSource {
         {
             self.document["metadata"] = Item::Table(Table::new());
         }
-        self.document["metadata"]["name"] = value(name);
+        set_value_preserving_decor(&mut self.document["metadata"]["name"], Value::from(name));
     }
 
     pub fn set_iterations(&mut self, iterations: u32) {
@@ -348,8 +492,8 @@ impl ConfigSource {
         set_value_preserving_decor(
             &mut self.document["l-system"]["dimensions"],
             Value::from(match dimensions {
-                Dimensions::TwoD => 2i64,
-                Dimensions::ThreeD => 3i64,
+                Dimensions::TwoD => "2D",
+                Dimensions::ThreeD => "3D",
             }),
         );
     }
@@ -429,7 +573,8 @@ impl TryFrom<ConfigSource> for ConfigDocument {
     type Error = ConfigError;
 
     fn try_from(source: ConfigSource) -> Result<Self, ConfigError> {
-        let config = source.to_config()?;
+        let raw = toml_edit::de::from_document::<RawConfig>(source.document.clone())?;
+        let config = raw.try_into()?;
         Ok(Self { source, config })
     }
 }
@@ -456,66 +601,6 @@ impl ConfigDocument {
     pub fn to_toml_string(&self) -> String {
         self.source.to_toml_string()
     }
-}
-
-fn validate_schema(document: &DocumentMut) -> Result<(), ConfigError> {
-    validate_keys(document, "", &["metadata", "l-system", "turtle", "colors"])?;
-    validate_keys(required_table(document, "metadata")?, "metadata", &["name"])?;
-    validate_keys(
-        required_table(document, "l-system")?,
-        "l-system",
-        &["dimensions", "axiom", "iterations", "rules"],
-    )?;
-    validate_keys(
-        required_table(document, "turtle")?,
-        "turtle",
-        &["angle", "step", "initial_heading"],
-    )?;
-    validate_keys(
-        required_table(document, "colors")?,
-        "colors",
-        &["background", "line"],
-    )?;
-    Ok(())
-}
-
-trait TableLike {
-    fn get_item(&self, key: &str) -> Option<&Item>;
-    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a>;
-}
-
-impl TableLike for DocumentMut {
-    fn get_item(&self, key: &str) -> Option<&Item> {
-        self.get(key)
-    }
-
-    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.iter().map(|(key, _)| key))
-    }
-}
-
-impl TableLike for Table {
-    fn get_item(&self, key: &str) -> Option<&Item> {
-        self.get(key)
-    }
-
-    fn keys<'a>(&'a self) -> Box<dyn Iterator<Item = &'a str> + 'a> {
-        Box::new(self.iter().map(|(key, _)| key))
-    }
-}
-
-fn validate_keys(table: &impl TableLike, path: &str, allowed: &[&str]) -> Result<(), ConfigError> {
-    for key in table.keys() {
-        if !allowed.contains(&key) {
-            let field = if path.is_empty() {
-                key.to_string()
-            } else {
-                format!("{path}.{key}")
-            };
-            return Err(ConfigError::UnknownField(field));
-        }
-    }
-    Ok(())
 }
 
 fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
@@ -561,7 +646,7 @@ fn color_component_value(component: f32) -> Value {
         component.to_string()
     };
     raw.parse()
-        .unwrap_or_else(|_| Value::from(f64::from(component)))
+        .expect("f32 display output must parse as a TOML float")
 }
 
 const LINE_COLOR_VALUE_KEYS: &[&str] = &["color", "start", "end", "initial"];
@@ -589,129 +674,11 @@ fn line_table_mut(document: &mut DocumentMut) -> &mut Table {
         .expect("colors.line table was just ensured")
 }
 
-fn required_item<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a Item, ConfigError> {
-    let key = field.rsplit('.').next().unwrap_or(field);
-    table
-        .get_item(key)
-        .ok_or_else(|| ConfigError::MissingField(field.to_string()))
-}
-
-fn required_table<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a Table, ConfigError> {
-    let table =
-        required_item(table, field)?
-            .as_table()
-            .ok_or_else(|| ConfigError::InvalidField {
-                field: field.to_string(),
-                expected: "table",
-            })?;
-    Ok(table)
-}
-
-fn required_str<'a>(table: &'a impl TableLike, field: &str) -> Result<&'a str, ConfigError> {
-    required_item(table, field)?
-        .as_str()
-        .ok_or_else(|| ConfigError::InvalidField {
-            field: field.to_string(),
-            expected: "string",
-        })
-}
-
-fn required_dimensions(table: &impl TableLike, field: &str) -> Result<Dimensions, ConfigError> {
-    let value =
-        required_item(table, field)?
-            .as_integer()
-            .ok_or_else(|| ConfigError::InvalidField {
-                field: field.to_string(),
-                expected: "integer",
-            })?;
-    match value {
-        2 => Ok(Dimensions::TwoD),
-        3 => Ok(Dimensions::ThreeD),
-        other => Err(ConfigError::InvalidDimensions(other)),
-    }
-}
-
-fn required_u32(table: &impl TableLike, field: &str) -> Result<u32, ConfigError> {
-    let value =
-        required_item(table, field)?
-            .as_integer()
-            .ok_or_else(|| ConfigError::InvalidField {
-                field: field.to_string(),
-                expected: "integer",
-            })?;
-    u32::try_from(value).map_err(|_| ConfigError::InvalidField {
-        field: field.to_string(),
-        expected: "integer in 0..=4294967295",
-    })
-}
-
-fn required_f32(table: &impl TableLike, field: &str) -> Result<f32, ConfigError> {
-    let item = required_item(table, field)?;
-    let value = if let Some(value) = item.as_float() {
-        value
-    } else if let Some(value) = item.as_integer() {
-        value as f64
-    } else {
-        return Err(ConfigError::InvalidField {
-            field: field.to_string(),
-            expected: "number",
-        });
-    };
-    Ok(value as f32)
-}
-
-fn required_color(table: &impl TableLike, field: &str) -> Result<[f32; 3], ConfigError> {
-    let array =
-        required_item(table, field)?
-            .as_array()
-            .ok_or_else(|| ConfigError::InvalidField {
-                field: field.to_string(),
-                expected: "array of three numbers",
-            })?;
-
-    if array.len() != 3 {
-        return Err(ConfigError::InvalidField {
-            field: field.to_string(),
-            expected: "array of three numbers",
-        });
-    }
-
-    let mut out = [0.0; 3];
-    for (idx, value) in array.iter().enumerate() {
-        out[idx] = value_as_f32(value).ok_or_else(|| ConfigError::InvalidField {
-            field: format!("{field}[{idx}]"),
-            expected: "number",
-        })?;
-    }
-    Ok(out)
-}
-
-fn optional_color(table: &impl TableLike, field: &str) -> Result<Option<[f32; 3]>, ConfigError> {
-    match required_color(table, field) {
-        Ok(color) => Ok(Some(color)),
-        Err(ConfigError::MissingField(_)) => Ok(None),
-        Err(err) => Err(err),
-    }
-}
-
 fn value_as_f32(value: &Value) -> Option<f32> {
     value
         .as_float()
         .or_else(|| value.as_integer().map(|value| value as f64))
         .map(|value| value as f32)
-}
-
-fn validate_color(color: [f32; 3], field: &str) -> Result<(), ConfigError> {
-    for (component, value) in color.into_iter().enumerate() {
-        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-            return Err(ConfigError::InvalidColorComponent {
-                field: field.to_string(),
-                component,
-                value,
-            });
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -723,9 +690,47 @@ mod tests {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
     }
 
+    fn assert_toml_deserialize_error_contains(err: ConfigError, fragments: &[&str]) -> String {
+        assert!(
+            matches!(err, ConfigError::TomlDeserialize(_)),
+            "unexpected error: {err}"
+        );
+        let message = err.to_string();
+        for fragment in fragments {
+            assert!(
+                message.contains(fragment),
+                "error should mention {fragment:?}, got: {message}"
+            );
+        }
+        message
+    }
+
+    fn assert_toml_deserialize_error_mentions_path(err: ConfigError, path: &str) {
+        let message = err.to_string();
+        assert!(
+            matches!(err, ConfigError::TomlDeserialize(_)),
+            "unexpected error: {message}"
+        );
+        if let Some((parent, field)) = path.rsplit_once('.') {
+            assert!(
+                message.contains(parent),
+                "error should mention parent path {parent:?}, got: {message}"
+            );
+            assert!(
+                message.contains(field),
+                "error should mention field {field:?}, got: {message}"
+            );
+        } else {
+            assert!(
+                message.contains(path),
+                "error should mention path {path:?}, got: {message}"
+            );
+        }
+    }
+
     const KOCH_TOML: &str = r#"
 name = "Koch Snowflake"
-dimensions = 2
+dimensions = "2D"
 axiom = "F++F++F"
 iterations = 4
 angle = 60.0
@@ -740,7 +745,7 @@ F = "F-F++F-F"
 name = "Koch Snowflake"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F++F++F"
 iterations = 4
 
@@ -761,7 +766,31 @@ initial = [0.25, 0.5, 0.5]
 "#;
 
     fn test_toml(
-        dimensions: i64,
+        dimensions: Dimensions,
+        axiom: &str,
+        iterations: u32,
+        angle: &str,
+        step: &str,
+        initial_heading: &str,
+        rules: &str,
+    ) -> String {
+        let dimensions = match dimensions {
+            Dimensions::TwoD => r#""2D""#,
+            Dimensions::ThreeD => r#""3D""#,
+        };
+        test_toml_with_dimensions(
+            dimensions,
+            axiom,
+            iterations,
+            angle,
+            step,
+            initial_heading,
+            rules,
+        )
+    }
+
+    fn test_toml_with_dimensions(
+        dimensions: &str,
         axiom: &str,
         iterations: u32,
         angle: &str,
@@ -801,7 +830,7 @@ color = [0.0, 0.9, 0.5]
 name = "Styled"
 
 [l-system]
-dimensions = 3
+dimensions = "3D"
 axiom = 'F\F'
 iterations = 2
 
@@ -830,6 +859,42 @@ end = [ 0.7, 0.8, 0.9 ]
 
         assert_eq!(doc.to_string(), original);
         assert!(ConfigDocument::try_from(doc).is_ok());
+    }
+
+    #[test]
+    fn set_name_preserves_existing_value_comment() {
+        let original = r#"[metadata]
+name = "Old" # keep name comment
+
+[l-system]
+dimensions = "2D"
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "FF"
+
+[turtle]
+angle = 90.0
+
+[colors]
+background = [0.0, 0.0, 0.0]
+
+[colors.line]
+mode = "solid"
+color = [0.0, 0.9, 0.5]
+"#;
+        let mut source = ConfigSource::parse(original).unwrap();
+
+        source.set_name("New");
+
+        assert!(
+            source
+                .to_toml_string()
+                .contains(r#"name = "New" # keep name comment"#)
+        );
+        let config: Config = ConfigDocument::try_from(source).unwrap().into();
+        assert_eq!(config.name, "New");
     }
 
     #[test]
@@ -884,6 +949,43 @@ end = [ 0.7, 0.8, 0.9 ]
     }
 
     #[test]
+    fn accepts_integer_color_components() {
+        let toml = NESTED_KOCH_TOML
+            .replace("background = [0.0, 0.0, 0.0]", "background = [0, 0, 1]")
+            .replace("initial = [0.25, 0.5, 0.5]", "initial = [1, 0, 0]");
+        let cfg = parse_config(&toml).unwrap();
+
+        assert_eq!(cfg.colors.background, Some([0.0, 0.0, 1.0]));
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::HueCycle {
+                initial: [1.0, 0.0, 0.0],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_length_color_arrays() {
+        for (fragments, source, replacement) in [
+            (
+                &["colors.background", "invalid length"][..],
+                "background = [0.0, 0.0, 0.0]",
+                "background = [0.0, 0.0]",
+            ),
+            (
+                &["colors.line", "invalid length"][..],
+                "initial = [0.25, 0.5, 0.5]",
+                "initial = [0.25, 0.5, 0.5, 0.75]",
+            ),
+        ] {
+            let toml = NESTED_KOCH_TOML.replace(source, replacement);
+            let err = parse_config(&toml).unwrap_err();
+
+            assert_toml_deserialize_error_contains(err, fragments);
+        }
+    }
+
+    #[test]
     fn line_color_config_exposes_mode_defaults() {
         assert_eq!(
             LineColorConfig::DEFAULT_SOLID,
@@ -915,8 +1017,50 @@ end = [ 0.7, 0.8, 0.9 ]
     }
 
     #[test]
+    fn parses_solid_line_color() {
+        let cfg = parse_config(&test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "90.0",
+            "1.0",
+            "0.0",
+            "",
+        ))
+        .unwrap();
+
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::Solid {
+                color: [0.0, 0.9, 0.5],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_gradient_line_color() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
+            r#"mode = "solid"
+color = [0.0, 0.9, 0.5]"#,
+            r#"mode = "gradient"
+start = [0.1, 0.2, 0.3]
+end = [0.7, 0.8, 0.9]"#,
+        );
+
+        let cfg = parse_config(&toml).unwrap();
+
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::Gradient {
+                start: [0.1, 0.2, 0.3],
+                end: [0.7, 0.8, 0.9],
+            }
+        );
+    }
+
+    #[test]
     fn parses_depth_gradient_line_color() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "").replace(
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
             r#"mode = "solid"
 color = [0.0, 0.9, 0.5]"#,
             r#"mode = "depth_gradient"
@@ -951,7 +1095,7 @@ end = [0.7, 0.8, 0.9]"#,
         ];
 
         for (replacement, missing_field) in cases {
-            let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "").replace(
+            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
                 r#"mode = "solid"
 color = [0.0, 0.9, 0.5]"#,
                 replacement,
@@ -959,13 +1103,7 @@ color = [0.0, 0.9, 0.5]"#,
 
             let err = parse_config(&toml).unwrap_err();
 
-            assert!(
-                matches!(
-                    err,
-                    ConfigError::MissingField(ref field) if field == missing_field
-                ),
-                "unexpected error: {err}"
-            );
+            assert_toml_deserialize_error_mentions_path(err, missing_field);
         }
     }
 
@@ -973,7 +1111,7 @@ color = [0.0, 0.9, 0.5]"#,
     fn parses_dotted_v2_config() {
         let toml = r#"
 metadata.name = "Dotted"
-l-system.dimensions = 3
+l-system.dimensions = "3D"
 l-system.axiom = 'F\F'
 l-system.iterations = 2
 l-system.rules.F = 'F\F'
@@ -1002,7 +1140,7 @@ colors.background = [0.0, 0.0, 0.0]
 name = "Implicit Parents"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F"
 iterations = 1
 
@@ -1040,7 +1178,7 @@ color = [0.0, 0.9, 0.5]
 name = 'Formatted'
 
 [l-system] # keep this suffix
-dimensions = 3
+dimensions = "3D"
 axiom = 'F\F'
 iterations = 2
 
@@ -1079,15 +1217,18 @@ color = [0.1, 0.2, 0.3]
     }
 
     #[test]
-    fn rejects_missing_step() {
+    fn missing_step_defaults_to_one() {
         let toml = r#"
 [metadata]
 name = "test"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F"
 iterations = 1
+
+[l-system.rules]
+F = "FF"
 
 [turtle]
 angle = 90.0
@@ -1099,7 +1240,50 @@ background = [0.0, 0.0, 0.0]
 mode = "solid"
 color = [0.0, 0.9, 0.5]
 "#;
-        assert!(parse_config(toml).is_err());
+        let config = parse_config(toml).unwrap();
+        assert_eq!(config.generation.step, 1.0);
+        assert_eq!(config.generation.initial_heading, 0.0);
+    }
+
+    #[test]
+    fn missing_initial_heading_defaults_to_zero() {
+        let toml = NESTED_KOCH_TOML.replace("initial_heading = 0.0\n", "");
+        let config = parse_config(&toml).unwrap();
+        assert_eq!(config.generation.initial_heading, 0.0);
+    }
+
+    #[test]
+    fn rejects_missing_angle() {
+        let toml = NESTED_KOCH_TOML.replace("angle = 60.0\n", "");
+        let err = parse_config(&toml).unwrap_err();
+        assert_toml_deserialize_error_contains(err, &["turtle", "angle"]);
+    }
+
+    #[test]
+    fn accepts_integer_turtle_numbers() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90", "1", "0", "");
+        let config = parse_config(&toml).unwrap();
+        assert_eq!(config.generation.angle, 90.0);
+        assert_eq!(config.generation.step, 1.0);
+        assert_eq!(config.generation.initial_heading, 0.0);
+    }
+
+    #[test]
+    fn rejects_non_numeric_turtle_values() {
+        for (field, source, replacement) in [
+            ("angle", "angle = 60.0", r#"angle = "90""#),
+            ("step", "step = 1.0", r#"step = "1""#),
+            (
+                "initial_heading",
+                "initial_heading = 0.0",
+                r#"initial_heading = "0""#,
+            ),
+        ] {
+            let toml = NESTED_KOCH_TOML.replace(source, replacement);
+            let err = parse_config(&toml).unwrap_err();
+
+            assert_toml_deserialize_error_contains(err, &["turtle", field]);
+        }
     }
 
     #[test]
@@ -1109,7 +1293,7 @@ color = [0.0, 0.9, 0.5]
 name = "test"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F"
 iterations = 1
 
@@ -1130,7 +1314,7 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn rejects_out_of_range_color_component() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
         let toml = toml.replace(
             "background = [0.0, 0.0, 0.0]",
             "background = [0.0, 1.2, 0.0]",
@@ -1165,7 +1349,7 @@ start = [0.0, 0.0, 0.0]
 end = [1.0, 1.2, 1.0]"#,
             ),
         ] {
-            let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "").replace(
+            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
                 r#"mode = "solid"
 color = [0.0, 0.9, 0.5]"#,
                 replacement,
@@ -1187,7 +1371,7 @@ color = [0.0, 0.9, 0.5]"#,
 
     #[test]
     fn rejects_non_finite_line_color_component() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
         let toml = toml.replace("color = [0.0, 0.9, 0.5]", "color = [0.0, nan, 0.5]");
         let err = parse_config(&toml).unwrap_err();
         assert!(
@@ -1205,17 +1389,11 @@ color = [0.0, 0.9, 0.5]"#,
 
     #[test]
     fn rejects_unknown_line_color_mode() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
         let toml = toml.replace("mode = \"solid\"", "mode = \"rainbow\"");
         let err = parse_config(&toml).unwrap_err();
 
-        assert!(
-            matches!(
-                err,
-                ConfigError::InvalidField { ref field, .. } if field == "colors.line.mode"
-            ),
-            "unexpected error: {err}"
-        );
+        assert_toml_deserialize_error_contains(err, &["colors.line", "rainbow"]);
     }
 
     #[test]
@@ -1253,18 +1431,12 @@ end = [1.0, 1.0, 1.0]"#,
             ),
         ];
 
-        for (mode, replacement, expected_field) in cases {
-            let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", "");
+        for (_mode, replacement, expected_field) in cases {
+            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
             let toml = toml.replace("mode = \"solid\"\ncolor = [0.0, 0.9, 0.5]", replacement);
             let err = parse_config(&toml).unwrap_err();
 
-            assert!(
-                matches!(
-                    err,
-                    ConfigError::UnknownField(ref field) if field == expected_field
-                ),
-                "mode={mode}: unexpected error: {err}"
-            );
+            assert_toml_deserialize_error_mentions_path(err, expected_field);
         }
     }
 
@@ -1273,10 +1445,7 @@ end = [1.0, 1.0, 1.0]"#,
         let toml = format!("{}\n[experimental]\nfoo = true\n", NESTED_KOCH_TOML);
         let err = parse_config(&toml).unwrap_err();
 
-        assert!(
-            matches!(err, ConfigError::UnknownField(ref field) if field == "experimental"),
-            "unexpected error: {err}"
-        );
+        assert_toml_deserialize_error_contains(err, &["experimental"]);
 
         let toml = NESTED_KOCH_TOML.replace(
             "initial_heading = 0.0",
@@ -1284,10 +1453,7 @@ end = [1.0, 1.0, 1.0]"#,
         );
         let err = parse_config(&toml).unwrap_err();
 
-        assert!(
-            matches!(err, ConfigError::UnknownField(ref field) if field == "turtle.friction"),
-            "unexpected error: {err}"
-        );
+        assert_toml_deserialize_error_contains(err, &["turtle", "friction"]);
     }
 
     #[test]
@@ -1311,7 +1477,15 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn strips_whitespace_from_axiom() {
-        let toml = test_toml(2, "F + + F", 1, "90.0", "1.0", "0.0", r#"F = "F - F""#);
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F + + F",
+            1,
+            "90.0",
+            "1.0",
+            "0.0",
+            r#"F = "F - F""#,
+        );
         let cfg = parse_config(&toml).unwrap();
         assert_eq!(cfg.generation.axiom, "F++F");
         assert_eq!(cfg.generation.rules[&'F'], "F-F");
@@ -1319,7 +1493,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_digit_in_axiom() {
-        let toml = test_toml(2, "F+1", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F+1", 1, "90.0", "1.0", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidSymbol { ch: '1', .. }),
@@ -1329,7 +1503,15 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_multi_char_rule_key() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", r#"FF = "FFF""#);
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "90.0",
+            "1.0",
+            "0.0",
+            r#"FF = "FFF""#,
+        );
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidRuleKey { .. }),
@@ -1338,20 +1520,31 @@ end = [1.0, 1.0, 1.0]"#,
     }
 
     #[test]
+    fn parses_dimensions_strings_and_lowercase_aliases() {
+        for (raw_dimensions, expected) in [
+            (r#""2D""#, Dimensions::TwoD),
+            (r#""3D""#, Dimensions::ThreeD),
+            (r#""2d""#, Dimensions::TwoD),
+            (r#""3d""#, Dimensions::ThreeD),
+        ] {
+            let toml = test_toml_with_dimensions(raw_dimensions, "F", 1, "90.0", "1.0", "0.0", "");
+            let config = parse_config(&toml).unwrap();
+            assert_eq!(config.generation.dimensions, expected);
+        }
+    }
+
+    #[test]
     fn rejects_invalid_dimensions() {
-        for bad_dim in [1, 4, 300] {
-            let toml = test_toml(bad_dim, "F", 1, "90.0", "1.0", "0.0", "");
+        for bad_dim in ["1", "2", "3", "4", "300", r#""4D""#] {
+            let toml = test_toml_with_dimensions(bad_dim, "F", 1, "90.0", "1.0", "0.0", "");
             let err = parse_config(&toml).unwrap_err();
-            assert!(
-                matches!(err, ConfigError::InvalidDimensions(d) if d == bad_dim),
-                "dim={bad_dim}: unexpected error: {err}"
-            );
+            assert_toml_deserialize_error_contains(err, &["dimensions"]);
         }
     }
 
     #[test]
     fn rejects_non_finite_initial_heading() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "nan", "");
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "nan", "");
         let err = parse_config(&toml).unwrap_err();
 
         assert!(
@@ -1362,13 +1555,13 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn accepts_dimensions_3_with_3d_symbols() {
-        let toml = test_toml(3, "F&F^F/F", 0, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::ThreeD, "F&F^F/F", 0, "90.0", "1.0", "0.0", "");
         parse_config(&toml).expect("3D config with 3D symbols should be valid");
     }
 
     #[test]
     fn rejects_3d_symbols_in_2d_config() {
-        let toml = test_toml(2, "F&F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F&F", 1, "90.0", "1.0", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidSymbol { ch: '&', .. }),
@@ -1378,7 +1571,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_unmatched_close_bracket_in_axiom() {
-        let toml = test_toml(2, "F]F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F]F", 1, "90.0", "1.0", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedClose { position: 1, .. }),
@@ -1388,7 +1581,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_unclosed_open_bracket_in_axiom() {
-        let toml = test_toml(2, "F[F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F[F", 1, "90.0", "1.0", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedOpen { position: 1, .. }),
@@ -1399,7 +1592,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn reports_first_unclosed_bracket_not_last() {
         // "F[F[F": two unclosed brackets at positions 1 and 3; error must point to 1.
-        let toml = test_toml(2, "F[F[F", 1, "90.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F[F[F", 1, "90.0", "1.0", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedOpen { position: 1, .. }),
@@ -1409,7 +1602,15 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_unbalanced_brackets_in_rule() {
-        let toml = test_toml(2, "F", 1, "90.0", "1.0", "0.0", r#"F = "F[+F""#);
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "90.0",
+            "1.0",
+            "0.0",
+            r#"F = "F[+F""#,
+        );
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::UnmatchedOpen { .. }),
@@ -1420,7 +1621,7 @@ end = [1.0, 1.0, 1.0]"#,
     #[test]
     fn rejects_non_positive_step() {
         for bad_step in ["0.0", "-1.0"] {
-            let toml = test_toml(2, "F", 1, "90.0", bad_step, "0.0", "");
+            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", bad_step, "0.0", "");
             let err = parse_config(&toml).unwrap_err();
             assert!(
                 matches!(err, ConfigError::InvalidStep(_)),
@@ -1431,7 +1632,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_non_finite_step() {
-        let toml = test_toml(2, "F", 1, "90.0", "inf", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "inf", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidStep(_)),
@@ -1441,7 +1642,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn rejects_non_finite_angle() {
-        let toml = test_toml(2, "F", 1, "nan", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "nan", "1.0", "0.0", "");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(err, ConfigError::InvalidAngle(_)),
@@ -1451,28 +1652,44 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn has_stack_directives_false_for_bracketless() {
-        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "F = \"F-F++F-F\"");
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F-F++F-F",
+            1,
+            "60.0",
+            "1.0",
+            "0.0",
+            "F = \"F-F++F-F\"",
+        );
         let cfg = parse_config(&toml).unwrap();
         assert!(!cfg.generation.has_stack_directives());
     }
 
     #[test]
     fn has_stack_directives_true_when_axiom_has_bracket() {
-        let toml = test_toml(2, "F[+F]F", 1, "25.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F[+F]F", 1, "25.0", "1.0", "0.0", "");
         let cfg = parse_config(&toml).unwrap();
         assert!(cfg.generation.has_stack_directives());
     }
 
     #[test]
     fn has_stack_directives_true_when_rule_has_bracket() {
-        let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "25.0",
+            "1.0",
+            "0.0",
+            "F = \"F[+F]F[-F]F\"",
+        );
         let cfg = parse_config(&toml).unwrap();
         assert!(cfg.generation.has_stack_directives());
     }
 
     #[test]
     fn effective_colors_normalizes_depth_gradient_to_gradient_for_bracketless() {
-        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         let start = [0.1, 0.2, 0.3];
         let end = [0.7, 0.8, 0.9];
@@ -1496,7 +1713,15 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn effective_colors_preserves_depth_gradient_for_bracket_fractal() {
-        let toml = test_toml(2, "F", 1, "25.0", "1.0", "0.0", "F = \"F[+F]F[-F]F\"");
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "25.0",
+            "1.0",
+            "0.0",
+            "F = \"F[+F]F[-F]F\"",
+        );
         let mut cfg = parse_config(&toml).unwrap();
         let start = [0.1, 0.2, 0.3];
         let end = [0.7, 0.8, 0.9];
@@ -1511,7 +1736,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn effective_colors_passes_through_solid_for_bracketless() {
-        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let cfg = parse_config(&toml).unwrap();
         let effective = cfg.effective_colors();
         assert_eq!(effective.line, cfg.colors.line);
@@ -1520,7 +1745,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn effective_colors_passes_through_gradient_for_bracketless() {
-        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         cfg.colors.line = LineColorConfig::Gradient {
             start: [1.0, 0.0, 0.0],
@@ -1533,7 +1758,7 @@ end = [1.0, 1.0, 1.0]"#,
 
     #[test]
     fn effective_colors_passes_through_hue_cycle_for_bracketless() {
-        let toml = test_toml(2, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
+        let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         cfg.colors.line = LineColorConfig::HueCycle {
             initial: [1.0, 0.0, 0.0],

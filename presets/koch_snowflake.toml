@@ -2,7 +2,7 @@
 name = "Koch Snowflake"
 
 [l-system]
-dimensions = 2
+dimensions = "2D"
 axiom = "F++F++F"
 iterations = 6
 
@@ -11,8 +11,6 @@ F = "F-F++F-F"
 
 [turtle]
 angle = 60.0
-step = 1.0
-initial_heading = 0.0
 
 [colors]
 background = [0.0, 0.0, 0.0]

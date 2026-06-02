@@ -45,7 +45,7 @@ following:
 | `]` | Pop state | Restore the most recently saved position and heading. |
 | `A`–`Z`, `a`–`z` | Non-terminal | Rewritten by rules during expansion. Any letter that has no rule and is not a reserved symbol above is silently skipped by the turtle. |
 
-**3D-only symbols** (only valid when `dimensions = 3`):
+**3D-only symbols** (only valid when `dimensions = "3D"`):
 
 | Symbol | Name | Effect |
 |--------|------|--------|
@@ -65,7 +65,7 @@ Each L-System is defined in a TOML file:
 name = "Koch Snowflake"
 
 [l-system]
-dimensions = 2          # 2 or 3
+dimensions = "2D"       # "2D" or "3D"
 axiom = "F++F++F"
 iterations = 4          # number of times the rules are applied
 
@@ -74,9 +74,9 @@ F = "F-F++F-F"          # each F is replaced by this string each iteration
 
 [turtle]
 angle = 60.0            # degrees; used by + - and |
-step = 1.0              # length of each F / f move
-initial_heading = 0.0   # starting direction in degrees (0 = east,
-                        # counter-clockwise positive)
+step = 1.0              # optional; length of each F / f move, defaults to 1.0
+initial_heading = 0.0   # optional; starting direction in degrees, defaults to 0.0
+                        # (0 = east, counter-clockwise positive)
 
 [colors]
 background = [0.0, 0.0, 0.0]   # optional RGB 0-1; omit to use black
@@ -136,7 +136,7 @@ When the line color mode is **Hue cycle**, the control panel also shows a hue
 rotation toggle, direction selector, and speed slider. This shifts the visible
 hue cycle over time without changing the config text.
 
-**3D** (when `dimensions = 3`)
+**3D** (when `dimensions = "3D"`)
 
 | Input | Action |
 |-------|--------|
