@@ -244,8 +244,8 @@ pub struct ColorConfig {
 impl ColorConfig {
     pub const DEFAULT_BACKGROUND: HexColor = HexColor::BLACK;
 
-    pub fn effective_background(&self) -> Rgb {
-        Rgb::from(self.background.unwrap_or(Self::DEFAULT_BACKGROUND))
+    pub fn effective_background(&self) -> HexColor {
+        self.background.unwrap_or(Self::DEFAULT_BACKGROUND)
     }
 }
 
