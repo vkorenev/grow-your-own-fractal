@@ -90,13 +90,13 @@ impl Rgb {
     }
 
     /// Returns normalized `[r, g, b]` components in `0.0..=1.0` for rendering.
-    pub fn to_f32_array(self) -> [f32; 3] {
+    pub fn to_array(self) -> [f32; 3] {
         self.bytes.map(|b| b as f32 / 255.0)
     }
 
     /// Converts to `(hue_degrees, saturation, value)` in HSV color space.
     pub fn to_hsv(self) -> (f32, f32, f32) {
-        let [r, g, b] = self.to_f32_array();
+        let [r, g, b] = self.to_array();
         let max = r.max(g).max(b);
         let min = r.min(g).min(b);
         let delta = max - min;
@@ -1953,25 +1953,25 @@ mod hex_color {
         assert_eq!(Rgb::try_from(""), Err(RgbError));
     }
 
-    // --- to_f32_array ---
+    // --- to_array ---
 
     #[test]
-    fn to_f32_array_maps_bytes_correctly() {
+    fn to_array_maps_bytes_correctly() {
         let hex = Rgb::new(0x00, 0xff, 0x80);
-        let [r, g, b] = hex.to_f32_array();
+        let [r, g, b] = hex.to_array();
         assert_eq!(r, 0.0);
         assert_eq!(g, 1.0);
         assert!((b - 128.0 / 255.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn to_f32_array_black() {
-        assert_eq!(Rgb::new(0x00, 0x00, 0x00).to_f32_array(), [0.0, 0.0, 0.0]);
+    fn to_array_black() {
+        assert_eq!(Rgb::new(0x00, 0x00, 0x00).to_array(), [0.0, 0.0, 0.0]);
     }
 
     #[test]
-    fn to_f32_array_white() {
-        assert_eq!(Rgb::new(0xff, 0xff, 0xff).to_f32_array(), [1.0, 1.0, 1.0]);
+    fn to_array_white() {
+        assert_eq!(Rgb::new(0xff, 0xff, 0xff).to_array(), [1.0, 1.0, 1.0]);
     }
 
     // --- Constants ---

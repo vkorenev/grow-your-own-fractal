@@ -226,7 +226,7 @@ fn rgb_controls<'a>(
     color: Rgb,
     message: impl Fn(Rgb) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
-    let components = color.to_f32_array();
+    let components = color.to_array();
     column![
         row![text(label).size(13), color_swatch(color)].spacing(8),
         color_slider("R", components, 0, message.clone()),
@@ -261,7 +261,7 @@ fn color_slider<'a>(
 }
 
 fn color_swatch(color: Rgb) -> Element<'static, Message> {
-    let [r, g, b] = color.to_f32_array();
+    let [r, g, b] = color.to_array();
     container(text(""))
         .width(Length::Fixed(28.0))
         .height(Length::Fixed(18.0))

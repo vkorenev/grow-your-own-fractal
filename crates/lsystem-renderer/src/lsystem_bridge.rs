@@ -324,15 +324,15 @@ pub fn color_params_from_config(
             mode: ColorMode::Solid,
             total_segments,
             max_topological_depth: 0,
-            color_start: rgb_to_rgba(c.to_f32_array()),
+            color_start: rgb_to_rgba(c.to_array()),
             ..Default::default()
         },
         LineColorConfig::Gradient { start, end } => ColorParams {
             mode: ColorMode::Gradient,
             total_segments,
             max_topological_depth: 0,
-            color_start: rgb_to_rgba(start.to_f32_array()),
-            color_end: rgb_to_rgba(end.to_f32_array()),
+            color_start: rgb_to_rgba(start.to_array()),
+            color_end: rgb_to_rgba(end.to_array()),
             ..Default::default()
         },
         LineColorConfig::HueCycle { initial } => {
@@ -351,8 +351,8 @@ pub fn color_params_from_config(
             mode: ColorMode::DepthGradient,
             total_segments,
             max_topological_depth,
-            color_start: rgb_to_rgba(start.to_f32_array()),
-            color_end: rgb_to_rgba(end.to_f32_array()),
+            color_start: rgb_to_rgba(start.to_array()),
+            color_end: rgb_to_rgba(end.to_array()),
             ..Default::default()
         },
     }
@@ -406,7 +406,7 @@ mod tests {
     }
 
     fn hex_rgba(hex: Rgb) -> [f32; 4] {
-        let [r, g, b] = hex.to_f32_array();
+        let [r, g, b] = hex.to_array();
         [r, g, b, 1.0]
     }
 
