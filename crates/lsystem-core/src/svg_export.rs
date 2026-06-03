@@ -54,7 +54,7 @@ fn export_svg_with_segments(
         }
     }
     if !has_segments {
-        let bg = colors.effective_background().to_css_hex();
+        let bg = colors.effective_background().to_string();
         return format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
         );
@@ -84,7 +84,7 @@ fn export_svg_with_segments(
     let w = max_x - min_x;
     let h = max_y - min_y;
 
-    let bg = colors.effective_background().to_css_hex();
+    let bg = colors.effective_background().to_string();
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
@@ -102,7 +102,7 @@ fn export_svg_with_segments(
 fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
     match line {
         LineColorConfig::Solid { color: c } => {
-            let color = c.to_css_hex();
+            let color = c.to_string();
             let mut d = String::new();
             for [a, b] in segments {
                 d.push_str(&format!("M{:.3},{:.3}L{:.3},{:.3}", a.x, a.y, b.x, b.y));

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use lsystem_core::{
-    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, HexColor, LineColorConfig,
+    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig, Rgb,
 };
 
 #[derive(Debug, Error)]
@@ -374,7 +374,7 @@ impl CleanMut<'_> {
             .update_last_applied_source(|source| source.set_grammar(axiom, rules))
     }
 
-    pub fn set_background(&mut self, background: Option<HexColor>) -> Result<(), ConfigError> {
+    pub fn set_background(&mut self, background: Option<Rgb>) -> Result<(), ConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_background(background))
     }
@@ -949,14 +949,14 @@ color = "#00e680"
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_background(Some(HexColor::new(0x1a, 0x33, 0x4d)))
+            .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
 
         let entry = workspace.selected();
         assert!(entry.draft_text().contains("background = \"#1a334d\""));
         assert_eq!(
             entry.applied_config().colors.background,
-            Some(HexColor::new(0x1a, 0x33, 0x4d))
+            Some(Rgb::new(0x1a, 0x33, 0x4d))
         );
         assert!(!entry.is_dirty());
     }
@@ -981,53 +981,53 @@ color = "#00e680"
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: HexColor::new(0x33, 0x4d, 0x66),
+                color: Rgb::new(0x33, 0x4d, 0x66),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::Solid {
-                color: HexColor::new(0x33, 0x4d, 0x66),
+                color: Rgb::new(0x33, 0x4d, 0x66),
             }
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
-                start: HexColor::new(0x1a, 0x33, 0x4d),
-                end: HexColor::new(0xb3, 0xcc, 0xe6),
+                start: Rgb::new(0x1a, 0x33, 0x4d),
+                end: Rgb::new(0xb3, 0xcc, 0xe6),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::Gradient {
-                start: HexColor::new(0x1a, 0x33, 0x4d),
-                end: HexColor::new(0xb3, 0xcc, 0xe6),
+                start: Rgb::new(0x1a, 0x33, 0x4d),
+                end: Rgb::new(0xb3, 0xcc, 0xe6),
             }
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::HueCycle {
-                initial: HexColor::new(0x40, 0x80, 0xbf),
+                initial: Rgb::new(0x40, 0x80, 0xbf),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::HueCycle {
-                initial: HexColor::new(0x40, 0x80, 0xbf),
+                initial: Rgb::new(0x40, 0x80, 0xbf),
             }
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::DepthGradient {
-                start: HexColor::new(0x33, 0x4d, 0x66),
-                end: HexColor::new(0x80, 0x99, 0xb3),
+                start: Rgb::new(0x33, 0x4d, 0x66),
+                end: Rgb::new(0x80, 0x99, 0xb3),
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
             LineColorConfig::DepthGradient {
-                start: HexColor::new(0x33, 0x4d, 0x66),
-                end: HexColor::new(0x80, 0x99, 0xb3),
+                start: Rgb::new(0x33, 0x4d, 0x66),
+                end: Rgb::new(0x80, 0x99, 0xb3),
             }
         );
     }
@@ -1039,8 +1039,8 @@ color = "#00e680"
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
-                start: HexColor::new(0x1a, 0x33, 0x4d),
-                end: HexColor::new(0xb3, 0xcc, 0xe6),
+                start: Rgb::new(0x1a, 0x33, 0x4d),
+                end: Rgb::new(0xb3, 0xcc, 0xe6),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1052,7 +1052,7 @@ color = "#00e680"
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::HueCycle {
-                initial: HexColor::new(0x66, 0x80, 0x99),
+                initial: Rgb::new(0x66, 0x80, 0x99),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1064,7 +1064,7 @@ color = "#00e680"
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: HexColor::new(0x33, 0x4d, 0x66),
+                color: Rgb::new(0x33, 0x4d, 0x66),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1076,8 +1076,8 @@ color = "#00e680"
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::DepthGradient {
-                start: HexColor::new(0x1a, 0x33, 0x4d),
-                end: HexColor::new(0x66, 0x80, 0x99),
+                start: Rgb::new(0x1a, 0x33, 0x4d),
+                end: Rgb::new(0x66, 0x80, 0x99),
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
@@ -1117,11 +1117,11 @@ color = "#00e680" # keep line color comment
             ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_background(Some(HexColor::new(0x1a, 0x33, 0x4d)))
+            .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: HexColor::new(0x66, 0x80, 0x99),
+                color: Rgb::new(0x66, 0x80, 0x99),
             })
             .unwrap();
 
@@ -1160,12 +1160,12 @@ end = "#ffffff"
             ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_background(Some(HexColor::new(0x1a, 0x33, 0x4d)))
+            .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
-                start: HexColor::new(0x66, 0x80, 0x99),
-                end: HexColor::new(0xb3, 0xcc, 0xe6),
+                start: Rgb::new(0x66, 0x80, 0x99),
+                end: Rgb::new(0xb3, 0xcc, 0xe6),
             })
             .unwrap();
 
@@ -1182,7 +1182,7 @@ end = "#ffffff"
         assert!(!workspace.can_reset());
 
         clean_mut(&mut workspace)
-            .set_background(Some(HexColor::new(0x1a, 0x33, 0x4d)))
+            .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
 
         assert!(workspace.can_reset());
@@ -1192,7 +1192,7 @@ end = "#ffffff"
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Solid {
-                color: HexColor::new(0x1a, 0x33, 0x4d),
+                color: Rgb::new(0x1a, 0x33, 0x4d),
             })
             .unwrap();
 
@@ -1229,12 +1229,12 @@ end = "#ffffff"
         {
             let mut clean = clean_mut(&mut workspace);
             clean
-                .set_background(Some(HexColor::new(0x1a, 0x33, 0x4d)))
+                .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
                 .unwrap();
             clean
                 .set_line_color(LineColorConfig::Gradient {
-                    start: HexColor::new(0x66, 0x80, 0x99),
-                    end: HexColor::new(0xb3, 0xcc, 0xe6),
+                    start: Rgb::new(0x66, 0x80, 0x99),
+                    end: Rgb::new(0xb3, 0xcc, 0xe6),
                 })
                 .unwrap();
         }
@@ -1249,13 +1249,13 @@ end = "#ffffff"
         assert!(!text.contains("[colors.line]"));
         assert_eq!(
             entry.applied_config().colors.background,
-            Some(HexColor::new(0x1a, 0x33, 0x4d))
+            Some(Rgb::new(0x1a, 0x33, 0x4d))
         );
         assert_eq!(
             entry.applied_config().colors.line,
             LineColorConfig::Gradient {
-                start: HexColor::new(0x66, 0x80, 0x99),
-                end: HexColor::new(0xb3, 0xcc, 0xe6),
+                start: Rgb::new(0x66, 0x80, 0x99),
+                end: Rgb::new(0xb3, 0xcc, 0xe6),
             }
         );
         assert!(!entry.is_dirty());

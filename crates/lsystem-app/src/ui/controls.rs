@@ -7,7 +7,7 @@ use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, LineColorMode,
 };
-use lsystem_core::{HexColor, LineColorConfig};
+use lsystem_core::{LineColorConfig, Rgb};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
@@ -223,8 +223,8 @@ fn push_color_controls<'a>(
 
 fn rgb_controls<'a>(
     label: &'a str,
-    color: HexColor,
-    message: impl Fn(HexColor) -> Message + Clone + 'a,
+    color: Rgb,
+    message: impl Fn(Rgb) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
     let components = color.to_f32_array();
     column![
@@ -241,14 +241,14 @@ fn color_slider<'a>(
     label: &'a str,
     color: [f32; 3],
     component: usize,
-    message: impl Fn(HexColor) -> Message + 'a,
+    message: impl Fn(Rgb) -> Message + 'a,
 ) -> Element<'a, Message> {
     row![
         text(label).size(12).width(Length::Fixed(16.0)),
         slider(0.0..=1.0, color[component], move |value| {
             let mut next = color;
             next[component] = value.clamp(0.0, 1.0);
-            message(hex_from_f32_array(next))
+            message(rgb_from_f32_array(next))
         })
         .step(0.01),
         text(format!("{:.0}", color[component] * 255.0))
@@ -260,7 +260,7 @@ fn color_slider<'a>(
     .into()
 }
 
-fn color_swatch(color: HexColor) -> Element<'static, Message> {
+fn color_swatch(color: Rgb) -> Element<'static, Message> {
     let [r, g, b] = color.to_f32_array();
     container(text(""))
         .width(Length::Fixed(28.0))
@@ -277,8 +277,8 @@ fn color_swatch(color: HexColor) -> Element<'static, Message> {
         .into()
 }
 
-fn hex_from_f32_array([r, g, b]: [f32; 3]) -> HexColor {
-    HexColor::new(
+fn rgb_from_f32_array([r, g, b]: [f32; 3]) -> Rgb {
+    Rgb::new(
         (r * 255.0).round() as u8,
         (g * 255.0).round() as u8,
         (b * 255.0).round() as u8,
@@ -290,20 +290,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hex_from_f32_array_rounds_midpoint() {
+    fn rgb_from_f32_array_rounds_midpoint() {
         // 0.5 * 255.0 = 127.5 → rounds to 128 (0x80)
         assert_eq!(
-            hex_from_f32_array([0.0, 0.5, 1.0]),
-            HexColor::new(0x00, 0x80, 0xff)
+            rgb_from_f32_array([0.0, 0.5, 1.0]),
+            Rgb::new(0x00, 0x80, 0xff)
         );
     }
 
     #[test]
-    fn hex_from_f32_array_boundary_values() {
-        assert_eq!(hex_from_f32_array([0.0, 0.0, 0.0]), HexColor::BLACK);
+    fn rgb_from_f32_array_boundary_values() {
+        assert_eq!(rgb_from_f32_array([0.0, 0.0, 0.0]), Rgb::BLACK);
         assert_eq!(
-            hex_from_f32_array([1.0, 1.0, 1.0]),
-            HexColor::new(0xff, 0xff, 0xff)
+            rgb_from_f32_array([1.0, 1.0, 1.0]),
+            Rgb::new(0xff, 0xff, 0xff)
         );
     }
 }

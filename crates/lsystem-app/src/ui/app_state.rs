@@ -5,7 +5,7 @@ use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
     LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
 };
-use lsystem_core::{Config, ConfigError, Dimensions, HexColor, LineColorConfig};
+use lsystem_core::{Config, ConfigError, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -32,7 +32,7 @@ pub(super) enum Message {
     IterationsChanged(u32),
     AngleChanged(f32),
     BackgroundOverrideToggled(bool),
-    BackgroundColorChanged(HexColor),
+    BackgroundColorChanged(Rgb),
     LineColorModeSelected(LineColorMode),
     LineColorChanged(LineColorConfig),
     PngWidthChanged(String),
@@ -637,23 +637,23 @@ mod tests {
     #[test]
     fn color_control_memory_uses_defaults_and_restores_edits() {
         let solid = LineColorConfig::Solid {
-            color: HexColor::new(0x1a, 0x33, 0x4d),
+            color: Rgb::new(0x1a, 0x33, 0x4d),
         };
         let gradient = LineColorConfig::Gradient {
-            start: HexColor::new(0x66, 0x80, 0x99),
-            end: HexColor::new(0xb3, 0xcc, 0xe5),
+            start: Rgb::new(0x66, 0x80, 0x99),
+            end: Rgb::new(0xb3, 0xcc, 0xe5),
         };
         let depth_gradient = LineColorConfig::DepthGradient {
-            start: HexColor::new(0x33, 0x4d, 0x66),
-            end: HexColor::new(0x80, 0x99, 0xb3),
+            start: Rgb::new(0x33, 0x4d, 0x66),
+            end: Rgb::new(0x80, 0x99, 0xb3),
         };
 
         let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
-            background: Some(HexColor::new(0xcc, 0xcc, 0xcc)),
+            background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
             line: solid,
         });
 
-        assert_eq!(memory.background(), HexColor::new(0xcc, 0xcc, 0xcc));
+        assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
@@ -668,11 +668,11 @@ mod tests {
             LineColorConfig::DEFAULT_DEPTH_GRADIENT
         );
 
-        memory.remember_background(HexColor::new(0xe5, 0x1a, 0x33));
+        memory.remember_background(Rgb::new(0xe5, 0x1a, 0x33));
         memory.remember_line(gradient);
         memory.remember_line(depth_gradient);
 
-        assert_eq!(memory.background(), HexColor::new(0xe5, 0x1a, 0x33));
+        assert_eq!(memory.background(), Rgb::new(0xe5, 0x1a, 0x33));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(memory.line_for(LineColorMode::Gradient), gradient);
         assert_eq!(
@@ -685,8 +685,8 @@ mod tests {
     fn clean_apply_preserves_inactive_line_color_memory() {
         let (mut app, _) = FractalApp::new();
         let gradient = LineColorConfig::Gradient {
-            start: HexColor::new(0x66, 0x80, 0x99),
-            end: HexColor::new(0xb3, 0xcc, 0xe5),
+            start: Rgb::new(0x66, 0x80, 0x99),
+            end: Rgb::new(0xb3, 0xcc, 0xe5),
         };
         app.color_memory.remember_line(gradient);
 
@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn background_toggle_restores_last_selected_color() {
         let (mut app, _) = FractalApp::new();
-        let background = HexColor::new(0x33, 0x4d, 0x66);
+        let background = Rgb::new(0x33, 0x4d, 0x66);
 
         let _ = app.update(Message::BackgroundColorChanged(background));
         let _ = app.update(Message::BackgroundOverrideToggled(false));

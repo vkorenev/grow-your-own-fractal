@@ -394,7 +394,7 @@ pub fn viewport_transform(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{Dimensions, GenerationConfig, HexColor, generate};
+    use lsystem_core::{Dimensions, GenerationConfig, Rgb, generate};
     use std::collections::BTreeMap;
 
     use super::*;
@@ -405,14 +405,14 @@ mod tests {
         (a - b).abs() < EPS
     }
 
-    fn hex_rgba(hex: HexColor) -> [f32; 4] {
+    fn hex_rgba(hex: Rgb) -> [f32; 4] {
         let [r, g, b] = hex.to_f32_array();
         [r, g, b, 1.0]
     }
 
     #[test]
     fn solid_maps_to_mode_solid_with_color() {
-        let color = HexColor::DEFAULT_SOLID_LINE;
+        let color = Rgb::DEFAULT_SOLID_LINE;
         let params = color_params_from_config(&LineColorConfig::Solid { color }, 10, 0);
 
         assert_eq!(params.mode, ColorMode::Solid);
@@ -423,8 +423,8 @@ mod tests {
 
     #[test]
     fn gradient_maps_to_mode_gradient_with_start_and_end_colors() {
-        let start = HexColor::new(0x1a, 0x33, 0x4d);
-        let end = HexColor::new(0xb3, 0xcc, 0xe5);
+        let start = Rgb::new(0x1a, 0x33, 0x4d);
+        let end = Rgb::new(0xb3, 0xcc, 0xe5);
         let params = color_params_from_config(&LineColorConfig::Gradient { start, end }, 7, 0);
 
         assert_eq!(params.mode, ColorMode::Gradient);
@@ -436,8 +436,8 @@ mod tests {
 
     #[test]
     fn hue_cycle_initial_rgb_maps_to_hsv_uniforms() {
-        // HexColor::new(0x40, 0x80, 0x80) ≈ (0.251, 0.502, 0.502) → hue≈180°, sat≈0.5, val≈0.502
-        let initial = HexColor::new(0x40, 0x80, 0x80);
+        // Rgb::new(0x40, 0x80, 0x80) ≈ (0.251, 0.502, 0.502) → hue≈180°, sat≈0.5, val≈0.502
+        let initial = Rgb::new(0x40, 0x80, 0x80);
         let params = color_params_from_config(&LineColorConfig::HueCycle { initial }, 9, 0);
 
         assert_eq!(params.mode, ColorMode::HueCycle);
@@ -450,8 +450,8 @@ mod tests {
 
     #[test]
     fn depth_gradient_maps_to_mode_three_with_max_topological_depth() {
-        let start = HexColor::new(0x1a, 0x33, 0x4d);
-        let end = HexColor::new(0xb3, 0xcc, 0xe5);
+        let start = Rgb::new(0x1a, 0x33, 0x4d);
+        let end = Rgb::new(0xb3, 0xcc, 0xe5);
         let params = color_params_from_config(&LineColorConfig::DepthGradient { start, end }, 5, 3);
 
         assert_eq!(params.mode, ColorMode::DepthGradient);
@@ -463,8 +463,8 @@ mod tests {
 
     #[test]
     fn depth_gradient_preserves_zero_max_topological_depth() {
-        let start = HexColor::new(0x1a, 0x33, 0x4d);
-        let end = HexColor::new(0xb3, 0xcc, 0xe5);
+        let start = Rgb::new(0x1a, 0x33, 0x4d);
+        let end = Rgb::new(0xb3, 0xcc, 0xe5);
         let params = color_params_from_config(&LineColorConfig::DepthGradient { start, end }, 1, 0);
 
         assert_eq!(params.mode, ColorMode::DepthGradient);

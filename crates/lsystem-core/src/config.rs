@@ -40,8 +40,8 @@ pub enum ConfigError {
     #[error("initial_heading must be finite, got {0}")]
     InvalidInitialHeading(f32),
 
-    #[error("invalid hex color in `{field}`: expected `#rrggbb`, got {value:?}")]
-    InvalidHexColor { field: String, value: String },
+    #[error("invalid RGB color in `{field}`: expected `#rrggbb`, got {value:?}")]
+    InvalidRgb { field: String, value: String },
 }
 
 /// Spatial dimensions of an L-system: 2D or 3D.
@@ -51,22 +51,22 @@ pub enum Dimensions {
     ThreeD,
 }
 
-/// A 24-bit CSS hex color (`#rrggbb`), stored as `[R, G, B]` bytes.
+/// A 24-bit RGB color, stored as `[R, G, B]` bytes.
 ///
-/// This type is `Copy` and `const`-constructible. Parsing requires a leading `#`
-/// followed by exactly six ASCII hex digits. Shorthand (`#rgb`) and alpha (`#rrggbbaa`)
-/// forms are not accepted.
+/// This type is `Copy` and `const`-constructible. The `FromStr`/`Display` impls
+/// use `#rrggbb` hex format. Parsing requires a leading `#` followed by exactly
+/// six ASCII hex digits. Shorthand (`#rgb`) and alpha (`#rrggbbaa`) forms are not accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HexColor {
+pub struct Rgb {
     bytes: [u8; 3],
 }
 
-/// Error returned when a string cannot be parsed as a `#rrggbb` hex color.
+/// Error returned when a string cannot be parsed as an `Rgb` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("expected `#rrggbb` hex color")]
-pub struct HexColorError;
+pub struct RgbError;
 
-impl HexColor {
+impl Rgb {
     pub const BLACK: Self = Self::new(0x00, 0x00, 0x00);
     pub const DEFAULT_SOLID_LINE: Self = Self::new(0x00, 0xe6, 0x80);
     pub const DEFAULT_GRADIENT_START: Self = Self::new(0x0d, 0x59, 0x0d);
@@ -87,11 +87,6 @@ impl HexColor {
 
     pub const fn b(self) -> u8 {
         self.bytes[2]
-    }
-
-    /// Returns a canonical lowercase `#rrggbb` CSS hex string.
-    pub fn to_css_hex(self) -> String {
-        self.to_string()
     }
 
     /// Returns normalized `[r, g, b]` components in `0.0..=1.0` for rendering.
@@ -119,31 +114,31 @@ impl HexColor {
     }
 }
 
-impl TryFrom<&str> for HexColor {
-    type Error = HexColorError;
+impl TryFrom<&str> for Rgb {
+    type Error = RgbError;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let hex = s.strip_prefix('#').ok_or(HexColorError)?;
+        let hex = s.strip_prefix('#').ok_or(RgbError)?;
         // len() is byte count; multi-byte UTF-8 chars can pass len == 6 but would panic on byte-range slicing below
         if hex.len() != 6 || !hex.is_ascii() {
-            return Err(HexColorError);
+            return Err(RgbError);
         }
-        let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| HexColorError)?;
-        let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| HexColorError)?;
-        let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| HexColorError)?;
+        let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| RgbError)?;
+        let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| RgbError)?;
+        let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| RgbError)?;
         Ok(Self::new(r, g, b))
     }
 }
 
-impl TryFrom<String> for HexColor {
-    type Error = HexColorError;
+impl TryFrom<String> for Rgb {
+    type Error = RgbError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         s.parse()
     }
 }
 
-impl std::fmt::Display for HexColor {
+impl std::fmt::Display for Rgb {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -153,8 +148,8 @@ impl std::fmt::Display for HexColor {
     }
 }
 
-impl std::str::FromStr for HexColor {
-    type Err = HexColorError;
+impl std::str::FromStr for Rgb {
+    type Err = RgbError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::try_from(s)
@@ -164,26 +159,26 @@ impl std::str::FromStr for HexColor {
 /// Color mode for the fractal lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineColorConfig {
-    Solid { color: HexColor },
-    Gradient { start: HexColor, end: HexColor },
-    HueCycle { initial: HexColor },
-    DepthGradient { start: HexColor, end: HexColor },
+    Solid { color: Rgb },
+    Gradient { start: Rgb, end: Rgb },
+    HueCycle { initial: Rgb },
+    DepthGradient { start: Rgb, end: Rgb },
 }
 
 impl LineColorConfig {
     pub const DEFAULT_SOLID: Self = Self::Solid {
-        color: HexColor::DEFAULT_SOLID_LINE,
+        color: Rgb::DEFAULT_SOLID_LINE,
     };
     pub const DEFAULT_GRADIENT: Self = Self::Gradient {
-        start: HexColor::DEFAULT_GRADIENT_START,
-        end: HexColor::DEFAULT_GRADIENT_END,
+        start: Rgb::DEFAULT_GRADIENT_START,
+        end: Rgb::DEFAULT_GRADIENT_END,
     };
     pub const DEFAULT_HUE_CYCLE: Self = Self::HueCycle {
-        initial: HexColor::DEFAULT_HUE_CYCLE_INITIAL,
+        initial: Rgb::DEFAULT_HUE_CYCLE_INITIAL,
     };
     pub const DEFAULT_DEPTH_GRADIENT: Self = Self::DepthGradient {
-        start: HexColor::DEFAULT_GRADIENT_START,
-        end: HexColor::DEFAULT_GRADIENT_END,
+        start: Rgb::DEFAULT_GRADIENT_START,
+        end: Rgb::DEFAULT_GRADIENT_END,
     };
 
     fn mode_key(&self) -> &'static str {
@@ -209,14 +204,14 @@ impl Default for LineColorConfig {
 /// Visual color settings for background and fractal lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ColorConfig {
-    pub background: Option<HexColor>,
+    pub background: Option<Rgb>,
     pub line: LineColorConfig,
 }
 
 impl ColorConfig {
-    pub const DEFAULT_BACKGROUND: HexColor = HexColor::BLACK;
+    pub const DEFAULT_BACKGROUND: Rgb = Rgb::BLACK;
 
-    pub fn effective_background(&self) -> HexColor {
+    pub fn effective_background(&self) -> Rgb {
         self.background.unwrap_or(Self::DEFAULT_BACKGROUND)
     }
 }
@@ -424,7 +419,7 @@ impl TryFrom<RawConfig> for Config {
                 background: raw
                     .colors
                     .background
-                    .map(|s| parse_hex(s, "colors.background"))
+                    .map(|s| parse_rgb(s, "colors.background"))
                     .transpose()?,
                 line: raw.colors.line.try_into()?,
             },
@@ -438,18 +433,18 @@ impl TryFrom<RawLineColor> for LineColorConfig {
     fn try_from(raw: RawLineColor) -> Result<Self, Self::Error> {
         Ok(match raw {
             RawLineColor::Solid(raw) => Self::Solid {
-                color: parse_hex(raw.color, "colors.line.color")?,
+                color: parse_rgb(raw.color, "colors.line.color")?,
             },
             RawLineColor::Gradient(raw) => Self::Gradient {
-                start: parse_hex(raw.start, "colors.line.start")?,
-                end: parse_hex(raw.end, "colors.line.end")?,
+                start: parse_rgb(raw.start, "colors.line.start")?,
+                end: parse_rgb(raw.end, "colors.line.end")?,
             },
             RawLineColor::HueCycle(raw) => Self::HueCycle {
-                initial: parse_hex(raw.initial, "colors.line.initial")?,
+                initial: parse_rgb(raw.initial, "colors.line.initial")?,
             },
             RawLineColor::DepthGradient(raw) => Self::DepthGradient {
-                start: parse_hex(raw.start, "colors.line.start")?,
-                end: parse_hex(raw.end, "colors.line.end")?,
+                start: parse_rgb(raw.start, "colors.line.start")?,
+                end: parse_rgb(raw.end, "colors.line.end")?,
             },
         })
     }
@@ -509,9 +504,9 @@ impl Visitor<'_> for NumberVisitor {
     }
 }
 
-fn parse_hex(s: String, field: &str) -> Result<HexColor, ConfigError> {
-    let result = s.parse::<HexColor>();
-    result.map_err(|_| ConfigError::InvalidHexColor {
+fn parse_rgb(s: String, field: &str) -> Result<Rgb, ConfigError> {
+    let result = s.parse::<Rgb>();
+    result.map_err(|_| ConfigError::InvalidRgb {
         field: field.into(),
         value: s,
     })
@@ -588,7 +583,7 @@ impl ConfigSource {
         self.document["l-system"]["rules"] = Item::Table(rules_table);
     }
 
-    pub fn set_background(&mut self, background: Option<HexColor>) {
+    pub fn set_background(&mut self, background: Option<Rgb>) {
         match background {
             Some(hex) => {
                 if self
@@ -600,7 +595,7 @@ impl ConfigSource {
                 }
                 set_value_preserving_decor(
                     &mut self.document["colors"]["background"],
-                    Value::from(hex.to_css_hex()),
+                    Value::from(hex.to_string()),
                 );
             }
             None => {
@@ -617,21 +612,21 @@ impl ConfigSource {
         match line_color {
             LineColorConfig::Solid { color } => {
                 remove_inactive_line_color_keys(line, &["color"]);
-                set_value_preserving_decor(&mut line["color"], Value::from(color.to_css_hex()));
+                set_value_preserving_decor(&mut line["color"], Value::from(color.to_string()));
             }
             LineColorConfig::Gradient { start, end } => {
                 remove_inactive_line_color_keys(line, &["start", "end"]);
-                set_value_preserving_decor(&mut line["start"], Value::from(start.to_css_hex()));
-                set_value_preserving_decor(&mut line["end"], Value::from(end.to_css_hex()));
+                set_value_preserving_decor(&mut line["start"], Value::from(start.to_string()));
+                set_value_preserving_decor(&mut line["end"], Value::from(end.to_string()));
             }
             LineColorConfig::HueCycle { initial } => {
                 remove_inactive_line_color_keys(line, &["initial"]);
-                set_value_preserving_decor(&mut line["initial"], Value::from(initial.to_css_hex()));
+                set_value_preserving_decor(&mut line["initial"], Value::from(initial.to_string()));
             }
             LineColorConfig::DepthGradient { start, end } => {
                 remove_inactive_line_color_keys(line, &["start", "end"]);
-                set_value_preserving_decor(&mut line["start"], Value::from(start.to_css_hex()));
-                set_value_preserving_decor(&mut line["end"], Value::from(end.to_css_hex()));
+                set_value_preserving_decor(&mut line["start"], Value::from(start.to_string()));
+                set_value_preserving_decor(&mut line["end"], Value::from(end.to_string()));
             }
         }
     }
@@ -733,8 +728,8 @@ mod tests {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
     }
 
-    fn hex(s: &str) -> HexColor {
-        HexColor::try_from(s).unwrap()
+    fn hex(s: &str) -> Rgb {
+        Rgb::try_from(s).unwrap()
     }
 
     fn assert_toml_deserialize_error_contains(err: ConfigError, fragments: &[&str]) -> String {
@@ -1008,7 +1003,7 @@ color = "#00e680"
         assert!(
             matches!(
                 err,
-                ConfigError::InvalidHexColor {
+                ConfigError::InvalidRgb {
                     ref field,
                     ref value
                 } if field == "colors.background" && value == "notahex"
@@ -1140,7 +1135,7 @@ color = "#00e680"
         assert!(
             matches!(
                 err,
-                ConfigError::InvalidHexColor { ref field, .. } if field == "colors.line.initial"
+                ConfigError::InvalidRgb { ref field, .. } if field == "colors.line.initial"
             ),
             "unexpected error: {err}"
         );
@@ -1382,7 +1377,7 @@ color = "#00e680"
         assert!(
             matches!(
                 err,
-                ConfigError::InvalidHexColor {
+                ConfigError::InvalidRgb {
                     ref field,
                     ref value
                 } if field == "colors.background" && value == "notahex"
@@ -1409,7 +1404,7 @@ color = "#00e680"
             assert!(
                 matches!(
                     err,
-                    ConfigError::InvalidHexColor {
+                    ConfigError::InvalidRgb {
                         field: ref error_field,
                         ref value
                     } if error_field == expected_field && value == "bad"
@@ -1427,7 +1422,7 @@ color = "#00e680"
         assert!(
             matches!(
                 err,
-                ConfigError::InvalidHexColor {
+                ConfigError::InvalidRgb {
                     ref field,
                     ..
                 } if field == "colors.line.color"
@@ -1822,17 +1817,17 @@ color = "#00e680"
     fn set_background_writes_hex_string() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
         let mut source = ConfigSource::parse(&toml).unwrap();
-        source.set_background(Some(HexColor::new(0xff, 0x80, 0x00)));
+        source.set_background(Some(Rgb::new(0xff, 0x80, 0x00)));
         let result = source.to_toml_string();
         assert!(
             result.contains(r##"background = "#ff8000""##),
             "expected hex string, got: {result}"
         );
-        // Verify it round-trips: re-parsing produces the same HexColor
+        // Verify it round-trips: re-parsing produces the same Rgb
         let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
         assert_eq!(
             doc.config().colors.background,
-            Some(HexColor::new(0xff, 0x80, 0x00))
+            Some(Rgb::new(0xff, 0x80, 0x00))
         );
     }
 
@@ -1841,8 +1836,8 @@ color = "#00e680"
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
         let mut source = ConfigSource::parse(&toml).unwrap();
         source.set_line_color(&LineColorConfig::Gradient {
-            start: HexColor::new(0x00, 0x11, 0x22),
-            end: HexColor::new(0xaa, 0xbb, 0xcc),
+            start: Rgb::new(0x00, 0x11, 0x22),
+            end: Rgb::new(0xaa, 0xbb, 0xcc),
         });
         let result = source.to_toml_string();
         assert!(
@@ -1858,8 +1853,8 @@ color = "#00e680"
         assert_eq!(
             doc.config().colors.line,
             LineColorConfig::Gradient {
-                start: HexColor::new(0x00, 0x11, 0x22),
-                end: HexColor::new(0xaa, 0xbb, 0xcc),
+                start: Rgb::new(0x00, 0x11, 0x22),
+                end: Rgb::new(0xaa, 0xbb, 0xcc),
             }
         );
     }
@@ -1873,7 +1868,7 @@ mod hex_color {
 
     #[test]
     fn try_from_accepts_lowercase_hex() {
-        let hex = HexColor::try_from("#00e680").unwrap();
+        let hex = Rgb::try_from("#00e680").unwrap();
         assert_eq!(hex.r(), 0x00);
         assert_eq!(hex.g(), 0xe6);
         assert_eq!(hex.b(), 0x80);
@@ -1881,7 +1876,7 @@ mod hex_color {
 
     #[test]
     fn try_from_accepts_uppercase_hex() {
-        let hex = HexColor::try_from("#00E680").unwrap();
+        let hex = Rgb::try_from("#00E680").unwrap();
         assert_eq!(hex.r(), 0x00);
         assert_eq!(hex.g(), 0xe6);
         assert_eq!(hex.b(), 0x80);
@@ -1889,83 +1884,80 @@ mod hex_color {
 
     #[test]
     fn try_from_string_accepts_lowercase_hex() {
-        let hex = HexColor::try_from(String::from("#00e680")).unwrap();
-        assert_eq!(hex, HexColor::new(0x00, 0xe6, 0x80));
+        let hex = Rgb::try_from(String::from("#00e680")).unwrap();
+        assert_eq!(hex, Rgb::new(0x00, 0xe6, 0x80));
     }
 
-    // --- to_css_hex ---
+    // --- Display ---
 
     #[test]
-    fn to_css_hex_emits_canonical_lowercase() {
-        assert_eq!(HexColor::new(0x00, 0xe6, 0x80).to_css_hex(), "#00e680");
-        assert_eq!(HexColor::new(0xAB, 0xCD, 0xEF).to_css_hex(), "#abcdef");
-        assert_eq!(HexColor::BLACK.to_css_hex(), "#000000");
+    fn display_emits_canonical_lowercase() {
+        assert_eq!(Rgb::new(0x00, 0xe6, 0x80).to_string(), "#00e680");
+        assert_eq!(Rgb::new(0xAB, 0xCD, 0xEF).to_string(), "#abcdef");
+        assert_eq!(Rgb::BLACK.to_string(), "#000000");
     }
 
     // --- Rejection cases ---
 
     #[test]
     fn try_from_rejects_missing_leading_hash() {
-        assert_eq!(HexColor::try_from("00e680"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("00e680"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_too_short() {
         // 5 hex chars after #
-        assert_eq!(HexColor::try_from("#0e680"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("#0e680"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_too_long() {
         // 7 hex chars after #
-        assert_eq!(HexColor::try_from("#00e6800"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("#00e6800"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_non_hex_character() {
-        assert_eq!(HexColor::try_from("#00g680"), Err(HexColorError));
-        assert_eq!(HexColor::try_from("#zzzzzz"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("#00g680"), Err(RgbError));
+        assert_eq!(Rgb::try_from("#zzzzzz"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_shorthand() {
         // #rgb — 3 chars
-        assert_eq!(HexColor::try_from("#0e6"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("#0e6"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_alpha_form() {
         // #rrggbbaa — 8 chars
-        assert_eq!(HexColor::try_from("#00e680ff"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("#00e680ff"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_full_width_lookalikes() {
         // Full-width '#' (U+FF03) followed by 6 ASCII hex chars
-        assert_eq!(HexColor::try_from("\u{FF03}00e680"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("\u{FF03}00e680"), Err(RgbError));
         // Full-width digits
-        assert_eq!(
-            HexColor::try_from("#\u{FF10}\u{FF10}e680"),
-            Err(HexColorError)
-        );
+        assert_eq!(Rgb::try_from("#\u{FF10}\u{FF10}e680"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_non_ascii_same_byte_length() {
         // Two 3-byte UTF-8 chars → 6 bytes total, would panic without is_ascii() guard
-        assert_eq!(HexColor::try_from("#\u{0800}\u{0800}"), Err(HexColorError));
+        assert_eq!(Rgb::try_from("#\u{0800}\u{0800}"), Err(RgbError));
     }
 
     #[test]
     fn try_from_rejects_empty_string() {
-        assert_eq!(HexColor::try_from(""), Err(HexColorError));
+        assert_eq!(Rgb::try_from(""), Err(RgbError));
     }
 
     // --- to_f32_array ---
 
     #[test]
     fn to_f32_array_maps_bytes_correctly() {
-        let hex = HexColor::new(0x00, 0xff, 0x80);
+        let hex = Rgb::new(0x00, 0xff, 0x80);
         let [r, g, b] = hex.to_f32_array();
         assert_eq!(r, 0.0);
         assert_eq!(g, 1.0);
@@ -1974,29 +1966,23 @@ mod hex_color {
 
     #[test]
     fn to_f32_array_black() {
-        assert_eq!(
-            HexColor::new(0x00, 0x00, 0x00).to_f32_array(),
-            [0.0, 0.0, 0.0]
-        );
+        assert_eq!(Rgb::new(0x00, 0x00, 0x00).to_f32_array(), [0.0, 0.0, 0.0]);
     }
 
     #[test]
     fn to_f32_array_white() {
-        assert_eq!(
-            HexColor::new(0xff, 0xff, 0xff).to_f32_array(),
-            [1.0, 1.0, 1.0]
-        );
+        assert_eq!(Rgb::new(0xff, 0xff, 0xff).to_f32_array(), [1.0, 1.0, 1.0]);
     }
 
     // --- Constants ---
 
     #[test]
     fn constants_have_correct_css_hex() {
-        assert_eq!(HexColor::BLACK.to_css_hex(), "#000000");
-        assert_eq!(HexColor::DEFAULT_SOLID_LINE.to_css_hex(), "#00e680");
-        assert_eq!(HexColor::DEFAULT_GRADIENT_START.to_css_hex(), "#0d590d");
-        assert_eq!(HexColor::DEFAULT_GRADIENT_END.to_css_hex(), "#99e61a");
-        assert_eq!(HexColor::DEFAULT_HUE_CYCLE_INITIAL.to_css_hex(), "#e60000");
+        assert_eq!(Rgb::BLACK.to_string(), "#000000");
+        assert_eq!(Rgb::DEFAULT_SOLID_LINE.to_string(), "#00e680");
+        assert_eq!(Rgb::DEFAULT_GRADIENT_START.to_string(), "#0d590d");
+        assert_eq!(Rgb::DEFAULT_GRADIENT_END.to_string(), "#99e61a");
+        assert_eq!(Rgb::DEFAULT_HUE_CYCLE_INITIAL.to_string(), "#e60000");
     }
 
     // --- to_hsv ---
@@ -2010,7 +1996,7 @@ mod hex_color {
     #[test]
     fn to_hsv_converts_correctly() {
         // 0x40=64, 0x80=128 → r=64/255≈0.251, g=b=128/255≈0.502 → hue=180°, sat≈0.5, val≈0.502
-        let (hue, saturation, value) = HexColor::new(0x40, 0x80, 0x80).to_hsv();
+        let (hue, saturation, value) = Rgb::new(0x40, 0x80, 0x80).to_hsv();
         assert!(close(hue, 180.0));
         assert!(close(saturation, 0.5));
         assert!(close(value, 128.0 / 255.0));
@@ -2018,7 +2004,7 @@ mod hex_color {
 
     #[test]
     fn to_hsv_grayscale_has_zero_saturation_and_hue() {
-        let (hue, saturation, value) = HexColor::new(0x66, 0x66, 0x66).to_hsv();
+        let (hue, saturation, value) = Rgb::new(0x66, 0x66, 0x66).to_hsv();
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
         assert!(close(value, 0x66 as f32 / 255.0));
@@ -2026,7 +2012,7 @@ mod hex_color {
 
     #[test]
     fn to_hsv_pure_blue_maps_to_blue_hue() {
-        let (hue, saturation, value) = HexColor::new(0x00, 0x00, 0xff).to_hsv();
+        let (hue, saturation, value) = Rgb::new(0x00, 0x00, 0xff).to_hsv();
         assert!(close(hue, 240.0));
         assert!(close(saturation, 1.0));
         assert!(close(value, 1.0));
@@ -2034,7 +2020,7 @@ mod hex_color {
 
     #[test]
     fn to_hsv_black_has_zero_saturation_and_value() {
-        let (hue, saturation, value) = HexColor::BLACK.to_hsv();
+        let (hue, saturation, value) = Rgb::BLACK.to_hsv();
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
         assert!(close(value, 0.0));
@@ -2044,7 +2030,7 @@ mod hex_color {
     fn to_hsv_red_dominant_negative_hue_wraps() {
         // #ff0080: r=1.0, g=0.0, b=128/255≈0.502. Raw (g-b)/delta = -0.502, which rem_euclid(6)
         // wraps to 5.498. hue = 60*5.498 ≈ 329.88°. Verifies that rem_euclid keeps hue positive.
-        let (hue, saturation, value) = HexColor::new(0xff, 0x00, 0x80).to_hsv();
+        let (hue, saturation, value) = Rgb::new(0xff, 0x00, 0x80).to_hsv();
         assert!(close(hue, 60.0 * (-(128.0_f32 / 255.0)).rem_euclid(6.0)));
         assert!(close(saturation, 1.0));
         assert!(close(value, 1.0));
