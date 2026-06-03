@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::{
     ColorConfig, Config, GenerationConfig, LineColorConfig, Segment2DWithTopologicalDepth,
-    color_util::rgb_to_hsv, generate, generate_with_topological_depth,
+    generate, generate_with_topological_depth,
 };
 
 /// Generate an SVG string for the given config.
@@ -54,7 +54,7 @@ fn export_svg_with_segments(
         }
     }
     if !has_segments {
-        let bg = to_hex(colors.effective_background().to_array());
+        let bg = colors.effective_background().to_string();
         return format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
         );
@@ -84,26 +84,25 @@ fn export_svg_with_segments(
     let w = max_x - min_x;
     let h = max_y - min_y;
 
-    let bg = to_hex(colors.effective_background().to_array());
+    let bg = colors.effective_background().to_string();
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
     let neg_max_y = -max_y;
 
     format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{min_x:.3} {neg_max_y:.3} {w:.3} {h:.3}\">\n\
-        <rect x=\"{min_x:.3}\" y=\"{neg_max_y:.3}\" width=\"{w:.3}\" height=\"{h:.3}\" fill=\"{bg}\"/>\n\
-        <g transform=\"matrix(1 0 0 -1 0 0)\" stroke-width=\"{stroke_width:.4}\" stroke-linecap=\"round\" fill=\"none\">\n\
-        {body}\
-        </g>\n\
-        </svg>"
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{min_x:.3} {neg_max_y:.3} {w:.3} {h:.3}">
+<rect x="{min_x:.3}" y="{neg_max_y:.3}" width="{w:.3}" height="{h:.3}" fill="{bg}"/>
+<g transform="matrix(1 0 0 -1 0 0)" stroke-width="{stroke_width:.4}" stroke-linecap="round" fill="none">
+{body}</g>
+</svg>"##
     )
 }
 
 fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
     match line {
         LineColorConfig::Solid { color: c } => {
-            let color = to_hex(c.to_array());
+            let color = c.to_string();
             let mut d = String::new();
             for [a, b] in segments {
                 d.push_str(&format!("M{:.3},{:.3}L{:.3},{:.3}", a.x, a.y, b.x, b.y));
@@ -132,7 +131,7 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             out
         }
         LineColorConfig::HueCycle { initial } => {
-            let (start_hue, saturation, value) = rgb_to_hsv(*initial);
+            let (start_hue, saturation, value) = initial.to_hsv();
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
@@ -206,7 +205,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 
 fn to_hex(rgb: [f32; 3]) -> String {
     let [r, g, b] = rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-    format!("#{r:02X}{g:02X}{b:02X}")
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 #[cfg(test)]
@@ -220,7 +219,7 @@ mod tests {
 
     fn make_config_with_axiom(axiom: &str, extra_toml: &str) -> Config {
         let toml = format!(
-            r#"[metadata]
+            r##"[metadata]
 name = "Test"
 
 [l-system]
@@ -236,11 +235,11 @@ step = 1.0
 initial_heading = 0.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 {extra_toml}
-"#
+"##
         );
         ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap())
             .unwrap()
@@ -248,7 +247,7 @@ background = [0.0, 0.0, 0.0]
     }
 
     fn make_empty_config() -> Config {
-        let toml = r#"[metadata]
+        let toml = r##"[metadata]
 name = "Empty"
 
 [l-system]
@@ -264,19 +263,19 @@ step = 1.0
 initial_heading = 0.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+color = "#00e680"
+"##;
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
             .into()
     }
 
     fn make_config_without_background() -> Config {
-        let toml = r#"[metadata]
+        let toml = r##"[metadata]
 name = "No Background"
 
 [l-system]
@@ -295,8 +294,8 @@ initial_heading = 0.0
 
 [colors.line]
 mode = "solid"
-color = [1.0, 0.0, 0.0]
-"#;
+color = "#ff0000"
+"##;
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
             .into()
@@ -304,35 +303,44 @@ color = [1.0, 0.0, 0.0]
 
     #[test]
     fn solid_contains_svg_and_color() {
-        let cfg = make_config("mode = \"solid\"\ncolor = [1.0, 0.0, 0.0]");
+        let cfg = make_config(
+            r##"mode = "solid"
+color = "#ff0000""##,
+        );
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
             svg.contains("matrix(1 0 0 -1 0 0)"),
             "missing Y-flip transform"
         );
-        assert!(svg.contains("#FF0000"), "missing solid color");
+        assert!(svg.contains("#ff0000"), "missing solid color");
         assert!(svg.contains("<path"), "expected <path for solid mode");
     }
 
     #[test]
     fn gradient_first_and_last_segment_colors() {
-        let cfg =
-            make_config("mode = \"gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]");
+        let cfg = make_config(
+            r##"mode = "gradient"
+start = "#ff0000"
+end = "#0000ff""##,
+        );
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
             svg.contains("matrix(1 0 0 -1 0 0)"),
             "missing Y-flip transform"
         );
-        // 2 segments: t=0 → #FF0000, t=1 → #0000FF
-        assert!(svg.contains("#FF0000"), "missing gradient start color");
-        assert!(svg.contains("#0000FF"), "missing gradient end color");
+        // 2 segments: t=0 → #ff0000, t=1 → #0000ff (interpolated via float, emitted lowercase)
+        assert!(svg.contains("#ff0000"), "missing gradient start color");
+        assert!(svg.contains("#0000ff"), "missing gradient end color");
     }
 
     #[test]
     fn hue_cycle_start_color() {
-        let cfg = make_config("mode = \"hue_cycle\"\ninitial = [1.0, 0.0, 0.0]");
+        let cfg = make_config(
+            r##"mode = "hue_cycle"
+initial = "#ff0000""##,
+        );
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -340,7 +348,7 @@ color = [1.0, 0.0, 0.0]
             "missing Y-flip transform"
         );
         assert!(
-            svg.contains("#FF0000"),
+            svg.contains("#ff0000"),
             "missing hue-cycle start color (red at hue=0)"
         );
     }
@@ -349,16 +357,18 @@ color = [1.0, 0.0, 0.0]
     fn depth_gradient_colors_equal_topological_depth_equally() {
         let cfg = make_config_with_axiom(
             "F[+F]F",
-            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+            r##"mode = "depth_gradient"
+start = "#ff0000"
+end = "#0000ff""##,
         );
         let svg = export_svg(&cfg);
 
         assert!(
-            svg.contains("#FF0000"),
+            svg.contains("#ff0000"),
             "missing depth-gradient start color"
         );
         assert_eq!(
-            svg.matches("#0000FF").count(),
+            svg.matches("#0000ff").count(),
             2,
             "two depth-1 segments should use the same end color"
         );
@@ -368,13 +378,15 @@ color = [1.0, 0.0, 0.0]
     fn depth_gradient_single_segment_uses_start_color() {
         let cfg = make_config_with_axiom(
             "F",
-            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+            r##"mode = "depth_gradient"
+start = "#ff0000"
+end = "#0000ff""##,
         );
         let svg = export_svg(&cfg);
 
-        assert!(svg.contains("#FF0000"), "missing depth-0 start color");
+        assert!(svg.contains("#ff0000"), "missing depth-0 start color");
         assert!(
-            !svg.contains("#0000FF"),
+            !svg.contains("#0000ff"),
             "single depth-0 segment should not use end color"
         );
     }
@@ -392,7 +404,9 @@ color = [1.0, 0.0, 0.0]
     fn depth_gradient_empty_geometry_returns_minimal_svg() {
         let cfg = make_config_with_axiom(
             "+",
-            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+            r##"mode = "depth_gradient"
+start = "#ff0000"
+end = "#0000ff""##,
         );
         let svg = export_svg(&cfg);
 

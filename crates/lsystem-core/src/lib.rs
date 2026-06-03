@@ -2,7 +2,6 @@
 pub mod svg_export;
 
 pub(crate) mod alphabet;
-pub mod color_util;
 pub mod config;
 pub mod grammar;
 pub(crate) mod turtle;

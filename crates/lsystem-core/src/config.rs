@@ -40,14 +40,8 @@ pub enum ConfigError {
     #[error("initial_heading must be finite, got {0}")]
     InvalidInitialHeading(f32),
 
-    #[error(
-        "color component `{component}` in `{field}` must be finite and in 0.0..=1.0, got {value}"
-    )]
-    InvalidColorComponent {
-        field: String,
-        component: usize,
-        value: f32,
-    },
+    #[error("invalid RGB color in `{field}`: expected `#rrggbb`, got {value:?}")]
+    InvalidRgb { field: String, value: String },
 }
 
 /// Spatial dimensions of an L-system: 2D or 3D.
@@ -57,57 +51,113 @@ pub enum Dimensions {
     ThreeD,
 }
 
-/// Validated RGB color with components in `0.0..=1.0`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A 24-bit RGB color, stored as `[R, G, B]` bytes.
+///
+/// This type is `Copy` and `const`-constructible. The `FromStr`/`Display` impls
+/// use `#rrggbb` hex format. Parsing requires a leading `#` followed by exactly
+/// six ASCII hex digits. Shorthand (`#rgb`) and alpha (`#rrggbbaa`) forms are not accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {
-    components: [f32; 3],
+    bytes: [u8; 3],
 }
 
+/// Error returned when a string cannot be parsed as an `Rgb` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("RGB components must be finite and in 0.0..=1.0")]
+#[error("expected `#rrggbb` hex color")]
 pub struct RgbError;
 
 impl Rgb {
-    pub const BLACK: Self = Self::from_array_unchecked([0.0, 0.0, 0.0]);
-    pub const DEFAULT_SOLID_LINE: Self = Self::from_array_unchecked([0.0, 0.9, 0.5]);
-    pub const DEFAULT_GRADIENT_START: Self = Self::from_array_unchecked([0.05, 0.35, 0.05]);
-    pub const DEFAULT_GRADIENT_END: Self = Self::from_array_unchecked([0.6, 0.9, 0.1]);
-    pub const DEFAULT_HUE_CYCLE_INITIAL: Self = Self::from_array_unchecked([0.9, 0.0, 0.0]);
+    pub const BLACK: Self = Self::new(0x00, 0x00, 0x00);
+    pub const DEFAULT_SOLID_LINE: Self = Self::new(0x00, 0xe6, 0x80);
+    pub const DEFAULT_GRADIENT_START: Self = Self::new(0x0d, 0x59, 0x0d);
+    pub const DEFAULT_GRADIENT_END: Self = Self::new(0x99, 0xe6, 0x1a);
+    pub const DEFAULT_HUE_CYCLE_INITIAL: Self = Self::new(0xe6, 0x00, 0x00);
 
-    const fn from_array_unchecked(components: [f32; 3]) -> Self {
-        Self { components }
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { bytes: [r, g, b] }
     }
 
-    pub const fn red(self) -> f32 {
-        self.components[0]
+    pub const fn r(self) -> u8 {
+        self.bytes[0]
     }
 
-    pub const fn green(self) -> f32 {
-        self.components[1]
+    pub const fn g(self) -> u8 {
+        self.bytes[1]
     }
 
-    pub const fn blue(self) -> f32 {
-        self.components[2]
+    pub const fn b(self) -> u8 {
+        self.bytes[2]
     }
 
-    pub const fn to_array(self) -> [f32; 3] {
-        self.components
+    /// Returns normalized `[r, g, b]` components in `0.0..=1.0` for rendering.
+    pub fn to_array(self) -> [f32; 3] {
+        self.bytes.map(|b| b as f32 / 255.0)
+    }
+
+    /// Converts to `(hue_degrees, saturation, value)` in HSV color space.
+    pub fn to_hsv(self) -> (f32, f32, f32) {
+        let [r, g, b] = self.to_array();
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        let hue = if delta == 0.0 {
+            0.0
+        } else if max == r {
+            60.0 * ((g - b) / delta).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * (((b - r) / delta) + 2.0)
+        } else {
+            60.0 * (((r - g) / delta) + 4.0)
+        };
+        let saturation = if max == 0.0 { 0.0 } else { delta / max };
+        (hue, saturation, max)
     }
 }
 
-impl TryFrom<[f32; 3]> for Rgb {
+impl TryFrom<&str> for Rgb {
     type Error = RgbError;
 
-    fn try_from(components: [f32; 3]) -> Result<Self, Self::Error> {
-        invalid_rgb_component(components)
-            .is_none()
-            .then_some(Self { components })
-            .ok_or(RgbError)
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        let hex = s.strip_prefix('#').ok_or(RgbError)?;
+        // len() is byte count; multi-byte UTF-8 chars can pass len == 6 but would panic on byte-range slicing below
+        if hex.len() != 6 || !hex.is_ascii() {
+            return Err(RgbError);
+        }
+        let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| RgbError)?;
+        let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| RgbError)?;
+        let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| RgbError)?;
+        Ok(Self::new(r, g, b))
+    }
+}
+
+impl TryFrom<String> for Rgb {
+    type Error = RgbError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl std::fmt::Display for Rgb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "#{:02x}{:02x}{:02x}",
+            self.bytes[0], self.bytes[1], self.bytes[2]
+        )
+    }
+}
+
+impl std::str::FromStr for Rgb {
+    type Err = RgbError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
     }
 }
 
 /// Color mode for the fractal lines.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineColorConfig {
     Solid { color: Rgb },
     Gradient { start: Rgb, end: Rgb },
@@ -152,7 +202,7 @@ impl Default for LineColorConfig {
 }
 
 /// Visual color settings for background and fractal lines.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ColorConfig {
     pub background: Option<Rgb>,
     pub line: LineColorConfig,
@@ -189,7 +239,7 @@ impl Config {
                 background: self.colors.background,
             };
         }
-        self.colors.clone()
+        self.colors
     }
 }
 
@@ -275,8 +325,8 @@ struct RawTurtle {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawColors {
-    #[serde(default, deserialize_with = "deserialize_optional_rgb")]
-    background: Option<[f64; 3]>,
+    #[serde(default)]
+    background: Option<String>,
     line: RawLineColor,
 }
 
@@ -292,24 +342,20 @@ enum RawLineColor {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSolidColor {
-    #[serde(deserialize_with = "deserialize_rgb")]
-    color: [f64; 3],
+    color: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawGradientColors {
-    #[serde(deserialize_with = "deserialize_rgb")]
-    start: [f64; 3],
-    #[serde(deserialize_with = "deserialize_rgb")]
-    end: [f64; 3],
+    start: String,
+    end: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawHueCycleColor {
-    #[serde(deserialize_with = "deserialize_rgb")]
-    initial: [f64; 3],
+    initial: String,
 }
 
 impl TryFrom<RawConfig> for Config {
@@ -373,7 +419,7 @@ impl TryFrom<RawConfig> for Config {
                 background: raw
                     .colors
                     .background
-                    .map(|color| validate_color_components(color, "colors.background"))
+                    .map(|s| parse_rgb(s, "colors.background"))
                     .transpose()?,
                 line: raw.colors.line.try_into()?,
             },
@@ -387,18 +433,18 @@ impl TryFrom<RawLineColor> for LineColorConfig {
     fn try_from(raw: RawLineColor) -> Result<Self, Self::Error> {
         Ok(match raw {
             RawLineColor::Solid(raw) => Self::Solid {
-                color: validate_color_components(raw.color, "colors.line.color")?,
+                color: parse_rgb(raw.color, "colors.line.color")?,
             },
             RawLineColor::Gradient(raw) => Self::Gradient {
-                start: validate_color_components(raw.start, "colors.line.start")?,
-                end: validate_color_components(raw.end, "colors.line.end")?,
+                start: parse_rgb(raw.start, "colors.line.start")?,
+                end: parse_rgb(raw.end, "colors.line.end")?,
             },
             RawLineColor::HueCycle(raw) => Self::HueCycle {
-                initial: validate_color_components(raw.initial, "colors.line.initial")?,
+                initial: parse_rgb(raw.initial, "colors.line.initial")?,
             },
             RawLineColor::DepthGradient(raw) => Self::DepthGradient {
-                start: validate_color_components(raw.start, "colors.line.start")?,
-                end: validate_color_components(raw.end, "colors.line.end")?,
+                start: parse_rgb(raw.start, "colors.line.start")?,
+                end: parse_rgb(raw.end, "colors.line.end")?,
             },
         })
     }
@@ -413,22 +459,6 @@ where
     D: Deserializer<'de>,
 {
     Ok(TomlNumber::deserialize(deserializer)?.0)
-}
-
-fn deserialize_rgb<'de, D>(deserializer: D) -> Result<[f64; 3], D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let values = <[TomlNumber; 3]>::deserialize(deserializer)?;
-    Ok(values.map(|value| value.0))
-}
-
-fn deserialize_optional_rgb<'de, D>(deserializer: D) -> Result<Option<[f64; 3]>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(Option::<[TomlNumber; 3]>::deserialize(deserializer)?
-        .map(|values| values.map(|value| value.0)))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -474,23 +504,12 @@ impl Visitor<'_> for NumberVisitor {
     }
 }
 
-fn validate_color_components(color: [f64; 3], field: &str) -> Result<Rgb, ConfigError> {
-    let color = color.map(|component| component as f32);
-    if let Some((component, value)) = invalid_rgb_component(color) {
-        return Err(ConfigError::InvalidColorComponent {
-            field: field.to_string(),
-            component,
-            value,
-        });
-    }
-    Ok(Rgb::from_array_unchecked(color))
-}
-
-fn invalid_rgb_component(color: [f32; 3]) -> Option<(usize, f32)> {
-    color
-        .into_iter()
-        .enumerate()
-        .find(|(_, value)| !value.is_finite() || !(0.0..=1.0).contains(value))
+fn parse_rgb(s: String, field: &str) -> Result<Rgb, ConfigError> {
+    let result = s.parse::<Rgb>();
+    result.map_err(|_| ConfigError::InvalidRgb {
+        field: field.into(),
+        value: s,
+    })
 }
 
 /// Format-preserving TOML document for an L-system configuration.
@@ -566,10 +585,17 @@ impl ConfigSource {
 
     pub fn set_background(&mut self, background: Option<Rgb>) {
         match background {
-            Some(background) => {
-                set_color_value_preserving_decor(
+            Some(hex) => {
+                if self
+                    .document
+                    .get("colors")
+                    .is_none_or(|item| !item.is_table())
+                {
+                    self.document["colors"] = Item::Table(Table::new());
+                }
+                set_value_preserving_decor(
                     &mut self.document["colors"]["background"],
-                    background,
+                    Value::from(hex.to_string()),
                 );
             }
             None => {
@@ -586,21 +612,21 @@ impl ConfigSource {
         match line_color {
             LineColorConfig::Solid { color } => {
                 remove_inactive_line_color_keys(line, &["color"]);
-                set_color_value_preserving_decor(&mut line["color"], *color);
+                set_value_preserving_decor(&mut line["color"], Value::from(color.to_string()));
             }
             LineColorConfig::Gradient { start, end } => {
                 remove_inactive_line_color_keys(line, &["start", "end"]);
-                set_color_value_preserving_decor(&mut line["start"], *start);
-                set_color_value_preserving_decor(&mut line["end"], *end);
+                set_value_preserving_decor(&mut line["start"], Value::from(start.to_string()));
+                set_value_preserving_decor(&mut line["end"], Value::from(end.to_string()));
             }
             LineColorConfig::HueCycle { initial } => {
                 remove_inactive_line_color_keys(line, &["initial"]);
-                set_color_value_preserving_decor(&mut line["initial"], *initial);
+                set_value_preserving_decor(&mut line["initial"], Value::from(initial.to_string()));
             }
             LineColorConfig::DepthGradient { start, end } => {
                 remove_inactive_line_color_keys(line, &["start", "end"]);
-                set_color_value_preserving_decor(&mut line["start"], *start);
-                set_color_value_preserving_decor(&mut line["end"], *end);
+                set_value_preserving_decor(&mut line["start"], Value::from(start.to_string()));
+                set_value_preserving_decor(&mut line["end"], Value::from(end.to_string()));
             }
         }
     }
@@ -668,37 +694,6 @@ fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
     *item = Item::Value(next_value);
 }
 
-fn set_color_value_preserving_decor(item: &mut Item, color: Rgb) {
-    let can_update_components = item.as_array().is_some_and(|array| {
-        array.len() == 3 && array.iter().all(|value| value_as_f32(value).is_some())
-    });
-
-    if can_update_components {
-        let array = item
-            .as_array_mut()
-            .expect("array shape was checked before mutation");
-        for (idx, component) in color.to_array().into_iter().enumerate() {
-            array.replace(idx, color_component_value(component));
-        }
-    } else {
-        set_value_preserving_decor(item, color_value(color));
-    }
-}
-
-fn color_value(color: Rgb) -> Value {
-    color
-        .to_array()
-        .into_iter()
-        .map(color_component_value)
-        .collect()
-}
-
-fn color_component_value(component: f32) -> Value {
-    let raw = component.to_string();
-    raw.parse()
-        .expect("validated RGB component display output must parse as a TOML number")
-}
-
 const LINE_COLOR_VALUE_KEYS: &[&str] = &["color", "start", "end", "initial"];
 
 fn remove_inactive_line_color_keys(line: &mut Table, active_keys: &[&str]) {
@@ -724,13 +719,6 @@ fn line_table_mut(document: &mut DocumentMut) -> &mut Table {
         .expect("colors.line table was just ensured")
 }
 
-fn value_as_f32(value: &Value) -> Option<f32> {
-    value
-        .as_float()
-        .or_else(|| value.as_integer().map(|value| value as f64))
-        .map(|value| value as f32)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,43 +728,8 @@ mod tests {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
     }
 
-    fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_from(components).unwrap()
-    }
-
-    #[test]
-    fn rgb_constructs_valid_color() {
-        let rgb = rgb([0.1, 0.2, 0.3]);
-
-        assert_eq!(rgb.red(), 0.1);
-        assert_eq!(rgb.green(), 0.2);
-        assert_eq!(rgb.blue(), 0.3);
-        assert_eq!(rgb.to_array(), [0.1, 0.2, 0.3]);
-    }
-
-    #[test]
-    fn rgb_rejects_non_finite_and_out_of_range_components() {
-        for color in [
-            [f32::NAN, 0.0, 0.0],
-            [0.0, f32::INFINITY, 0.0],
-            [0.0, 0.0, f32::NEG_INFINITY],
-            [-0.1, 0.0, 0.0],
-            [0.0, 1.1, 0.0],
-        ] {
-            assert_eq!(Rgb::try_from(color), Err(RgbError), "{color:?} should fail");
-        }
-    }
-
-    #[test]
-    fn rgb_accepts_boundary_values() {
-        assert_eq!(Rgb::try_from([0.0, 0.0, 0.0]), Ok(Rgb::BLACK));
-        assert_eq!(Rgb::try_from([1.0, 1.0, 1.0]), Ok(rgb([1.0, 1.0, 1.0])));
-    }
-
-    #[test]
-    fn rgb_try_from_array_uses_validated_constructor() {
-        assert_eq!(Rgb::try_from([0.1, 0.2, 0.3]), Ok(rgb([0.1, 0.2, 0.3])));
-        assert_eq!(Rgb::try_from([0.1, 1.2, 0.3]), Err(RgbError));
+    fn hex(s: &str) -> Rgb {
+        Rgb::try_from(s).unwrap()
     }
 
     fn assert_toml_deserialize_error_contains(err: ConfigError, fragments: &[&str]) -> String {
@@ -829,7 +782,7 @@ step = 1.0
 F = "F-F++F-F"
 "#;
 
-    const NESTED_KOCH_TOML: &str = r#"
+    const NESTED_KOCH_TOML: &str = r##"
 [metadata]
 name = "Koch Snowflake"
 
@@ -847,12 +800,12 @@ step = 1.0
 initial_heading = 0.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "hue_cycle"
-initial = [0.25, 0.5, 0.5]
-"#;
+initial = "#408080"
+"##;
 
     fn test_toml(
         dimensions: Dimensions,
@@ -889,7 +842,7 @@ initial = [0.25, 0.5, 0.5]
     ) -> String {
         let rules_table = format!("\n[l-system.rules]\n{rules}\n");
         format!(
-            r#"[metadata]
+            r##"[metadata]
 name = "test"
 
 [l-system]
@@ -903,18 +856,18 @@ step = {step}
 initial_heading = {initial_heading}
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#
+color = "#00e680"
+"##
         )
     }
 
     #[test]
     fn config_document_preserves_unmodified_toml_byte_for_byte() {
-        let original = r#"# leading comment
+        let original = r##"# leading comment
 [metadata] # keep this comment
 name = "Styled"
 
@@ -932,17 +885,13 @@ step = 1.0
 initial_heading = 45.0
 
 [colors]
-background = [ 0.0, 0.1, 0.2 ]
+background = "#001a33"
 
 [colors.line]
 mode = "gradient"
-start = [
-    0.1,
-    0.2,
-    0.3,
-]
-end = [ 0.7, 0.8, 0.9 ]
-"#;
+start = "#1a334d"
+end = "#b3cce6"
+"##;
 
         let doc = ConfigSource::parse(original).unwrap();
 
@@ -952,7 +901,7 @@ end = [ 0.7, 0.8, 0.9 ]
 
     #[test]
     fn set_name_preserves_existing_value_comment() {
-        let original = r#"[metadata]
+        let original = r##"[metadata]
 name = "Old" # keep name comment
 
 [l-system]
@@ -967,12 +916,12 @@ F = "FF"
 angle = 90.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+color = "#00e680"
+"##;
         let mut source = ConfigSource::parse(original).unwrap();
 
         source.set_name("New");
@@ -1011,73 +960,64 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(cfg.generation.initial_heading, 0.0);
         assert_eq!(cfg.generation.iterations, 4);
         assert_eq!(cfg.generation.rules[&'F'], "F-F++F-F");
-        assert_eq!(cfg.colors.background, Some(rgb([0.0, 0.0, 0.0])));
+        assert_eq!(cfg.colors.background, Some(hex("#000000")));
         match cfg.colors.line {
-            LineColorConfig::HueCycle { initial } => assert_eq!(initial, rgb([0.25, 0.5, 0.5])),
+            LineColorConfig::HueCycle { initial } => assert_eq!(initial, hex("#408080")),
             other => panic!("expected hue cycle line color, got {other:?}"),
         }
     }
 
     #[test]
     fn parses_missing_background_as_none() {
-        let toml = NESTED_KOCH_TOML.replace("background = [0.0, 0.0, 0.0]\n\n", "");
+        let toml = NESTED_KOCH_TOML.replace("background = \"#000000\"\n\n", "");
         let cfg = parse_config(&toml).unwrap();
 
         assert_eq!(cfg.colors.background, None);
     }
 
     #[test]
-    fn parses_present_background_as_some_rgb() {
-        let toml = NESTED_KOCH_TOML.replace(
-            "background = [0.0, 0.0, 0.0]",
-            "background = [0.2, 0.3, 0.4]",
-        );
+    fn parses_present_background_as_some_hex() {
+        let toml = NESTED_KOCH_TOML.replace("background = \"#000000\"", "background = \"#334d66\"");
         let cfg = parse_config(&toml).unwrap();
 
-        assert_eq!(
-            cfg.colors.background.map(Rgb::to_array),
-            Some([0.2, 0.3, 0.4])
+        assert_eq!(cfg.colors.background, Some(hex("#334d66")));
+    }
+
+    #[test]
+    fn rejects_old_array_background() {
+        let toml =
+            NESTED_KOCH_TOML.replace("background = \"#000000\"", "background = [0.0, 0.0, 0.0]");
+        let err = parse_config(&toml).unwrap_err();
+
+        assert!(
+            matches!(err, ConfigError::TomlDeserialize(_)),
+            "expected TomlDeserialize error for array background, got: {err}"
         );
     }
 
     #[test]
-    fn accepts_integer_color_components() {
-        let toml = NESTED_KOCH_TOML
-            .replace("background = [0.0, 0.0, 0.0]", "background = [0, 0, 1]")
-            .replace("initial = [0.25, 0.5, 0.5]", "initial = [1, 0, 0]");
-        let cfg = parse_config(&toml).unwrap();
+    fn rejects_invalid_hex_for_background() {
+        let toml = NESTED_KOCH_TOML.replace("background = \"#000000\"", "background = \"notahex\"");
+        let err = parse_config(&toml).unwrap_err();
 
-        assert_eq!(
-            cfg.colors.background.map(Rgb::to_array),
-            Some([0.0, 0.0, 1.0])
-        );
-        assert_eq!(
-            cfg.colors.line,
-            LineColorConfig::HueCycle {
-                initial: rgb([1.0, 0.0, 0.0]),
-            }
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidRgb {
+                    ref field,
+                    ref value
+                } if field == "colors.background" && value == "notahex"
+            ),
+            "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn rejects_wrong_length_color_arrays() {
-        for (fragments, source, replacement) in [
-            (
-                &["colors.background", "invalid length"][..],
-                "background = [0.0, 0.0, 0.0]",
-                "background = [0.0, 0.0]",
-            ),
-            (
-                &["colors.line", "invalid length"][..],
-                "initial = [0.25, 0.5, 0.5]",
-                "initial = [0.25, 0.5, 0.5, 0.75]",
-            ),
-        ] {
-            let toml = NESTED_KOCH_TOML.replace(source, replacement);
-            let err = parse_config(&toml).unwrap_err();
+    fn accepts_uppercase_hex_background() {
+        let toml = NESTED_KOCH_TOML.replace("background = \"#000000\"", "background = \"#AABBCC\"");
+        let cfg = parse_config(&toml).unwrap();
 
-            assert_toml_deserialize_error_contains(err, fragments);
-        }
+        assert_eq!(cfg.colors.background, Some(hex("#aabbcc")));
     }
 
     #[test]
@@ -1085,28 +1025,28 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(
             LineColorConfig::DEFAULT_SOLID,
             LineColorConfig::Solid {
-                color: rgb([0.0, 0.9, 0.5]),
+                color: hex("#00e680"),
             }
         );
         assert_eq!(LineColorConfig::default(), LineColorConfig::DEFAULT_SOLID);
         assert_eq!(
             LineColorConfig::DEFAULT_GRADIENT,
             LineColorConfig::Gradient {
-                start: rgb([0.05, 0.35, 0.05]),
-                end: rgb([0.6, 0.9, 0.1]),
+                start: hex("#0d590d"),
+                end: hex("#99e61a"),
             }
         );
         assert_eq!(
             LineColorConfig::DEFAULT_HUE_CYCLE,
             LineColorConfig::HueCycle {
-                initial: rgb([0.9, 0.0, 0.0]),
+                initial: hex("#e60000"),
             }
         );
         assert_eq!(
             LineColorConfig::DEFAULT_DEPTH_GRADIENT,
             LineColorConfig::DepthGradient {
-                start: rgb([0.05, 0.35, 0.05]),
-                end: rgb([0.6, 0.9, 0.1]),
+                start: hex("#0d590d"),
+                end: hex("#99e61a"),
             }
         );
     }
@@ -1127,7 +1067,7 @@ color = [0.0, 0.9, 0.5]
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::Solid {
-                color: rgb([0.0, 0.9, 0.5]),
+                color: hex("#00e680"),
             }
         );
     }
@@ -1135,11 +1075,8 @@ color = [0.0, 0.9, 0.5]
     #[test]
     fn parses_gradient_line_color() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
-            r#"mode = "solid"
-color = [0.0, 0.9, 0.5]"#,
-            r#"mode = "gradient"
-start = [0.1, 0.2, 0.3]
-end = [0.7, 0.8, 0.9]"#,
+            "mode = \"solid\"\ncolor = \"#00e680\"",
+            "mode = \"gradient\"\nstart = \"#1a334d\"\nend = \"#b3cce6\"",
         );
 
         let cfg = parse_config(&toml).unwrap();
@@ -1147,8 +1084,8 @@ end = [0.7, 0.8, 0.9]"#,
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::Gradient {
-                start: rgb([0.1, 0.2, 0.3]),
-                end: rgb([0.7, 0.8, 0.9]),
+                start: hex("#1a334d"),
+                end: hex("#b3cce6"),
             }
         );
     }
@@ -1156,11 +1093,8 @@ end = [0.7, 0.8, 0.9]"#,
     #[test]
     fn parses_depth_gradient_line_color() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
-            r#"mode = "solid"
-color = [0.0, 0.9, 0.5]"#,
-            r#"mode = "depth_gradient"
-start = [0.1, 0.2, 0.3]
-end = [0.7, 0.8, 0.9]"#,
+            "mode = \"solid\"\ncolor = \"#00e680\"",
+            "mode = \"depth_gradient\"\nstart = \"#1a334d\"\nend = \"#b3cce6\"",
         );
 
         let cfg = parse_config(&toml).unwrap();
@@ -1168,9 +1102,42 @@ end = [0.7, 0.8, 0.9]"#,
         assert_eq!(
             cfg.colors.line,
             LineColorConfig::DepthGradient {
-                start: rgb([0.1, 0.2, 0.3]),
-                end: rgb([0.7, 0.8, 0.9]),
+                start: hex("#1a334d"),
+                end: hex("#b3cce6"),
             }
+        );
+    }
+
+    #[test]
+    fn parses_hue_cycle_line_color() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
+            "mode = \"solid\"\ncolor = \"#00e680\"",
+            "mode = \"hue_cycle\"\ninitial = \"#e60000\"",
+        );
+
+        let cfg = parse_config(&toml).unwrap();
+
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::HueCycle {
+                initial: hex("#e60000"),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_hex_for_initial() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
+            "mode = \"solid\"\ncolor = \"#00e680\"",
+            "mode = \"hue_cycle\"\ninitial = \"#zzzzzz\"",
+        );
+        let err = parse_config(&toml).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ConfigError::InvalidRgb { ref field, .. } if field == "colors.line.initial"
+            ),
+            "unexpected error: {err}"
         );
     }
 
@@ -1178,23 +1145,18 @@ end = [0.7, 0.8, 0.9]"#,
     fn rejects_missing_depth_gradient_keys() {
         let cases = [
             (
-                r#"mode = "depth_gradient"
-start = [0.1, 0.2, 0.3]"#,
+                "mode = \"depth_gradient\"\nstart = \"#1a334d\"",
                 "colors.line.end",
             ),
             (
-                r#"mode = "depth_gradient"
-end = [0.7, 0.8, 0.9]"#,
+                "mode = \"depth_gradient\"\nend = \"#b3cce6\"",
                 "colors.line.start",
             ),
         ];
 
         for (replacement, missing_field) in cases {
-            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
-                r#"mode = "solid"
-color = [0.0, 0.9, 0.5]"#,
-                replacement,
-            );
+            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "")
+                .replace("mode = \"solid\"\ncolor = \"#00e680\"", replacement);
 
             let err = parse_config(&toml).unwrap_err();
 
@@ -1204,7 +1166,7 @@ color = [0.0, 0.9, 0.5]"#,
 
     #[test]
     fn parses_dotted_v2_config() {
-        let toml = r#"
+        let toml = r##"
 metadata.name = "Dotted"
 l-system.dimensions = "3D"
 l-system.axiom = 'F\F'
@@ -1213,10 +1175,10 @@ l-system.rules.F = 'F\F'
 turtle.angle = 45.0
 turtle.step = 1.0
 turtle.initial_heading = 0.0
-colors.background = [0.0, 0.0, 0.0]
+colors.background = "#000000"
 colors.line.mode = "solid"
-colors.line.color = [0.0, 0.9, 0.5]
-"#;
+colors.line.color = "#00e680"
+"##;
 
         let cfg = parse_config(toml).unwrap();
 
@@ -1228,8 +1190,8 @@ colors.line.color = [0.0, 0.9, 0.5]
 
     #[test]
     fn parses_implicit_parent_tables() {
-        let toml = r#"
-colors.background = [0.0, 0.0, 0.0]
+        let toml = r##"
+colors.background = "#000000"
 
 [metadata]
 name = "Implicit Parents"
@@ -1249,8 +1211,8 @@ initial_heading = 0.0
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+color = "#00e680"
+"##;
 
         let cfg = parse_config(toml).unwrap();
 
@@ -1268,7 +1230,7 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn config_document_preserves_unchanged_toml() {
-        let toml = r#"# preset comment
+        let toml = r##"# preset comment
 [metadata]
 name = 'Formatted'
 
@@ -1286,12 +1248,12 @@ step = 1.0
 initial_heading = 0.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "solid"
-color = [0.1, 0.2, 0.3]
-"#;
+color = "#1a334d"
+"##;
 
         let source = ConfigSource::parse(toml).unwrap();
 
@@ -1313,7 +1275,7 @@ color = [0.1, 0.2, 0.3]
 
     #[test]
     fn missing_step_defaults_to_one() {
-        let toml = r#"
+        let toml = r##"
 [metadata]
 name = "test"
 
@@ -1329,12 +1291,12 @@ F = "FF"
 angle = 90.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+color = "#00e680"
+"##;
         let config = parse_config(toml).unwrap();
         assert_eq!(config.generation.step, 1.0);
         assert_eq!(config.generation.initial_heading, 0.0);
@@ -1383,7 +1345,7 @@ color = [0.0, 0.9, 0.5]
 
     #[test]
     fn rejects_missing_rules_table() {
-        let toml = r#"
+        let toml = r##"
 [metadata]
 name = "test"
 
@@ -1398,66 +1360,54 @@ step = 1.0
 initial_heading = 0.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+color = "#00e680"
+"##;
         assert!(parse_config(toml).is_err());
     }
 
     #[test]
-    fn rejects_out_of_range_color_component() {
+    fn rejects_invalid_hex_for_background_in_test_toml() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
-        let toml = toml.replace(
-            "background = [0.0, 0.0, 0.0]",
-            "background = [0.0, 1.2, 0.0]",
-        );
+        let toml = toml.replace("background = \"#000000\"", "background = \"notahex\"");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(
                 err,
-                ConfigError::InvalidColorComponent {
+                ConfigError::InvalidRgb {
                     ref field,
-                    component: 1,
-                    value
-                } if field == "colors.background" && value == 1.2
+                    ref value
+                } if field == "colors.background" && value == "notahex"
             ),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn rejects_out_of_range_depth_gradient_color_component() {
-        for (field, replacement) in [
+    fn rejects_invalid_hex_for_depth_gradient_colors() {
+        for (expected_field, replacement) in [
             (
                 "colors.line.start",
-                r#"mode = "depth_gradient"
-start = [0.0, 1.2, 0.0]
-end = [1.0, 1.0, 1.0]"#,
+                "mode = \"depth_gradient\"\nstart = \"bad\"\nend = \"#b3cce6\"",
             ),
             (
                 "colors.line.end",
-                r#"mode = "depth_gradient"
-start = [0.0, 0.0, 0.0]
-end = [1.0, 1.2, 1.0]"#,
+                "mode = \"depth_gradient\"\nstart = \"#1a334d\"\nend = \"bad\"",
             ),
         ] {
-            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "").replace(
-                r#"mode = "solid"
-color = [0.0, 0.9, 0.5]"#,
-                replacement,
-            );
+            let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "")
+                .replace("mode = \"solid\"\ncolor = \"#00e680\"", replacement);
             let err = parse_config(&toml).unwrap_err();
             assert!(
                 matches!(
                     err,
-                    ConfigError::InvalidColorComponent {
+                    ConfigError::InvalidRgb {
                         field: ref error_field,
-                        component: 1,
-                        value
-                    } if error_field == field && value == 1.2
+                        ref value
+                    } if error_field == expected_field && value == "bad"
                 ),
                 "unexpected error: {err}"
             );
@@ -1465,20 +1415,30 @@ color = [0.0, 0.9, 0.5]"#,
     }
 
     #[test]
-    fn rejects_non_finite_line_color_component() {
+    fn rejects_invalid_hex_for_line_color() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
-        let toml = toml.replace("color = [0.0, 0.9, 0.5]", "color = [0.0, nan, 0.5]");
+        let toml = toml.replace("color = \"#00e680\"", "color = \"#zzzzzz\"");
         let err = parse_config(&toml).unwrap_err();
         assert!(
             matches!(
                 err,
-                ConfigError::InvalidColorComponent {
+                ConfigError::InvalidRgb {
                     ref field,
-                    component: 1,
                     ..
                 } if field == "colors.line.color"
             ),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_old_array_for_line_color() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
+        let toml = toml.replace("color = \"#00e680\"", "color = [0.0, 0.9, 0.5]");
+        let err = parse_config(&toml).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::TomlDeserialize(_)),
+            "expected TomlDeserialize error for array line color, got: {err}"
         );
     }
 
@@ -1496,39 +1456,29 @@ color = [0.0, 0.9, 0.5]"#,
         let cases = [
             (
                 "solid",
-                r#"mode = "solid"
-color = [0.0, 0.9, 0.5]
-start = [0.0, 0.0, 0.0]"#,
+                "mode = \"solid\"\ncolor = \"#00e680\"\nstart = \"#000000\"",
                 "colors.line.start",
             ),
             (
                 "gradient",
-                r#"mode = "gradient"
-start = [0.0, 0.0, 0.0]
-end = [1.0, 1.0, 1.0]
-color = [0.0, 0.9, 0.5]"#,
+                "mode = \"gradient\"\nstart = \"#000000\"\nend = \"#ffffff\"\ncolor = \"#00e680\"",
                 "colors.line.color",
             ),
             (
                 "depth_gradient",
-                r#"mode = "depth_gradient"
-start = [0.0, 0.0, 0.0]
-end = [1.0, 1.0, 1.0]
-color = [0.0, 0.9, 0.5]"#,
+                "mode = \"depth_gradient\"\nstart = \"#000000\"\nend = \"#ffffff\"\ncolor = \"#00e680\"",
                 "colors.line.color",
             ),
             (
                 "hue_cycle",
-                r#"mode = "hue_cycle"
-initial = [0.0, 0.9, 0.5]
-end = [1.0, 1.0, 1.0]"#,
+                "mode = \"hue_cycle\"\ninitial = \"#00e680\"\nend = \"#ffffff\"",
                 "colors.line.end",
             ),
         ];
 
         for (_mode, replacement, expected_field) in cases {
             let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
-            let toml = toml.replace("mode = \"solid\"\ncolor = [0.0, 0.9, 0.5]", replacement);
+            let toml = toml.replace("mode = \"solid\"\ncolor = \"#00e680\"", replacement);
             let err = parse_config(&toml).unwrap_err();
 
             assert_toml_deserialize_error_mentions_path(err, expected_field);
@@ -1786,8 +1736,8 @@ end = [1.0, 1.0, 1.0]"#,
     fn effective_colors_normalizes_depth_gradient_to_gradient_for_bracketless() {
         let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
-        let start = rgb([0.1, 0.2, 0.3]);
-        let end = rgb([0.7, 0.8, 0.9]);
+        let start = hex("#1a334d");
+        let end = hex("#b3cce6");
         cfg.colors.line = LineColorConfig::DepthGradient { start, end };
         let effective = cfg.effective_colors();
         assert_eq!(
@@ -1818,8 +1768,8 @@ end = [1.0, 1.0, 1.0]"#,
             "F = \"F[+F]F[-F]F\"",
         );
         let mut cfg = parse_config(&toml).unwrap();
-        let start = rgb([0.1, 0.2, 0.3]);
-        let end = rgb([0.7, 0.8, 0.9]);
+        let start = hex("#1a334d");
+        let end = hex("#b3cce6");
         cfg.colors.line = LineColorConfig::DepthGradient { start, end };
         let effective = cfg.effective_colors();
         assert_eq!(
@@ -1843,8 +1793,8 @@ end = [1.0, 1.0, 1.0]"#,
         let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         cfg.colors.line = LineColorConfig::Gradient {
-            start: rgb([1.0, 0.0, 0.0]),
-            end: rgb([0.0, 0.0, 1.0]),
+            start: hex("#ff0000"),
+            end: hex("#0000ff"),
         };
         let effective = cfg.effective_colors();
         assert_eq!(effective.line, cfg.colors.line);
@@ -1856,10 +1806,233 @@ end = [1.0, 1.0, 1.0]"#,
         let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "");
         let mut cfg = parse_config(&toml).unwrap();
         cfg.colors.line = LineColorConfig::HueCycle {
-            initial: rgb([1.0, 0.0, 0.0]),
+            initial: hex("#ff0000"),
         };
         let effective = cfg.effective_colors();
         assert_eq!(effective.line, cfg.colors.line);
         assert_eq!(effective.background, cfg.colors.background);
+    }
+
+    #[test]
+    fn set_background_writes_hex_string() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
+        let mut source = ConfigSource::parse(&toml).unwrap();
+        source.set_background(Some(Rgb::new(0xff, 0x80, 0x00)));
+        let result = source.to_toml_string();
+        assert!(
+            result.contains(r##"background = "#ff8000""##),
+            "expected hex string, got: {result}"
+        );
+        // Verify it round-trips: re-parsing produces the same Rgb
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
+        assert_eq!(
+            doc.config().colors.background,
+            Some(Rgb::new(0xff, 0x80, 0x00))
+        );
+    }
+
+    #[test]
+    fn set_line_color_writes_hex_strings() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
+        let mut source = ConfigSource::parse(&toml).unwrap();
+        source.set_line_color(&LineColorConfig::Gradient {
+            start: Rgb::new(0x00, 0x11, 0x22),
+            end: Rgb::new(0xaa, 0xbb, 0xcc),
+        });
+        let result = source.to_toml_string();
+        assert!(
+            result.contains(r##"start = "#001122""##),
+            "expected start hex, got: {result}"
+        );
+        assert!(
+            result.contains(r##"end = "#aabbcc""##),
+            "expected end hex, got: {result}"
+        );
+        // Round-trip
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
+        assert_eq!(
+            doc.config().colors.line,
+            LineColorConfig::Gradient {
+                start: Rgb::new(0x00, 0x11, 0x22),
+                end: Rgb::new(0xaa, 0xbb, 0xcc),
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod hex_color {
+    use super::*;
+
+    // --- Parsing ---
+
+    #[test]
+    fn try_from_accepts_lowercase_hex() {
+        let hex = Rgb::try_from("#00e680").unwrap();
+        assert_eq!(hex.r(), 0x00);
+        assert_eq!(hex.g(), 0xe6);
+        assert_eq!(hex.b(), 0x80);
+    }
+
+    #[test]
+    fn try_from_accepts_uppercase_hex() {
+        let hex = Rgb::try_from("#00E680").unwrap();
+        assert_eq!(hex.r(), 0x00);
+        assert_eq!(hex.g(), 0xe6);
+        assert_eq!(hex.b(), 0x80);
+    }
+
+    #[test]
+    fn try_from_string_accepts_lowercase_hex() {
+        let hex = Rgb::try_from(String::from("#00e680")).unwrap();
+        assert_eq!(hex, Rgb::new(0x00, 0xe6, 0x80));
+    }
+
+    // --- Display ---
+
+    #[test]
+    fn display_emits_canonical_lowercase() {
+        assert_eq!(Rgb::new(0x00, 0xe6, 0x80).to_string(), "#00e680");
+        assert_eq!(Rgb::new(0xAB, 0xCD, 0xEF).to_string(), "#abcdef");
+        assert_eq!(Rgb::BLACK.to_string(), "#000000");
+    }
+
+    // --- Rejection cases ---
+
+    #[test]
+    fn try_from_rejects_missing_leading_hash() {
+        assert_eq!(Rgb::try_from("00e680"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_too_short() {
+        // 5 hex chars after #
+        assert_eq!(Rgb::try_from("#0e680"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_too_long() {
+        // 7 hex chars after #
+        assert_eq!(Rgb::try_from("#00e6800"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_non_hex_character() {
+        assert_eq!(Rgb::try_from("#00g680"), Err(RgbError));
+        assert_eq!(Rgb::try_from("#zzzzzz"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_shorthand() {
+        // #rgb — 3 chars
+        assert_eq!(Rgb::try_from("#0e6"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_alpha_form() {
+        // #rrggbbaa — 8 chars
+        assert_eq!(Rgb::try_from("#00e680ff"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_full_width_lookalikes() {
+        // Full-width '#' (U+FF03) followed by 6 ASCII hex chars
+        assert_eq!(Rgb::try_from("\u{FF03}00e680"), Err(RgbError));
+        // Full-width digits
+        assert_eq!(Rgb::try_from("#\u{FF10}\u{FF10}e680"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_non_ascii_same_byte_length() {
+        // Two 3-byte UTF-8 chars → 6 bytes total, would panic without is_ascii() guard
+        assert_eq!(Rgb::try_from("#\u{0800}\u{0800}"), Err(RgbError));
+    }
+
+    #[test]
+    fn try_from_rejects_empty_string() {
+        assert_eq!(Rgb::try_from(""), Err(RgbError));
+    }
+
+    // --- to_array ---
+
+    #[test]
+    fn to_array_maps_bytes_correctly() {
+        let hex = Rgb::new(0x00, 0xff, 0x80);
+        let [r, g, b] = hex.to_array();
+        assert_eq!(r, 0.0);
+        assert_eq!(g, 1.0);
+        assert!((b - 128.0 / 255.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn to_array_black() {
+        assert_eq!(Rgb::new(0x00, 0x00, 0x00).to_array(), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn to_array_white() {
+        assert_eq!(Rgb::new(0xff, 0xff, 0xff).to_array(), [1.0, 1.0, 1.0]);
+    }
+
+    // --- Constants ---
+
+    #[test]
+    fn constants_have_correct_css_hex() {
+        assert_eq!(Rgb::BLACK.to_string(), "#000000");
+        assert_eq!(Rgb::DEFAULT_SOLID_LINE.to_string(), "#00e680");
+        assert_eq!(Rgb::DEFAULT_GRADIENT_START.to_string(), "#0d590d");
+        assert_eq!(Rgb::DEFAULT_GRADIENT_END.to_string(), "#99e61a");
+        assert_eq!(Rgb::DEFAULT_HUE_CYCLE_INITIAL.to_string(), "#e60000");
+    }
+
+    // --- to_hsv ---
+
+    const EPS: f32 = 1e-5;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
+
+    #[test]
+    fn to_hsv_converts_correctly() {
+        // 0x40=64, 0x80=128 → r=64/255≈0.251, g=b=128/255≈0.502 → hue=180°, sat≈0.5, val≈0.502
+        let (hue, saturation, value) = Rgb::new(0x40, 0x80, 0x80).to_hsv();
+        assert!(close(hue, 180.0));
+        assert!(close(saturation, 0.5));
+        assert!(close(value, 128.0 / 255.0));
+    }
+
+    #[test]
+    fn to_hsv_grayscale_has_zero_saturation_and_hue() {
+        let (hue, saturation, value) = Rgb::new(0x66, 0x66, 0x66).to_hsv();
+        assert!(close(hue, 0.0));
+        assert!(close(saturation, 0.0));
+        assert!(close(value, 0x66 as f32 / 255.0));
+    }
+
+    #[test]
+    fn to_hsv_pure_blue_maps_to_blue_hue() {
+        let (hue, saturation, value) = Rgb::new(0x00, 0x00, 0xff).to_hsv();
+        assert!(close(hue, 240.0));
+        assert!(close(saturation, 1.0));
+        assert!(close(value, 1.0));
+    }
+
+    #[test]
+    fn to_hsv_black_has_zero_saturation_and_value() {
+        let (hue, saturation, value) = Rgb::BLACK.to_hsv();
+        assert!(close(hue, 0.0));
+        assert!(close(saturation, 0.0));
+        assert!(close(value, 0.0));
+    }
+
+    #[test]
+    fn to_hsv_red_dominant_negative_hue_wraps() {
+        // #ff0080: r=1.0, g=0.0, b=128/255≈0.502. Raw (g-b)/delta = -0.502, which rem_euclid(6)
+        // wraps to 5.498. hue = 60*5.498 ≈ 329.88°. Verifies that rem_euclid keeps hue positive.
+        let (hue, saturation, value) = Rgb::new(0xff, 0x00, 0x80).to_hsv();
+        assert!(close(hue, 60.0 * (-(128.0_f32 / 255.0)).rem_euclid(6.0)));
+        assert!(close(saturation, 1.0));
+        assert!(close(value, 1.0));
     }
 }

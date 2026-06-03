@@ -634,30 +634,26 @@ impl FractalApp {
 mod tests {
     use super::*;
 
-    fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_from(components).unwrap()
-    }
-
     #[test]
     fn color_control_memory_uses_defaults_and_restores_edits() {
         let solid = LineColorConfig::Solid {
-            color: rgb([0.1, 0.2, 0.3]),
+            color: Rgb::new(0x1a, 0x33, 0x4d),
         };
         let gradient = LineColorConfig::Gradient {
-            start: rgb([0.4, 0.5, 0.6]),
-            end: rgb([0.7, 0.8, 0.9]),
+            start: Rgb::new(0x66, 0x80, 0x99),
+            end: Rgb::new(0xb3, 0xcc, 0xe5),
         };
         let depth_gradient = LineColorConfig::DepthGradient {
-            start: rgb([0.2, 0.3, 0.4]),
-            end: rgb([0.5, 0.6, 0.7]),
+            start: Rgb::new(0x33, 0x4d, 0x66),
+            end: Rgb::new(0x80, 0x99, 0xb3),
         };
 
         let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
-            background: Some(rgb([0.8, 0.8, 0.8])),
+            background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
             line: solid,
         });
 
-        assert_eq!(memory.background(), rgb([0.8, 0.8, 0.8]));
+        assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
@@ -672,11 +668,11 @@ mod tests {
             LineColorConfig::DEFAULT_DEPTH_GRADIENT
         );
 
-        memory.remember_background(rgb([0.9, 0.1, 0.2]));
+        memory.remember_background(Rgb::new(0xe5, 0x1a, 0x33));
         memory.remember_line(gradient);
         memory.remember_line(depth_gradient);
 
-        assert_eq!(memory.background(), rgb([0.9, 0.1, 0.2]));
+        assert_eq!(memory.background(), Rgb::new(0xe5, 0x1a, 0x33));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
         assert_eq!(memory.line_for(LineColorMode::Gradient), gradient);
         assert_eq!(
@@ -689,8 +685,8 @@ mod tests {
     fn clean_apply_preserves_inactive_line_color_memory() {
         let (mut app, _) = FractalApp::new();
         let gradient = LineColorConfig::Gradient {
-            start: rgb([0.4, 0.5, 0.6]),
-            end: rgb([0.7, 0.8, 0.9]),
+            start: Rgb::new(0x66, 0x80, 0x99),
+            end: Rgb::new(0xb3, 0xcc, 0xe5),
         };
         app.color_memory.remember_line(gradient);
 
@@ -730,7 +726,7 @@ mod tests {
     #[test]
     fn background_toggle_restores_last_selected_color() {
         let (mut app, _) = FractalApp::new();
-        let background = rgb([0.2, 0.3, 0.4]);
+        let background = Rgb::new(0x33, 0x4d, 0x66);
 
         let _ = app.update(Message::BackgroundColorChanged(background));
         let _ = app.update(Message::BackgroundOverrideToggled(false));
@@ -857,7 +853,7 @@ mod tests {
     #[test]
     fn effective_is_3d_uses_config_not_stale_scene() {
         let (mut app, _) = FractalApp::new();
-        let three_d_config = r#"[metadata]
+        let three_d_config = r##"[metadata]
 name = "3D"
 
 [l-system]
@@ -875,8 +871,8 @@ initial_heading = 0.0
 
 [colors.line]
 mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+color = "#00e680"
+"##;
         app.config_workspace =
             ConfigWorkspace::from_presets(vec![("3d", three_d_config.to_string())]).unwrap();
 

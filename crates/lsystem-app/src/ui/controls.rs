@@ -164,24 +164,22 @@ fn push_color_controls<'a>(
     );
 
     match *line_color {
-        LineColorConfig::Solid { color } => {
-            controls.push(rgb_controls("Line RGB", color, |color| {
-                Message::LineColorChanged(LineColorConfig::Solid { color })
-            }))
-        }
+        LineColorConfig::Solid { color } => controls.push(rgb_controls("Line RGB", color, |hex| {
+            Message::LineColorChanged(LineColorConfig::Solid { color: hex })
+        })),
         LineColorConfig::Gradient { start, end } => controls
-            .push(rgb_controls("Gradient start", start, move |start| {
-                Message::LineColorChanged(LineColorConfig::Gradient { start, end })
+            .push(rgb_controls("Gradient start", start, move |hex| {
+                Message::LineColorChanged(LineColorConfig::Gradient { start: hex, end })
             }))
-            .push(rgb_controls("Gradient end", end, move |end| {
-                Message::LineColorChanged(LineColorConfig::Gradient { start, end })
+            .push(rgb_controls("Gradient end", end, move |hex| {
+                Message::LineColorChanged(LineColorConfig::Gradient { start, end: hex })
             })),
         LineColorConfig::DepthGradient { start, end } => controls
-            .push(rgb_controls("Depth start", start, move |start| {
-                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
+            .push(rgb_controls("Depth start", start, move |hex| {
+                Message::LineColorChanged(LineColorConfig::DepthGradient { start: hex, end })
             }))
-            .push(rgb_controls("Depth end", end, move |end| {
-                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
+            .push(rgb_controls("Depth end", end, move |hex| {
+                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end: hex })
             })),
         LineColorConfig::HueCycle { initial } => {
             let rotation_label = if hue_rotation.is_enabled() {
@@ -190,8 +188,8 @@ fn push_color_controls<'a>(
                 "Hue rotation: Off"
             };
             controls
-                .push(rgb_controls("Initial RGB", initial, |initial| {
-                    Message::LineColorChanged(LineColorConfig::HueCycle { initial })
+                .push(rgb_controls("Initial RGB", initial, |hex| {
+                    Message::LineColorChanged(LineColorConfig::HueCycle { initial: hex })
                 }))
                 .push(button(rotation_label).on_press(Message::ToggleHueRotation))
                 .push(
@@ -250,7 +248,7 @@ fn color_slider<'a>(
         slider(0.0..=1.0, color[component], move |value| {
             let mut next = color;
             next[component] = value.clamp(0.0, 1.0);
-            message(Rgb::try_from(next).expect("clamped f32 is always valid RGB"))
+            message(rgb_from_f32_array(next))
         })
         .step(0.01),
         text(format!("{:.0}", color[component] * 255.0))
@@ -277,4 +275,35 @@ fn color_swatch(color: Rgb) -> Element<'static, Message> {
             ..Default::default()
         })
         .into()
+}
+
+fn rgb_from_f32_array([r, g, b]: [f32; 3]) -> Rgb {
+    Rgb::new(
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgb_from_f32_array_rounds_midpoint() {
+        // 0.5 * 255.0 = 127.5 → rounds to 128 (0x80)
+        assert_eq!(
+            rgb_from_f32_array([0.0, 0.5, 1.0]),
+            Rgb::new(0x00, 0x80, 0xff)
+        );
+    }
+
+    #[test]
+    fn rgb_from_f32_array_boundary_values() {
+        assert_eq!(rgb_from_f32_array([0.0, 0.0, 0.0]), Rgb::BLACK);
+        assert_eq!(
+            rgb_from_f32_array([1.0, 1.0, 1.0]),
+            Rgb::new(0xff, 0xff, 0xff)
+        );
+    }
 }

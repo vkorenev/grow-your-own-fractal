@@ -134,10 +134,6 @@ mod tests {
 
     use super::{ColorControlMemory, LineColorMode};
 
-    fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_from(components).unwrap()
-    }
-
     #[test]
     fn line_color_mode_key_round_trip() {
         for mode in [
@@ -174,7 +170,7 @@ mod tests {
     #[test]
     fn color_memory_remembers_solid_across_mode_switch() {
         let solid = LineColorConfig::Solid {
-            color: rgb([1.0, 0.0, 0.0]),
+            color: Rgb::new(0xff, 0x00, 0x00),
         };
         let mut memory = ColorControlMemory::from_colors(&ColorConfig {
             background: None,
@@ -206,13 +202,13 @@ mod tests {
 
     #[test]
     fn color_memory_background_remembered() {
-        let bg = rgb([0.1, 0.2, 0.3]);
+        let bg = Rgb::new(0x1a, 0x33, 0x4d);
         let mut memory = ColorControlMemory::from_colors(&ColorConfig {
             background: Some(bg),
             line: LineColorConfig::DEFAULT_SOLID,
         });
         assert_eq!(memory.background(), bg);
-        let new_bg = rgb([0.9, 0.8, 0.7]);
+        let new_bg = Rgb::new(0xe5, 0xcc, 0xb3);
         memory.remember_background(new_bg);
         assert_eq!(memory.background(), new_bg);
     }
