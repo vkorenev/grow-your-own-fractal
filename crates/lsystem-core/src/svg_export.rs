@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::{
     ColorConfig, Config, GenerationConfig, LineColorConfig, Segment2DWithTopologicalDepth,
-    color_util::rgb_to_hsv, generate, generate_with_topological_depth,
+    generate, generate_with_topological_depth,
 };
 
 /// Generate an SVG string for the given config.
@@ -131,7 +131,7 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             out
         }
         LineColorConfig::HueCycle { initial } => {
-            let (start_hue, saturation, value) = rgb_to_hsv(initial.to_f32_array());
+            let (start_hue, saturation, value) = initial.to_hsv();
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();

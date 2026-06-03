@@ -248,7 +248,7 @@ fn color_slider<'a>(
         slider(0.0..=1.0, color[component], move |value| {
             let mut next = color;
             next[component] = value.clamp(0.0, 1.0);
-            message(HexColor::from_f32_array_rounded(next))
+            message(hex_from_f32_array(next))
         })
         .step(0.01),
         text(format!("{:.0}", color[component] * 255.0))
@@ -275,4 +275,12 @@ fn color_swatch(color: HexColor) -> Element<'static, Message> {
             ..Default::default()
         })
         .into()
+}
+
+fn hex_from_f32_array([r, g, b]: [f32; 3]) -> HexColor {
+    HexColor::new(
+        (r * 255.0).round() as u8,
+        (g * 255.0).round() as u8,
+        (b * 255.0).round() as u8,
+    )
 }

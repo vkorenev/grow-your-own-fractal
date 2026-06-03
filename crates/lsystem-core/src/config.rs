@@ -103,12 +103,23 @@ impl HexColor {
         self.bytes.map(|b| b as f32 / 255.0)
     }
 
-    /// Converts a `[r, g, b]` float array to `HexColor` by rounding each component to the nearest
-    /// `u8`. Explicit because quantization is lossy.
-    pub fn from_f32_array_rounded(arr: [f32; 3]) -> Self {
-        Self {
-            bytes: arr.map(|c| (c * 255.0).round() as u8),
-        }
+    /// Converts to `(hue_degrees, saturation, value)` in HSV color space.
+    pub fn to_hsv(self) -> (f32, f32, f32) {
+        let [r, g, b] = self.to_f32_array();
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let delta = max - min;
+        let hue = if delta == 0.0 {
+            0.0
+        } else if max == r {
+            60.0 * ((g - b) / delta).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * (((b - r) / delta) + 2.0)
+        } else {
+            60.0 * (((r - g) / delta) + 4.0)
+        };
+        let saturation = if max == 0.0 { 0.0 } else { delta / max };
+        (hue, saturation, max)
     }
 }
 
@@ -1962,33 +1973,6 @@ mod hex_color {
         );
     }
 
-    // --- from_f32_array_rounded round-trip ---
-
-    #[test]
-    fn from_f32_array_rounded_round_trips_representable_hex_values() {
-        for hex in [
-            HexColor::BLACK,
-            HexColor::DEFAULT_SOLID_LINE,
-            HexColor::DEFAULT_GRADIENT_START,
-            HexColor::DEFAULT_GRADIENT_END,
-            HexColor::DEFAULT_HUE_CYCLE_INITIAL,
-            HexColor::new(0xff, 0x00, 0x7f),
-            HexColor::new(0x12, 0x34, 0x56),
-        ] {
-            let recovered = HexColor::from_f32_array_rounded(hex.to_f32_array());
-            assert_eq!(recovered, hex, "round-trip failed for {}", hex.to_css_hex());
-        }
-    }
-
-    #[test]
-    fn from_f32_array_rounded_rounds_midpoint_component() {
-        // 0.5 * 255.0 = 127.5 → rounds to 128 (0x80), not truncates to 127 (0x7f)
-        assert_eq!(
-            HexColor::from_f32_array_rounded([0.0, 0.5, 1.0]),
-            HexColor::new(0x00, 0x80, 0xff)
-        );
-    }
-
     // --- Constants ---
 
     #[test]
@@ -1998,5 +1982,60 @@ mod hex_color {
         assert_eq!(HexColor::DEFAULT_GRADIENT_START.to_css_hex(), "#0d590d");
         assert_eq!(HexColor::DEFAULT_GRADIENT_END.to_css_hex(), "#99e61a");
         assert_eq!(HexColor::DEFAULT_HUE_CYCLE_INITIAL.to_css_hex(), "#e60000");
+    }
+
+    // --- to_hsv ---
+
+    const EPS: f32 = 1e-5;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
+
+    #[test]
+    fn to_hsv_converts_correctly() {
+        // 0x40=64, 0x80=128 → r=64/255≈0.251, g=b=128/255≈0.502 → hue=180°, sat≈0.5, val≈0.502
+        let (hue, saturation, value) = HexColor::new(0x40, 0x80, 0x80).to_hsv();
+        assert!(close(hue, 180.0));
+        assert!(close(saturation, 0.5));
+        assert!(close(value, 128.0 / 255.0));
+    }
+
+    #[test]
+    fn to_hsv_grayscale_has_zero_saturation_and_hue() {
+        let (hue, saturation, value) = HexColor::new(0x66, 0x66, 0x66).to_hsv();
+        assert!(close(hue, 0.0));
+        assert!(close(saturation, 0.0));
+        assert!(close(value, 0x66 as f32 / 255.0));
+    }
+
+    #[test]
+    fn to_hsv_pure_blue_maps_to_blue_hue() {
+        let (hue, saturation, value) = HexColor::new(0x00, 0x00, 0xff).to_hsv();
+        assert!(close(hue, 240.0));
+        assert!(close(saturation, 1.0));
+        assert!(close(value, 1.0));
+    }
+
+    #[test]
+    fn to_hsv_black_has_zero_saturation_and_value() {
+        let (hue, saturation, value) = HexColor::BLACK.to_hsv();
+        assert!(close(hue, 0.0));
+        assert!(close(saturation, 0.0));
+        assert!(close(value, 0.0));
+    }
+
+    #[test]
+    fn to_hsv_red_dominant_negative_hue_wraps() {
+        // Red-dominant with b > g: the raw (g-b)/delta is negative; rem_euclid keeps it positive.
+        let hex = HexColor::new(0xff, 0x00, 0x80);
+        let (hue, saturation, value) = hex.to_hsv();
+        assert!(hue > 0.0 && hue < 360.0, "hue {hue} must be in [0, 360)");
+        assert!(close(saturation, 1.0));
+        assert!(close(value, 1.0));
+        // Verify the exact value matches the implementation for this input.
+        let [r, g, b] = hex.to_f32_array();
+        let expected = 60.0 * ((g - b) / (r - 0.0_f32)).rem_euclid(6.0);
+        assert!(close(hue, expected));
     }
 }

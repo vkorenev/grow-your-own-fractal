@@ -1,8 +1,5 @@
 use glam::{Vec2, Vec3};
-use lsystem_core::{
-    LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
-    color_util::rgb_to_hsv,
-};
+use lsystem_core::{LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth};
 
 use crate::line_renderer::{
     ColorMode, ColorParams, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -339,7 +336,7 @@ pub fn color_params_from_config(
             ..Default::default()
         },
         LineColorConfig::HueCycle { initial } => {
-            let (hue_start, saturation, value) = rgb_to_hsv(initial.to_f32_array());
+            let (hue_start, saturation, value) = initial.to_hsv();
             ColorParams {
                 mode: ColorMode::HueCycle,
                 total_segments,
@@ -445,7 +442,7 @@ mod tests {
 
         assert_eq!(params.mode, ColorMode::HueCycle);
         assert_eq!(params.total_segments, 9);
-        let (hue, sat, val) = lsystem_core::color_util::rgb_to_hsv(initial.to_f32_array());
+        let (hue, sat, val) = initial.to_hsv();
         assert!(close(params.hue_start, hue));
         assert!(close(params.saturation, sat));
         assert!(close(params.value, val));
