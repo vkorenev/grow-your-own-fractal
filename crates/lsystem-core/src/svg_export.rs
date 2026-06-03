@@ -54,7 +54,10 @@ fn export_svg_with_segments(
         }
     }
     if !has_segments {
-        let bg = to_hex(colors.effective_background().to_array());
+        let bg = colors
+            .background
+            .unwrap_or(ColorConfig::DEFAULT_BACKGROUND)
+            .to_css_hex();
         return format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
         );
@@ -84,7 +87,10 @@ fn export_svg_with_segments(
     let w = max_x - min_x;
     let h = max_y - min_y;
 
-    let bg = to_hex(colors.effective_background().to_array());
+    let bg = colors
+        .background
+        .unwrap_or(ColorConfig::DEFAULT_BACKGROUND)
+        .to_css_hex();
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
@@ -103,7 +109,7 @@ fn export_svg_with_segments(
 fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
     match line {
         LineColorConfig::Solid { color: c } => {
-            let color = to_hex(c.to_array());
+            let color = c.to_css_hex();
             let mut d = String::new();
             for [a, b] in segments {
                 d.push_str(&format!("M{:.3},{:.3}L{:.3},{:.3}", a.x, a.y, b.x, b.y));
@@ -111,8 +117,8 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             format!("<path d=\"{d}\" stroke=\"{color}\"/>\n")
         }
         LineColorConfig::Gradient { start, end } => {
-            let start = start.to_array();
-            let end = end.to_array();
+            let start = crate::Rgb::from(*start).to_array();
+            let end = crate::Rgb::from(*end).to_array();
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
@@ -132,7 +138,7 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             out
         }
         LineColorConfig::HueCycle { initial } => {
-            let (start_hue, saturation, value) = rgb_to_hsv(*initial);
+            let (start_hue, saturation, value) = rgb_to_hsv(crate::Rgb::from(*initial));
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
@@ -158,8 +164,8 @@ fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColor
     let LineColorConfig::DepthGradient { start, end } = *line else {
         unreachable!("depth body requires depth-gradient line color")
     };
-    let start = start.to_array();
-    let end = end.to_array();
+    let start = crate::Rgb::from(start).to_array();
+    let end = crate::Rgb::from(end).to_array();
     let max_topological_depth = segments
         .iter()
         .map(|segment| segment.topological_depth)
@@ -220,27 +226,26 @@ mod tests {
 
     fn make_config_with_axiom(axiom: &str, extra_toml: &str) -> Config {
         let toml = format!(
-            r#"[metadata]
-name = "Test"
-
-[l-system]
-dimensions = "2D"
-axiom = "{axiom}"
-iterations = 1
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-{extra_toml}
-"#
+            "[metadata]\n\
+            name = \"Test\"\n\
+            \n\
+            [l-system]\n\
+            dimensions = \"2D\"\n\
+            axiom = \"{axiom}\"\n\
+            iterations = 1\n\
+            \n\
+            [l-system.rules]\n\
+            \n\
+            [turtle]\n\
+            angle = 90.0\n\
+            step = 1.0\n\
+            initial_heading = 0.0\n\
+            \n\
+            [colors]\n\
+            background = \"#000000\"\n\
+            \n\
+            [colors.line]\n\
+            {extra_toml}\n"
         );
         ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap())
             .unwrap()
@@ -248,55 +253,53 @@ background = [0.0, 0.0, 0.0]
     }
 
     fn make_empty_config() -> Config {
-        let toml = r#"[metadata]
-name = "Empty"
-
-[l-system]
-dimensions = "2D"
-axiom = "+"
-iterations = 1
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = [0.0, 0.0, 0.0]
-
-[colors.line]
-mode = "solid"
-color = [0.0, 0.9, 0.5]
-"#;
+        let toml = "[metadata]\n\
+            name = \"Empty\"\n\
+            \n\
+            [l-system]\n\
+            dimensions = \"2D\"\n\
+            axiom = \"+\"\n\
+            iterations = 1\n\
+            \n\
+            [l-system.rules]\n\
+            \n\
+            [turtle]\n\
+            angle = 90.0\n\
+            step = 1.0\n\
+            initial_heading = 0.0\n\
+            \n\
+            [colors]\n\
+            background = \"#000000\"\n\
+            \n\
+            [colors.line]\n\
+            mode = \"solid\"\n\
+            color = \"#00e680\"\n";
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
             .into()
     }
 
     fn make_config_without_background() -> Config {
-        let toml = r#"[metadata]
-name = "No Background"
-
-[l-system]
-dimensions = "2D"
-axiom = "F+F"
-iterations = 1
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-
-[colors.line]
-mode = "solid"
-color = [1.0, 0.0, 0.0]
-"#;
+        let toml = "[metadata]\n\
+            name = \"No Background\"\n\
+            \n\
+            [l-system]\n\
+            dimensions = \"2D\"\n\
+            axiom = \"F+F\"\n\
+            iterations = 1\n\
+            \n\
+            [l-system.rules]\n\
+            \n\
+            [turtle]\n\
+            angle = 90.0\n\
+            step = 1.0\n\
+            initial_heading = 0.0\n\
+            \n\
+            [colors]\n\
+            \n\
+            [colors.line]\n\
+            mode = \"solid\"\n\
+            color = \"#ff0000\"\n";
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
             .into()
@@ -304,21 +307,20 @@ color = [1.0, 0.0, 0.0]
 
     #[test]
     fn solid_contains_svg_and_color() {
-        let cfg = make_config("mode = \"solid\"\ncolor = [1.0, 0.0, 0.0]");
+        let cfg = make_config("mode = \"solid\"\ncolor = \"#ff0000\"");
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
             svg.contains("matrix(1 0 0 -1 0 0)"),
             "missing Y-flip transform"
         );
-        assert!(svg.contains("#FF0000"), "missing solid color");
+        assert!(svg.contains("#ff0000"), "missing solid color");
         assert!(svg.contains("<path"), "expected <path for solid mode");
     }
 
     #[test]
     fn gradient_first_and_last_segment_colors() {
-        let cfg =
-            make_config("mode = \"gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]");
+        let cfg = make_config("mode = \"gradient\"\nstart = \"#ff0000\"\nend = \"#0000ff\"");
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -332,7 +334,7 @@ color = [1.0, 0.0, 0.0]
 
     #[test]
     fn hue_cycle_start_color() {
-        let cfg = make_config("mode = \"hue_cycle\"\ninitial = [1.0, 0.0, 0.0]");
+        let cfg = make_config("mode = \"hue_cycle\"\ninitial = \"#ff0000\"");
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -349,7 +351,7 @@ color = [1.0, 0.0, 0.0]
     fn depth_gradient_colors_equal_topological_depth_equally() {
         let cfg = make_config_with_axiom(
             "F[+F]F",
-            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+            "mode = \"depth_gradient\"\nstart = \"#ff0000\"\nend = \"#0000ff\"",
         );
         let svg = export_svg(&cfg);
 
@@ -368,7 +370,7 @@ color = [1.0, 0.0, 0.0]
     fn depth_gradient_single_segment_uses_start_color() {
         let cfg = make_config_with_axiom(
             "F",
-            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+            "mode = \"depth_gradient\"\nstart = \"#ff0000\"\nend = \"#0000ff\"",
         );
         let svg = export_svg(&cfg);
 
@@ -392,7 +394,7 @@ color = [1.0, 0.0, 0.0]
     fn depth_gradient_empty_geometry_returns_minimal_svg() {
         let cfg = make_config_with_axiom(
             "+",
-            "mode = \"depth_gradient\"\nstart = [1.0, 0.0, 0.0]\nend = [0.0, 0.0, 1.0]",
+            "mode = \"depth_gradient\"\nstart = \"#ff0000\"\nend = \"#0000ff\"",
         );
         let svg = export_svg(&cfg);
 

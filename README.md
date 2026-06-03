@@ -79,7 +79,7 @@ initial_heading = 0.0   # optional; starting direction in degrees, defaults to 0
                         # (0 = east, counter-clockwise positive)
 
 [colors]
-background = [0.0, 0.0, 0.0]   # optional RGB 0-1; omit to use black
+background = "#000000"   # optional hex color; omit to use black
 
 [colors.line]
 # mode = "solid"           # single color; set with `color`
@@ -88,21 +88,21 @@ background = [0.0, 0.0, 0.0]   # optional RGB 0-1; omit to use black
 # mode = "depth_gradient"  # linear RGB by topological bracket depth; equivalent
 #                           # to `gradient` for non-branching (bracketless) fractals
 mode = "solid"
-color = [0.0, 0.9, 0.5]  # used by solid mode
+color = "#00e680"  # used by solid mode
 
 # gradient example:
 # mode  = "gradient"
-# start = [1.0, 0.4, 0.0]
-# end   = [0.6, 0.0, 1.0]
+# start = "#ff6600"
+# end   = "#9900ff"
 
 # hue_cycle example:
 # mode    = "hue_cycle"
-# initial = [0.9, 0.0, 0.0]
+# initial = "#e60000"
 
 # depth_gradient example (branching fractals only; same as gradient otherwise):
 # mode  = "depth_gradient"
-# start = [1.0, 0.4, 0.0]
-# end   = [0.6, 0.0, 1.0]
+# start = "#ff6600"
+# end   = "#9900ff"
 ```
 
 Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,
@@ -110,8 +110,8 @@ Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,
 be written with explicit tables, dotted keys, or implicit parent tables. Older
 flat TOML with top-level `name`, `axiom`, `[rules]`, `background_color`, or
 `[line_color]` is rejected. `colors.background` is optional and falls back to
-black when omitted. All present colors are RGB arrays with finite components in
-the 0-1 range, including `hue_cycle`'s RGB `initial` color.
+black when omitted. All present colors are hex color strings in `"#rrggbb"`
+format, including `hue_cycle`'s `initial` color.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.

@@ -15,9 +15,9 @@ angle = 30.0
 initial_heading = 90.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "gradient"
-start = [0.35, 0.35, 0.05]
-end = [0.2, 0.85, 0.25]
+start = "#59590d"
+end = "#33d940"

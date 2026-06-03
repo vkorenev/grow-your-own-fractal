@@ -13,4 +13,4 @@ pub use config_workspace::{
     CleanMut, ConfigEntry, ConfigWorkspace, ConfigWorkspaceError, DirtyMut, EntryViewMut,
 };
 pub use presets::load_presets;
-pub use util::{hex_to_rgb, rgb_to_hex, sanitize_filename};
+pub use util::sanitize_filename;

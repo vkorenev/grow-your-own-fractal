@@ -5,10 +5,11 @@ use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, hex_to_rgb, load_presets, rgb_to_hex,
+    LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
 };
 use lsystem_core::{
-    ColorConfig, ConfigError, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols,
+    ColorConfig, ConfigError, Dimensions, GenerationConfig, HexColor, LineColorConfig,
+    contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
@@ -54,9 +55,8 @@ pub(crate) fn App() -> impl IntoView {
             generation
         })
     });
-    let color_config = Memo::new(move |_| {
-        config_workspace.with(|ws| ws.selected().applied_config().colors.clone())
-    });
+    let color_config =
+        Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_config().colors));
     let iterations = Memo::new(move |_| generation_config.with(|g| g.iterations));
     let angle = Memo::new(move |_| generation_config.with(|g| g.angle));
 
@@ -930,11 +930,13 @@ pub(crate) fn App() -> impl IntoView {
                             id="background-color"
                             type="color"
                             prop:value=move || {
-                                rgb_to_hex(color_config.with(|c| c.effective_background()))
+                                color_config.with(|c| {
+                                    c.background.unwrap_or(ColorConfig::DEFAULT_BACKGROUND).to_css_hex()
+                                })
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(color) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(color) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1014,13 +1016,13 @@ pub(crate) fn App() -> impl IntoView {
                                     color_memory,
                                     LineColorMode::Solid,
                                 ) {
-                                    LineColorConfig::Solid { color } => rgb_to_hex(color),
+                                    LineColorConfig::Solid { color } => color.to_css_hex(),
                                     _ => unreachable!("solid mode must provide solid color"),
                                 }
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(color) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(color) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1059,7 +1061,7 @@ pub(crate) fn App() -> impl IntoView {
                                     LineColorMode::DepthGradient,
                                 ) {
                                     LineColorConfig::DepthGradient { start, .. } => {
-                                        rgb_to_hex(start)
+                                        start.to_css_hex()
                                     }
                                     _ => unreachable!(
                                         "depth-gradient mode must provide depth-gradient color"
@@ -1068,7 +1070,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(start) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(start) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1107,7 +1109,7 @@ pub(crate) fn App() -> impl IntoView {
                                     color_memory,
                                     LineColorMode::DepthGradient,
                                 ) {
-                                    LineColorConfig::DepthGradient { end, .. } => rgb_to_hex(end),
+                                    LineColorConfig::DepthGradient { end, .. } => end.to_css_hex(),
                                     _ => unreachable!(
                                         "depth-gradient mode must provide depth-gradient color"
                                     ),
@@ -1115,7 +1117,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(end) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(end) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1164,13 +1166,13 @@ pub(crate) fn App() -> impl IntoView {
                                     color_memory,
                                     LineColorMode::Gradient,
                                 ) {
-                                    LineColorConfig::Gradient { start, .. } => rgb_to_hex(start),
+                                    LineColorConfig::Gradient { start, .. } => start.to_css_hex(),
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 }
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(start) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(start) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1207,13 +1209,13 @@ pub(crate) fn App() -> impl IntoView {
                                     color_memory,
                                     LineColorMode::Gradient,
                                 ) {
-                                    LineColorConfig::Gradient { end, .. } => rgb_to_hex(end),
+                                    LineColorConfig::Gradient { end, .. } => end.to_css_hex(),
                                     _ => unreachable!("gradient mode must provide gradient color"),
                                 }
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(end) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(end) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1260,13 +1262,13 @@ pub(crate) fn App() -> impl IntoView {
                                     color_memory,
                                     LineColorMode::HueCycle,
                                 ) {
-                                    LineColorConfig::HueCycle { initial } => rgb_to_hex(initial),
+                                    LineColorConfig::HueCycle { initial } => initial.to_css_hex(),
                                     _ => unreachable!("hue-cycle mode must provide hue-cycle color"),
                                 }
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Some(initial) = hex_to_rgb(&ev.target().value()) else {
+                                let Ok(initial) = HexColor::try_from(ev.target().value().as_str()) else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };

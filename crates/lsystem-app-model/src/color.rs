@@ -1,4 +1,4 @@
-use lsystem_core::{ColorConfig, LineColorConfig, Rgb};
+use lsystem_core::{ColorConfig, HexColor, LineColorConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColorMode {
@@ -67,11 +67,11 @@ impl std::fmt::Display for LineColorMode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ColorControlMemory {
-    background: Rgb,
-    solid: Option<Rgb>,
-    gradient: Option<(Rgb, Rgb)>,
-    hue_cycle: Option<Rgb>,
-    depth_gradient: Option<(Rgb, Rgb)>,
+    background: HexColor,
+    solid: Option<HexColor>,
+    gradient: Option<(HexColor, HexColor)>,
+    hue_cycle: Option<HexColor>,
+    depth_gradient: Option<(HexColor, HexColor)>,
 }
 
 impl ColorControlMemory {
@@ -87,11 +87,11 @@ impl ColorControlMemory {
         memory
     }
 
-    pub fn background(&self) -> Rgb {
+    pub fn background(&self) -> HexColor {
         self.background
     }
 
-    pub fn remember_background(&mut self, background: Rgb) {
+    pub fn remember_background(&mut self, background: HexColor) {
         self.background = background;
     }
 
@@ -130,13 +130,9 @@ impl ColorControlMemory {
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{ColorConfig, LineColorConfig, Rgb};
+    use lsystem_core::{ColorConfig, HexColor, LineColorConfig};
 
     use super::{ColorControlMemory, LineColorMode};
-
-    fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_from(components).unwrap()
-    }
 
     #[test]
     fn line_color_mode_key_round_trip() {
@@ -174,7 +170,7 @@ mod tests {
     #[test]
     fn color_memory_remembers_solid_across_mode_switch() {
         let solid = LineColorConfig::Solid {
-            color: rgb([1.0, 0.0, 0.0]),
+            color: HexColor::new(0xff, 0x00, 0x00),
         };
         let mut memory = ColorControlMemory::from_colors(&ColorConfig {
             background: None,
@@ -206,13 +202,13 @@ mod tests {
 
     #[test]
     fn color_memory_background_remembered() {
-        let bg = rgb([0.1, 0.2, 0.3]);
+        let bg = HexColor::new(0x1a, 0x33, 0x4d);
         let mut memory = ColorControlMemory::from_colors(&ColorConfig {
             background: Some(bg),
             line: LineColorConfig::DEFAULT_SOLID,
         });
         assert_eq!(memory.background(), bg);
-        let new_bg = rgb([0.9, 0.8, 0.7]);
+        let new_bg = HexColor::new(0xe5, 0xcc, 0xb3);
         memory.remember_background(new_bg);
         assert_eq!(memory.background(), new_bg);
     }

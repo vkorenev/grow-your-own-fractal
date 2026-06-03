@@ -7,7 +7,7 @@ use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, LineColorMode,
 };
-use lsystem_core::{LineColorConfig, Rgb};
+use lsystem_core::{HexColor, LineColorConfig, Rgb};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
@@ -146,11 +146,9 @@ fn push_color_controls<'a>(
             .on_toggle(Message::BackgroundOverrideToggled),
     );
     if let Some(color) = background {
-        controls = controls.push(rgb_controls(
-            "Background RGB",
-            color,
-            Message::BackgroundColorChanged,
-        ));
+        controls = controls.push(rgb_controls("Background RGB", Rgb::from(color), |rgb| {
+            Message::BackgroundColorChanged(HexColor::from_rgb_rounded(rgb))
+        }));
     }
 
     let line_color = &config.colors.line;
@@ -165,23 +163,41 @@ fn push_color_controls<'a>(
 
     match *line_color {
         LineColorConfig::Solid { color } => {
-            controls.push(rgb_controls("Line RGB", color, |color| {
-                Message::LineColorChanged(LineColorConfig::Solid { color })
+            controls.push(rgb_controls("Line RGB", Rgb::from(color), |rgb| {
+                Message::LineColorChanged(LineColorConfig::Solid {
+                    color: HexColor::from_rgb_rounded(rgb),
+                })
             }))
         }
         LineColorConfig::Gradient { start, end } => controls
-            .push(rgb_controls("Gradient start", start, move |start| {
-                Message::LineColorChanged(LineColorConfig::Gradient { start, end })
-            }))
-            .push(rgb_controls("Gradient end", end, move |end| {
-                Message::LineColorChanged(LineColorConfig::Gradient { start, end })
+            .push(rgb_controls(
+                "Gradient start",
+                Rgb::from(start),
+                move |rgb| {
+                    Message::LineColorChanged(LineColorConfig::Gradient {
+                        start: HexColor::from_rgb_rounded(rgb),
+                        end,
+                    })
+                },
+            ))
+            .push(rgb_controls("Gradient end", Rgb::from(end), move |rgb| {
+                Message::LineColorChanged(LineColorConfig::Gradient {
+                    start,
+                    end: HexColor::from_rgb_rounded(rgb),
+                })
             })),
         LineColorConfig::DepthGradient { start, end } => controls
-            .push(rgb_controls("Depth start", start, move |start| {
-                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
+            .push(rgb_controls("Depth start", Rgb::from(start), move |rgb| {
+                Message::LineColorChanged(LineColorConfig::DepthGradient {
+                    start: HexColor::from_rgb_rounded(rgb),
+                    end,
+                })
             }))
-            .push(rgb_controls("Depth end", end, move |end| {
-                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end })
+            .push(rgb_controls("Depth end", Rgb::from(end), move |rgb| {
+                Message::LineColorChanged(LineColorConfig::DepthGradient {
+                    start,
+                    end: HexColor::from_rgb_rounded(rgb),
+                })
             })),
         LineColorConfig::HueCycle { initial } => {
             let rotation_label = if hue_rotation.is_enabled() {
@@ -190,8 +206,10 @@ fn push_color_controls<'a>(
                 "Hue rotation: Off"
             };
             controls
-                .push(rgb_controls("Initial RGB", initial, |initial| {
-                    Message::LineColorChanged(LineColorConfig::HueCycle { initial })
+                .push(rgb_controls("Initial RGB", Rgb::from(initial), |rgb| {
+                    Message::LineColorChanged(LineColorConfig::HueCycle {
+                        initial: HexColor::from_rgb_rounded(rgb),
+                    })
                 }))
                 .push(button(rotation_label).on_press(Message::ToggleHueRotation))
                 .push(

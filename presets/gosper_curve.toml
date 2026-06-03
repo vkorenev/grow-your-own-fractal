@@ -14,8 +14,8 @@ Y = "-FX+YFYF++YF+FX--FX-Y"
 angle = 60.0
 
 [colors]
-background = [0.0, 0.0, 0.0]
+background = "#000000"
 
 [colors.line]
 mode = "hue_cycle"
-initial = [0.9, 0.0, 0.0]
+initial = "#e60000"

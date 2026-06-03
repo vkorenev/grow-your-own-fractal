@@ -1,7 +1,7 @@
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
-use lsystem_core::{ColorConfig, Config, Dimensions};
+use lsystem_core::{ColorConfig, Config, Dimensions, Rgb};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -529,7 +529,7 @@ impl Default for Scene {
             },
             color_params: ColorParams::default(),
             hue_offset_degrees: 0.0,
-            background: ColorConfig::DEFAULT_BACKGROUND.to_array(),
+            background: Rgb::from(ColorConfig::DEFAULT_BACKGROUND).to_array(),
             camera: Camera::new(),
             geometry_revision: 0,
             color_revision: 0,
