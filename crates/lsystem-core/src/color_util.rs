@@ -1,9 +1,7 @@
-use crate::Rgb;
-
 /// Converts an RGB color with components in `0.0..=1.0` to
 /// `(hue_degrees, saturation, value)`.
-pub fn rgb_to_hsv(rgb: Rgb) -> (f32, f32, f32) {
-    let [r, g, b] = rgb.to_array();
+pub fn rgb_to_hsv(rgb: [f32; 3]) -> (f32, f32, f32) {
+    let [r, g, b] = rgb;
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
     let delta = max - min;
@@ -34,7 +32,7 @@ mod tests {
 
     #[test]
     fn converts_rgb_to_hsv() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([0.25, 0.5, 0.5]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv([0.25, 0.5, 0.5]);
 
         assert!(close(hue, 180.0));
         assert!(close(saturation, 0.5));
@@ -43,7 +41,7 @@ mod tests {
 
     #[test]
     fn grayscale_has_zero_saturation_and_hue() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([0.4, 0.4, 0.4]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv([0.4, 0.4, 0.4]);
 
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
@@ -52,7 +50,7 @@ mod tests {
 
     #[test]
     fn pure_blue_maps_to_blue_hue() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([0.0, 0.0, 1.0]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv([0.0, 0.0, 1.0]);
 
         assert!(close(hue, 240.0));
         assert!(close(saturation, 1.0));
@@ -61,7 +59,7 @@ mod tests {
 
     #[test]
     fn black_has_zero_saturation_and_value() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::BLACK);
+        let (hue, saturation, value) = rgb_to_hsv([0.0, 0.0, 0.0]);
 
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
@@ -70,7 +68,7 @@ mod tests {
 
     #[test]
     fn red_dominant_negative_hue_wraps() {
-        let (hue, saturation, value) = rgb_to_hsv(Rgb::try_from([1.0, 0.0, 0.5]).unwrap());
+        let (hue, saturation, value) = rgb_to_hsv([1.0, 0.0, 0.5]);
 
         assert!(close(hue, 330.0));
         assert!(close(saturation, 1.0));

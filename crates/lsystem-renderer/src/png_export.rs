@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use futures_channel::oneshot;
-use lsystem_core::{Config, Dimensions, Rgb};
+use lsystem_core::{Config, Dimensions};
 
 use crate::camera::Camera;
 use crate::line_renderer::{LinePipeline2D, LinePipeline3D};
@@ -132,7 +132,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                Rgb::from(colors.effective_background()).to_array(),
+                colors.effective_background().to_f32_array(),
                 |pass| {
                     pipeline.draw(pass);
                 },
@@ -169,7 +169,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                Rgb::from(colors.effective_background()).to_array(),
+                colors.effective_background().to_f32_array(),
                 |pass| {
                     pipeline.draw(pass);
                 },

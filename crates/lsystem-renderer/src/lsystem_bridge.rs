@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
 use lsystem_core::{
-    LineColorConfig, Rgb, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
+    LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
     color_util::rgb_to_hsv,
 };
 
@@ -327,19 +327,19 @@ pub fn color_params_from_config(
             mode: ColorMode::Solid,
             total_segments,
             max_topological_depth: 0,
-            color_start: rgb_to_rgba(Rgb::from(c)),
+            color_start: rgb_to_rgba(c.to_f32_array()),
             ..Default::default()
         },
         LineColorConfig::Gradient { start, end } => ColorParams {
             mode: ColorMode::Gradient,
             total_segments,
             max_topological_depth: 0,
-            color_start: rgb_to_rgba(Rgb::from(start)),
-            color_end: rgb_to_rgba(Rgb::from(end)),
+            color_start: rgb_to_rgba(start.to_f32_array()),
+            color_end: rgb_to_rgba(end.to_f32_array()),
             ..Default::default()
         },
         LineColorConfig::HueCycle { initial } => {
-            let (hue_start, saturation, value) = rgb_to_hsv(Rgb::from(initial));
+            let (hue_start, saturation, value) = rgb_to_hsv(initial.to_f32_array());
             ColorParams {
                 mode: ColorMode::HueCycle,
                 total_segments,
@@ -354,15 +354,14 @@ pub fn color_params_from_config(
             mode: ColorMode::DepthGradient,
             total_segments,
             max_topological_depth,
-            color_start: rgb_to_rgba(Rgb::from(start)),
-            color_end: rgb_to_rgba(Rgb::from(end)),
+            color_start: rgb_to_rgba(start.to_f32_array()),
+            color_end: rgb_to_rgba(end.to_f32_array()),
             ..Default::default()
         },
     }
 }
 
-fn rgb_to_rgba(rgb: Rgb) -> [f32; 4] {
-    let [r, g, b] = rgb.to_array();
+fn rgb_to_rgba([r, g, b]: [f32; 3]) -> [f32; 4] {
     [r, g, b, 1.0]
 }
 
@@ -398,7 +397,7 @@ pub fn viewport_transform(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{Dimensions, GenerationConfig, HexColor, Rgb, generate};
+    use lsystem_core::{Dimensions, GenerationConfig, HexColor, generate};
     use std::collections::BTreeMap;
 
     use super::*;
@@ -410,7 +409,7 @@ mod tests {
     }
 
     fn hex_rgba(hex: HexColor) -> [f32; 4] {
-        let [r, g, b] = Rgb::from(hex).to_array();
+        let [r, g, b] = hex.to_f32_array();
         [r, g, b, 1.0]
     }
 
@@ -446,7 +445,7 @@ mod tests {
 
         assert_eq!(params.mode, ColorMode::HueCycle);
         assert_eq!(params.total_segments, 9);
-        let (hue, sat, val) = lsystem_core::color_util::rgb_to_hsv(Rgb::from(initial));
+        let (hue, sat, val) = lsystem_core::color_util::rgb_to_hsv(initial.to_f32_array());
         assert!(close(params.hue_start, hue));
         assert!(close(params.saturation, sat));
         assert!(close(params.value, val));

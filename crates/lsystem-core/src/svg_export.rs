@@ -110,8 +110,8 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             format!("<path d=\"{d}\" stroke=\"{color}\"/>\n")
         }
         LineColorConfig::Gradient { start, end } => {
-            let start = crate::Rgb::from(*start).to_array();
-            let end = crate::Rgb::from(*end).to_array();
+            let start = start.to_f32_array();
+            let end = end.to_f32_array();
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
@@ -131,7 +131,7 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             out
         }
         LineColorConfig::HueCycle { initial } => {
-            let (start_hue, saturation, value) = rgb_to_hsv(crate::Rgb::from(*initial));
+            let (start_hue, saturation, value) = rgb_to_hsv(initial.to_f32_array());
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
@@ -157,8 +157,8 @@ fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColor
     let LineColorConfig::DepthGradient { start, end } = *line else {
         unreachable!("depth body requires depth-gradient line color")
     };
-    let start = crate::Rgb::from(start).to_array();
-    let end = crate::Rgb::from(end).to_array();
+    let start = start.to_f32_array();
+    let end = end.to_f32_array();
     let max_topological_depth = segments
         .iter()
         .map(|segment| segment.topological_depth)

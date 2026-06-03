@@ -51,52 +51,6 @@ pub enum Dimensions {
     ThreeD,
 }
 
-/// Validated RGB color with components in `0.0..=1.0`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Rgb {
-    components: [f32; 3],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("RGB components must be finite and in 0.0..=1.0")]
-pub struct RgbError;
-
-impl Rgb {
-    pub const BLACK: Self = Self::from_array_unchecked([0.0, 0.0, 0.0]);
-
-    const fn from_array_unchecked(components: [f32; 3]) -> Self {
-        Self { components }
-    }
-
-    pub const fn red(self) -> f32 {
-        self.components[0]
-    }
-
-    pub const fn green(self) -> f32 {
-        self.components[1]
-    }
-
-    pub const fn blue(self) -> f32 {
-        self.components[2]
-    }
-
-    pub const fn to_array(self) -> [f32; 3] {
-        self.components
-    }
-}
-
-impl TryFrom<[f32; 3]> for Rgb {
-    type Error = RgbError;
-
-    fn try_from(components: [f32; 3]) -> Result<Self, Self::Error> {
-        components
-            .iter()
-            .all(|&v| v.is_finite() && (0.0..=1.0).contains(&v))
-            .then_some(Self { components })
-            .ok_or(RgbError)
-    }
-}
-
 /// A 24-bit CSS hex color (`#rrggbb`), stored as `[R, G, B]` bytes.
 ///
 /// This type is `Copy` and `const`-constructible. Parsing requires a leading `#`
@@ -144,17 +98,17 @@ impl HexColor {
         )
     }
 
-    /// Converts an [`Rgb`] to `HexColor` by rounding each component to the nearest `u8`.
-    ///
-    /// This is an explicit conversion because quantization is lossy. Use [`From<HexColor> for Rgb`]
-    /// for the lossless direction.
-    pub fn from_rgb_rounded(rgb: Rgb) -> Self {
-        let [r, g, b] = rgb.to_array();
-        Self::new(
-            (r * 255.0).round() as u8,
-            (g * 255.0).round() as u8,
-            (b * 255.0).round() as u8,
-        )
+    /// Returns normalized `[r, g, b]` components in `0.0..=1.0` for rendering.
+    pub fn to_f32_array(self) -> [f32; 3] {
+        self.bytes.map(|b| b as f32 / 255.0)
+    }
+
+    /// Converts a `[r, g, b]` float array to `HexColor` by rounding each component to the nearest
+    /// `u8`. Explicit because quantization is lossy.
+    pub fn from_f32_array_rounded(arr: [f32; 3]) -> Self {
+        Self {
+            bytes: arr.map(|c| (c * 255.0).round() as u8),
+        }
     }
 }
 
@@ -178,14 +132,6 @@ impl TryFrom<String> for HexColor {
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
         Self::try_from(s.as_str())
-    }
-}
-
-impl From<HexColor> for Rgb {
-    fn from(hex: HexColor) -> Self {
-        let [r, g, b] = hex.bytes;
-        // u8 / 255.0 is always in 0.0..=1.0 and finite.
-        Self::from_array_unchecked([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
     }
 }
 
@@ -761,47 +707,8 @@ mod tests {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
     }
 
-    fn rgb(components: [f32; 3]) -> Rgb {
-        Rgb::try_from(components).unwrap()
-    }
-
     fn hex(s: &str) -> HexColor {
         HexColor::try_from(s).unwrap()
-    }
-
-    #[test]
-    fn rgb_constructs_valid_color() {
-        let rgb = rgb([0.1, 0.2, 0.3]);
-
-        assert_eq!(rgb.red(), 0.1);
-        assert_eq!(rgb.green(), 0.2);
-        assert_eq!(rgb.blue(), 0.3);
-        assert_eq!(rgb.to_array(), [0.1, 0.2, 0.3]);
-    }
-
-    #[test]
-    fn rgb_rejects_non_finite_and_out_of_range_components() {
-        for color in [
-            [f32::NAN, 0.0, 0.0],
-            [0.0, f32::INFINITY, 0.0],
-            [0.0, 0.0, f32::NEG_INFINITY],
-            [-0.1, 0.0, 0.0],
-            [0.0, 1.1, 0.0],
-        ] {
-            assert_eq!(Rgb::try_from(color), Err(RgbError), "{color:?} should fail");
-        }
-    }
-
-    #[test]
-    fn rgb_accepts_boundary_values() {
-        assert_eq!(Rgb::try_from([0.0, 0.0, 0.0]), Ok(Rgb::BLACK));
-        assert_eq!(Rgb::try_from([1.0, 1.0, 1.0]), Ok(rgb([1.0, 1.0, 1.0])));
-    }
-
-    #[test]
-    fn rgb_try_from_array_uses_validated_constructor() {
-        assert_eq!(Rgb::try_from([0.1, 0.2, 0.3]), Ok(rgb([0.1, 0.2, 0.3])));
-        assert_eq!(Rgb::try_from([0.1, 1.2, 0.3]), Err(RgbError));
     }
 
     fn assert_toml_deserialize_error_contains(err: ConfigError, fragments: &[&str]) -> String {
@@ -2028,37 +1935,37 @@ mod hex_color {
         assert_eq!(HexColor::try_from(""), Err(HexColorError));
     }
 
-    // --- From<HexColor> for Rgb ---
+    // --- to_f32_array ---
 
     #[test]
-    fn from_hex_to_rgb_maps_bytes_correctly() {
+    fn to_f32_array_maps_bytes_correctly() {
         let hex = HexColor::new(0x00, 0xff, 0x80);
-        let rgb = Rgb::from(hex);
-        assert_eq!(rgb.red(), 0.0);
-        assert_eq!(rgb.green(), 1.0);
-        assert!((rgb.blue() - 128.0 / 255.0).abs() < f32::EPSILON);
+        let [r, g, b] = hex.to_f32_array();
+        assert_eq!(r, 0.0);
+        assert_eq!(g, 1.0);
+        assert!((b - 128.0 / 255.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn from_hex_to_rgb_black() {
-        let rgb = Rgb::from(HexColor::new(0x00, 0x00, 0x00));
-        assert_eq!(rgb.red(), 0.0);
-        assert_eq!(rgb.green(), 0.0);
-        assert_eq!(rgb.blue(), 0.0);
+    fn to_f32_array_black() {
+        assert_eq!(
+            HexColor::new(0x00, 0x00, 0x00).to_f32_array(),
+            [0.0, 0.0, 0.0]
+        );
     }
 
     #[test]
-    fn from_hex_to_rgb_white() {
-        let rgb = Rgb::from(HexColor::new(0xff, 0xff, 0xff));
-        assert_eq!(rgb.red(), 1.0);
-        assert_eq!(rgb.green(), 1.0);
-        assert_eq!(rgb.blue(), 1.0);
+    fn to_f32_array_white() {
+        assert_eq!(
+            HexColor::new(0xff, 0xff, 0xff).to_f32_array(),
+            [1.0, 1.0, 1.0]
+        );
     }
 
-    // --- from_rgb_rounded round-trip ---
+    // --- from_f32_array_rounded round-trip ---
 
     #[test]
-    fn from_rgb_rounded_round_trips_representable_hex_values() {
+    fn from_f32_array_rounded_round_trips_representable_hex_values() {
         for hex in [
             HexColor::BLACK,
             HexColor::DEFAULT_SOLID_LINE,
@@ -2068,18 +1975,16 @@ mod hex_color {
             HexColor::new(0xff, 0x00, 0x7f),
             HexColor::new(0x12, 0x34, 0x56),
         ] {
-            let rgb = Rgb::from(hex);
-            let recovered = HexColor::from_rgb_rounded(rgb);
+            let recovered = HexColor::from_f32_array_rounded(hex.to_f32_array());
             assert_eq!(recovered, hex, "round-trip failed for {}", hex.to_css_hex());
         }
     }
 
     #[test]
-    fn from_rgb_rounded_rounds_midpoint_component() {
+    fn from_f32_array_rounded_rounds_midpoint_component() {
         // 0.5 * 255.0 = 127.5 → rounds to 128 (0x80), not truncates to 127 (0x7f)
-        let rgb = Rgb::try_from([0.0, 0.5, 1.0]).unwrap();
         assert_eq!(
-            HexColor::from_rgb_rounded(rgb),
+            HexColor::from_f32_array_rounded([0.0, 0.5, 1.0]),
             HexColor::new(0x00, 0x80, 0xff)
         );
     }
