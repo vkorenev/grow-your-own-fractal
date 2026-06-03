@@ -91,10 +91,7 @@ impl HexColor {
 
     /// Returns a canonical lowercase `#rrggbb` CSS hex string.
     pub fn to_css_hex(self) -> String {
-        format!(
-            "#{:02x}{:02x}{:02x}",
-            self.bytes[0], self.bytes[1], self.bytes[2]
-        )
+        self.to_string()
     }
 
     /// Returns normalized `[r, g, b]` components in `0.0..=1.0` for rendering.
@@ -142,7 +139,25 @@ impl TryFrom<String> for HexColor {
     type Error = HexColorError;
 
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        Self::try_from(s.as_str())
+        s.parse()
+    }
+}
+
+impl std::fmt::Display for HexColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "#{:02x}{:02x}{:02x}",
+            self.bytes[0], self.bytes[1], self.bytes[2]
+        )
+    }
+}
+
+impl std::str::FromStr for HexColor {
+    type Err = HexColorError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s)
     }
 }
 
@@ -495,7 +510,7 @@ impl Visitor<'_> for NumberVisitor {
 }
 
 fn parse_hex(s: String, field: &str) -> Result<HexColor, ConfigError> {
-    let result = HexColor::try_from(s.as_str());
+    let result = s.parse::<HexColor>();
     result.map_err(|_| ConfigError::InvalidHexColor {
         field: field.into(),
         value: s,

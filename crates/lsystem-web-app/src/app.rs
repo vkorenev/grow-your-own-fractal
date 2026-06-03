@@ -936,7 +936,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(color) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(color) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1022,7 +1022,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(color) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(color) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1070,7 +1070,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(start) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(start) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1117,7 +1117,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(end) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(end) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1172,7 +1172,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(start) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(start) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1215,7 +1215,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(end) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(end) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
@@ -1268,7 +1268,7 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
-                                let Ok(initial) = HexColor::try_from(ev.target().value().as_str()) else {
+                                let Ok(initial) = ev.target().value().parse::<HexColor>() else {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
