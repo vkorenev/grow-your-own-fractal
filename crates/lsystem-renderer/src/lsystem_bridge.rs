@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn hue_cycle_initial_rgb_maps_to_hsv_uniforms() {
-        // HexColor::new(0x40, 0x80, 0x80) ≈ (0.251, 0.502, 0.502) → hue≈180°, sat≈0.5, val≈0.5
+        // HexColor::new(0x40, 0x80, 0x80) ≈ (0.251, 0.502, 0.502) → hue≈180°, sat≈0.5, val≈0.502
         let initial = HexColor::new(0x40, 0x80, 0x80);
         let params = color_params_from_config(&LineColorConfig::HueCycle { initial }, 9, 0);
 

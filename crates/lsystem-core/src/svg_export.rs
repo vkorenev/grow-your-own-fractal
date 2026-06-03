@@ -205,7 +205,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
 
 fn to_hex(rgb: [f32; 3]) -> String {
     let [r, g, b] = rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-    format!("#{r:02X}{g:02X}{b:02X}")
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 #[cfg(test)]
@@ -330,9 +330,9 @@ end = "#0000ff""##,
             svg.contains("matrix(1 0 0 -1 0 0)"),
             "missing Y-flip transform"
         );
-        // 2 segments: t=0 → #FF0000, t=1 → #0000FF
-        assert!(svg.contains("#FF0000"), "missing gradient start color");
-        assert!(svg.contains("#0000FF"), "missing gradient end color");
+        // 2 segments: t=0 → #ff0000, t=1 → #0000ff (interpolated via float, emitted lowercase)
+        assert!(svg.contains("#ff0000"), "missing gradient start color");
+        assert!(svg.contains("#0000ff"), "missing gradient end color");
     }
 
     #[test]
@@ -348,7 +348,7 @@ initial = "#ff0000""##,
             "missing Y-flip transform"
         );
         assert!(
-            svg.contains("#FF0000"),
+            svg.contains("#ff0000"),
             "missing hue-cycle start color (red at hue=0)"
         );
     }
@@ -364,11 +364,11 @@ end = "#0000ff""##,
         let svg = export_svg(&cfg);
 
         assert!(
-            svg.contains("#FF0000"),
+            svg.contains("#ff0000"),
             "missing depth-gradient start color"
         );
         assert_eq!(
-            svg.matches("#0000FF").count(),
+            svg.matches("#0000ff").count(),
             2,
             "two depth-1 segments should use the same end color"
         );
@@ -384,9 +384,9 @@ end = "#0000ff""##,
         );
         let svg = export_svg(&cfg);
 
-        assert!(svg.contains("#FF0000"), "missing depth-0 start color");
+        assert!(svg.contains("#ff0000"), "missing depth-0 start color");
         assert!(
-            !svg.contains("#0000FF"),
+            !svg.contains("#0000ff"),
             "single depth-0 segment should not use end color"
         );
     }

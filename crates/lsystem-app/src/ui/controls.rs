@@ -284,3 +284,26 @@ fn hex_from_f32_array([r, g, b]: [f32; 3]) -> HexColor {
         (b * 255.0).round() as u8,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_from_f32_array_rounds_midpoint() {
+        // 0.5 * 255.0 = 127.5 → rounds to 128 (0x80)
+        assert_eq!(
+            hex_from_f32_array([0.0, 0.5, 1.0]),
+            HexColor::new(0x00, 0x80, 0xff)
+        );
+    }
+
+    #[test]
+    fn hex_from_f32_array_boundary_values() {
+        assert_eq!(hex_from_f32_array([0.0, 0.0, 0.0]), HexColor::BLACK);
+        assert_eq!(
+            hex_from_f32_array([1.0, 1.0, 1.0]),
+            HexColor::new(0xff, 0xff, 0xff)
+        );
+    }
+}

@@ -73,7 +73,6 @@ impl HexColor {
     pub const DEFAULT_GRADIENT_END: Self = Self::new(0x99, 0xe6, 0x1a);
     pub const DEFAULT_HUE_CYCLE_INITIAL: Self = Self::new(0xe6, 0x00, 0x00);
 
-    /// Constructs a `HexColor` from raw R, G, B byte values.
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { bytes: [r, g, b] }
     }
@@ -128,6 +127,7 @@ impl TryFrom<&str> for HexColor {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         let hex = s.strip_prefix('#').ok_or(HexColorError)?;
+        // len() is byte count; multi-byte UTF-8 chars can pass len == 6 but would panic on byte-range slicing below
         if hex.len() != 6 || !hex.is_ascii() {
             return Err(HexColorError);
         }
@@ -2027,15 +2027,11 @@ mod hex_color {
 
     #[test]
     fn to_hsv_red_dominant_negative_hue_wraps() {
-        // Red-dominant with b > g: the raw (g-b)/delta is negative; rem_euclid keeps it positive.
-        let hex = HexColor::new(0xff, 0x00, 0x80);
-        let (hue, saturation, value) = hex.to_hsv();
-        assert!(hue > 0.0 && hue < 360.0, "hue {hue} must be in [0, 360)");
+        // #ff0080: r=1.0, g=0.0, b=128/255≈0.502. Raw (g-b)/delta = -0.502, which rem_euclid(6)
+        // wraps to 5.498. hue = 60*5.498 ≈ 329.88°. Verifies that rem_euclid keeps hue positive.
+        let (hue, saturation, value) = HexColor::new(0xff, 0x00, 0x80).to_hsv();
+        assert!(close(hue, 60.0 * (-(128.0_f32 / 255.0)).rem_euclid(6.0)));
         assert!(close(saturation, 1.0));
         assert!(close(value, 1.0));
-        // Verify the exact value matches the implementation for this input.
-        let [r, g, b] = hex.to_f32_array();
-        let expected = 60.0 * ((g - b) / (r - 0.0_f32)).rem_euclid(6.0);
-        assert!(close(hue, expected));
     }
 }
