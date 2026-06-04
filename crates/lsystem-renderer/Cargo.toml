@@ -11,8 +11,9 @@ png = ["dep:futures-channel", "dep:png"]
 [dependencies]
 lsystem-core.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
+encase = "0.12"
 futures-channel = { version = "0.3", optional = true }
-glam.workspace = true
+glam = { workspace = true, features = ["encase"] }
 log.workspace = true
 png = { version = "0.18", optional = true }
 wgpu.workspace = true

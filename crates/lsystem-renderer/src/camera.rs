@@ -166,7 +166,7 @@ impl Camera {
         let proj = Mat4::perspective_rh(FOV_Y_RAD, aspect, z_near, z_far);
 
         Mvp {
-            matrix: (proj * view).to_cols_array_2d(),
+            matrix: proj * view,
         }
     }
 }
@@ -287,8 +287,8 @@ mod tests {
     fn mvp_3d_produces_finite_matrix() {
         let cam = Camera::new();
         let mvp = cam.compute_mvp_3d([-5.0, -5.0, -5.0], [5.0, 5.0, 5.0], 800, 600);
-        for row in &mvp.matrix {
-            for &v in row {
+        for column in mvp.matrix.to_cols_array_2d() {
+            for v in column {
                 assert!(v.is_finite(), "MVP contains non-finite value: {v}");
             }
         }

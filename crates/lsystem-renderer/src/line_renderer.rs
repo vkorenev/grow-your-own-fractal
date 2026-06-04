@@ -2,7 +2,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use bytemuck::{NoUninit, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable};
+use encase::{ShaderType, UniformBuffer};
 use lsystem_core::Dimensions;
 use wgpu::util::DeviceExt;
 
@@ -38,29 +39,22 @@ pub struct TopologicalDepthSegment3D {
     pub topological_depth: u32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone, ShaderType)]
 pub struct Transform {
-    pub scale: [f32; 2],
-    pub offset: [f32; 2],
+    pub scale: glam::Vec2,
+    pub offset: glam::Vec2,
 }
 
 /// Column-major MVP matrix uniform.
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone, ShaderType)]
 pub struct Mvp {
-    pub matrix: [[f32; 4]; 4],
+    pub matrix: glam::Mat4,
 }
 
 impl Default for Mvp {
     fn default() -> Self {
         Self {
-            matrix: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
+            matrix: glam::Mat4::IDENTITY,
         }
     }
 }
@@ -105,7 +99,7 @@ pub fn max_segments_for_line_color(dimensions: Dimensions, uses_topological_dept
 /// Discriminant values are matched by literal in `shader.wgsl` and `shader3d.wgsl`;
 /// keep them in sync when adding or renumbering variants.
 #[repr(u32)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, NoUninit, Zeroable)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ColorMode {
     #[default]
     Solid = 0,
@@ -114,27 +108,84 @@ pub enum ColorMode {
     DepthGradient = 3,
 }
 
-/// Per-frame color parameters written to the GPU as a uniform.
-/// Layout mirrors `ColorParams` in `shader.wgsl`; padding keeps vec4 alignment.
-#[repr(C)]
-#[derive(Copy, Clone, Default, NoUninit, Zeroable)]
+/// Per-frame color parameters written to the GPU as a WGSL uniform.
+#[derive(Copy, Clone, ShaderType)]
 pub struct ColorParams {
-    pub mode: ColorMode,
+    mode: u32,
     pub total_segments: u32,
     pub max_topological_depth: u32,
-    pub _pad: u32,
-    pub color_start: [f32; 4],
-    pub color_end: [f32; 4],
+    pub color_start: glam::Vec4,
+    pub color_end: glam::Vec4,
     pub hue_start: f32,
     pub saturation: f32,
     pub value: f32,
-    pub _pad2: f32,
+}
+
+impl Default for ColorParams {
+    fn default() -> Self {
+        Self {
+            mode: ColorMode::Solid as u32,
+            total_segments: 0,
+            max_topological_depth: 0,
+            color_start: glam::Vec4::ZERO,
+            color_end: glam::Vec4::ZERO,
+            hue_start: 0.0,
+            saturation: 0.0,
+            value: 0.0,
+        }
+    }
 }
 
 impl ColorParams {
+    pub fn solid(total_segments: u32, color_start: glam::Vec4) -> Self {
+        Self {
+            mode: ColorMode::Solid as u32,
+            total_segments,
+            color_start,
+            ..Default::default()
+        }
+    }
+
+    pub fn gradient(total_segments: u32, color_start: glam::Vec4, color_end: glam::Vec4) -> Self {
+        Self {
+            mode: ColorMode::Gradient as u32,
+            total_segments,
+            color_start,
+            color_end,
+            ..Default::default()
+        }
+    }
+
+    pub fn hue_cycle(total_segments: u32, hue_start: f32, saturation: f32, value: f32) -> Self {
+        Self {
+            mode: ColorMode::HueCycle as u32,
+            total_segments,
+            hue_start,
+            saturation,
+            value,
+            ..Default::default()
+        }
+    }
+
+    pub fn depth_gradient(
+        total_segments: u32,
+        max_topological_depth: u32,
+        color_start: glam::Vec4,
+        color_end: glam::Vec4,
+    ) -> Self {
+        Self {
+            mode: ColorMode::DepthGradient as u32,
+            total_segments,
+            max_topological_depth,
+            color_start,
+            color_end,
+            ..Default::default()
+        }
+    }
+
     /// Applies a hue offset only for `HueCycle`; other color modes are unchanged.
     pub fn with_hue_offset_degrees(mut self, offset: f32) -> Self {
-        if self.mode == ColorMode::HueCycle {
+        if self.mode == ColorMode::HueCycle as u32 {
             self.hue_start = (self.hue_start + offset).rem_euclid(360.0);
         }
         self
@@ -187,6 +238,21 @@ enum ActiveSegmentBuffer {
     Normal,
     TopologicalDepth,
 }
+
+macro_rules! impl_uniform_bytes {
+    ($ty:ty) => {
+        impl $ty {
+            fn uniform_bytes(&self) -> Vec<u8> {
+                UniformBuffer::<Vec<u8>>::content_of(self)
+                    .expect(concat!(stringify!($ty), " uniform layout should encode"))
+            }
+        }
+    };
+}
+
+impl_uniform_bytes!(Transform);
+impl_uniform_bytes!(Mvp);
+impl_uniform_bytes!(ColorParams);
 
 fn draw_line_list(
     render_pass: &mut wgpu::RenderPass<'_>,
@@ -275,16 +341,17 @@ impl LinePipeline2D {
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("lsystem_2d_transform_uniform"),
-            contents: bytemuck::bytes_of(&Transform {
-                scale: [1.0, 1.0],
-                offset: [0.0, 0.0],
-            }),
+            contents: &(Transform {
+                scale: glam::Vec2::ONE,
+                offset: glam::Vec2::ZERO,
+            })
+            .uniform_bytes(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let color_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("lsystem_2d_color_uniform"),
-            contents: bytemuck::bytes_of(&ColorParams::default()),
+            contents: &ColorParams::default().uniform_bytes(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -297,9 +364,7 @@ impl LinePipeline2D {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<Transform>() as u64
-                        ),
+                        min_binding_size: wgpu::BufferSize::new(Transform::min_size().get()),
                     },
                     count: None,
                 },
@@ -309,9 +374,7 @@ impl LinePipeline2D {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<ColorParams>() as u64
-                        ),
+                        min_binding_size: wgpu::BufferSize::new(ColorParams::min_size().get()),
                     },
                     count: None,
                 },
@@ -389,11 +452,7 @@ impl LinePipeline2D {
         self.segment_buffer
             .upload(device, queue, segments, "lsystem_2d_segments");
         self.active_segment_buffer = ActiveSegmentBuffer::Normal;
-        queue.write_buffer(
-            &self.color_params_buffer,
-            0,
-            bytemuck::bytes_of(&color_params),
-        );
+        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
     pub fn upload_with_topological_depth(
@@ -410,23 +469,15 @@ impl LinePipeline2D {
             "lsystem_2d_topological_depth_segments",
         );
         self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
-        queue.write_buffer(
-            &self.color_params_buffer,
-            0,
-            bytemuck::bytes_of(&color_params),
-        );
+        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
     pub fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&transform));
+        queue.write_buffer(&self.uniform_buffer, 0, &transform.uniform_bytes());
     }
 
     pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
-        queue.write_buffer(
-            &self.color_params_buffer,
-            0,
-            bytemuck::bytes_of(&color_params),
-        );
+        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -467,15 +518,16 @@ impl LinePipeline3D {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader3d.wgsl").into()),
         });
 
+        let mvp_uniform = Mvp::default().uniform_bytes();
         let mvp_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("lsystem_3d_mvp_uniform"),
-            contents: bytemuck::bytes_of(&Mvp::default()),
+            contents: &mvp_uniform,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         let color_params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("lsystem_3d_color_uniform"),
-            contents: bytemuck::bytes_of(&ColorParams::default()),
+            contents: &ColorParams::default().uniform_bytes(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -488,7 +540,7 @@ impl LinePipeline3D {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Mvp>() as u64),
+                        min_binding_size: wgpu::BufferSize::new(Mvp::min_size().get()),
                     },
                     count: None,
                 },
@@ -498,9 +550,7 @@ impl LinePipeline3D {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<ColorParams>() as u64
-                        ),
+                        min_binding_size: wgpu::BufferSize::new(ColorParams::min_size().get()),
                     },
                     count: None,
                 },
@@ -578,11 +628,7 @@ impl LinePipeline3D {
         self.segment_buffer
             .upload(device, queue, segments, "lsystem_3d_segments");
         self.active_segment_buffer = ActiveSegmentBuffer::Normal;
-        queue.write_buffer(
-            &self.color_params_buffer,
-            0,
-            bytemuck::bytes_of(&color_params),
-        );
+        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
     pub fn upload_with_topological_depth(
@@ -599,23 +645,15 @@ impl LinePipeline3D {
             "lsystem_3d_topological_depth_segments",
         );
         self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
-        queue.write_buffer(
-            &self.color_params_buffer,
-            0,
-            bytemuck::bytes_of(&color_params),
-        );
+        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
     pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
-        queue.write_buffer(&self.mvp_buffer, 0, bytemuck::bytes_of(&mvp));
+        queue.write_buffer(&self.mvp_buffer, 0, &mvp.uniform_bytes());
     }
 
     pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
-        queue.write_buffer(
-            &self.color_params_buffer,
-            0,
-            bytemuck::bytes_of(&color_params),
-        );
+        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
@@ -857,17 +895,116 @@ mod tests {
     use super::*;
 
     fn sample_params(mode: ColorMode, hue_start: f32) -> ColorParams {
-        ColorParams {
-            mode,
-            total_segments: 10,
-            max_topological_depth: 3,
-            color_start: [0.1, 0.2, 0.3, 1.0],
-            color_end: [0.7, 0.8, 0.9, 1.0],
-            hue_start,
-            saturation: 0.5,
-            value: 0.75,
-            ..Default::default()
+        let color_start = glam::vec4(0.1, 0.2, 0.3, 1.0);
+        let color_end = glam::vec4(0.7, 0.8, 0.9, 1.0);
+        match mode {
+            ColorMode::Solid => ColorParams::solid(10, color_start),
+            ColorMode::Gradient => ColorParams::gradient(10, color_start, color_end),
+            ColorMode::HueCycle => ColorParams::hue_cycle(10, hue_start, 0.5, 0.75),
+            ColorMode::DepthGradient => ColorParams::depth_gradient(10, 3, color_start, color_end),
         }
+    }
+
+    fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_f32(bytes: &mut Vec<u8>, value: f32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_vec2(bytes: &mut Vec<u8>, value: glam::Vec2) {
+        push_f32(bytes, value.x);
+        push_f32(bytes, value.y);
+    }
+
+    fn push_vec4(bytes: &mut Vec<u8>, value: glam::Vec4) {
+        push_f32(bytes, value.x);
+        push_f32(bytes, value.y);
+        push_f32(bytes, value.z);
+        push_f32(bytes, value.w);
+    }
+
+    fn push_mat4(bytes: &mut Vec<u8>, value: glam::Mat4) {
+        for column in value.to_cols_array_2d() {
+            for component in column {
+                push_f32(bytes, component);
+            }
+        }
+    }
+
+    fn expected_transform_bytes(transform: Transform) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        push_vec2(&mut bytes, transform.scale);
+        push_vec2(&mut bytes, transform.offset);
+        bytes
+    }
+
+    fn expected_mvp_bytes(mvp: Mvp) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        push_mat4(&mut bytes, mvp.matrix);
+        bytes
+    }
+
+    fn expected_color_params_bytes(params: ColorParams) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        push_u32(&mut bytes, params.mode);
+        push_u32(&mut bytes, params.total_segments);
+        push_u32(&mut bytes, params.max_topological_depth);
+        push_u32(&mut bytes, 0);
+        push_vec4(&mut bytes, params.color_start);
+        push_vec4(&mut bytes, params.color_end);
+        push_f32(&mut bytes, params.hue_start);
+        push_f32(&mut bytes, params.saturation);
+        push_f32(&mut bytes, params.value);
+        push_f32(&mut bytes, 0.0);
+        bytes
+    }
+
+    #[test]
+    fn encase_uniform_sizes_match_wgsl_layouts() {
+        assert_eq!(Transform::min_size().get(), 16);
+        assert_eq!(Mvp::min_size().get(), 64);
+        assert_eq!(ColorParams::min_size().get(), 64);
+    }
+
+    #[test]
+    fn default_color_params_use_solid_mode() {
+        assert_eq!(ColorParams::default().mode, ColorMode::Solid as u32);
+    }
+
+    #[test]
+    fn transform_uniform_encoding_matches_wgsl_layout() {
+        let transform = Transform {
+            scale: glam::vec2(1.25, -2.5),
+            offset: glam::vec2(3.75, -4.125),
+        };
+
+        assert_eq!(
+            transform.uniform_bytes(),
+            expected_transform_bytes(transform)
+        );
+    }
+
+    #[test]
+    fn mvp_uniform_encoding_matches_wgsl_layout() {
+        let mvp = Mvp {
+            matrix: glam::Mat4::from_cols_array_2d(&[
+                [1.0, 2.0, 3.0, 4.0],
+                [5.0, 6.0, 7.0, 8.0],
+                [9.0, 10.0, 11.0, 12.0],
+                [13.0, 14.0, 15.0, 16.0],
+            ]),
+        };
+
+        assert_eq!(mvp.uniform_bytes(), expected_mvp_bytes(mvp));
+    }
+
+    #[test]
+    fn color_params_uniform_encoding_matches_wgsl_layout() {
+        let params = sample_params(ColorMode::DepthGradient, 270.0);
+
+        assert_eq!(params.uniform_bytes(), expected_color_params_bytes(params));
     }
 
     #[test]
@@ -898,7 +1035,7 @@ mod tests {
 
         let shifted = params.with_hue_offset_degrees(15.0);
 
-        assert_eq!(shifted.mode, ColorMode::HueCycle);
+        assert_eq!(shifted.mode, ColorMode::HueCycle as u32);
         assert_eq!(shifted.hue_start, 195.0);
         assert_eq!(shifted.total_segments, params.total_segments);
         assert_eq!(shifted.saturation, params.saturation);
