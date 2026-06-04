@@ -82,36 +82,38 @@ initial_heading = 0.0   # optional; starting direction in degrees, defaults to 0
 background = "#000000"   # optional hex color; omit to use black
 
 [colors.line]
-# mode = "solid"           # single color; set with `color`
-# mode = "gradient"        # linear RGB from `start` to `end` across all segments
-# mode = "hue_cycle"       # full hue rotation starting from `initial`
-# mode = "depth_gradient"  # linear RGB by topological bracket depth; equivalent
-#                           # to `gradient` for non-branching (bracketless) fractals
-mode = "solid"
-color = "#00e680"  # used by solid mode
+solid = "#00e680"  # scalar solid line color
+
+# Omit [colors.line] entirely to use the default solid line color.
 
 # gradient example:
-# mode  = "gradient"
+# [colors.line.gradient]
 # start = "#ff6600"
-# end   = "#9900ff"
+# end = "#9900ff"
+# topological_depth = false  # optional; defaults to false
 
 # hue_cycle example:
-# mode    = "hue_cycle"
+# [colors.line.hue_cycle]
 # initial = "#e60000"
 
-# depth_gradient example (branching fractals only; same as gradient otherwise):
-# mode  = "depth_gradient"
+# Topological-depth gradient example (branching fractals only; same as
+# traversal gradient otherwise):
+# [colors.line.gradient]
 # start = "#ff6600"
-# end   = "#9900ff"
+# end = "#9900ff"
+# topological_depth = true
 ```
 
 Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,
-`l-system.rules`, `turtle.*`, `colors.*`, and `colors.line.*`. Those paths may
-be written with explicit tables, dotted keys, or implicit parent tables. Older
-flat TOML with top-level `name`, `axiom`, `[rules]`, `background_color`, or
-`[line_color]` is rejected. `colors.background` is optional and falls back to
-black when omitted. All present colors are hex color strings in `"#rrggbb"`
-format, including `hue_cycle`'s `initial` color.
+`l-system.rules`, `turtle.*`, `colors.*`, and mode-specific `colors.line.*`
+paths such as `colors.line.solid`, `colors.line.gradient.start`, and
+`colors.line.hue_cycle.initial`. Those paths may be written with explicit
+tables, dotted keys, or implicit parent tables. Older flat TOML with top-level
+`name`, `axiom`, `[rules]`, `background_color`, or `[line_color]` is rejected.
+The old `colors.line.mode` shape is also rejected. `colors.background` is
+optional and falls back to black when omitted; omitted `colors.line` falls back
+to the default solid line color. All present colors are hex color strings in
+`"#rrggbb"` format, including `hue_cycle`'s `initial` color.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.

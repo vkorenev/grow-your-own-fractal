@@ -15,7 +15,7 @@ angle = 60.0
 [colors]
 background = "#000000"
 
-[colors.line]
-mode = "depth_gradient"
+[colors.line.gradient]
 start = "#e699ff"
 end = "#1a80ff"
+topological_depth = true

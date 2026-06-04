@@ -636,16 +636,16 @@ mod tests {
 
     #[test]
     fn color_control_memory_uses_defaults_and_restores_edits() {
-        let solid = LineColorConfig::Solid {
-            color: Rgb::new(0x1a, 0x33, 0x4d),
-        };
+        let solid = LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d));
         let gradient = LineColorConfig::Gradient {
             start: Rgb::new(0x66, 0x80, 0x99),
             end: Rgb::new(0xb3, 0xcc, 0xe5),
+            topological_depth: false,
         };
-        let depth_gradient = LineColorConfig::DepthGradient {
+        let topological_gradient = LineColorConfig::Gradient {
             start: Rgb::new(0x33, 0x4d, 0x66),
             end: Rgb::new(0x80, 0x99, 0xb3),
+            topological_depth: true,
         };
 
         let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
@@ -663,21 +663,16 @@ mod tests {
             memory.line_for(LineColorMode::HueCycle),
             LineColorConfig::DEFAULT_HUE_CYCLE
         );
-        assert_eq!(
-            memory.line_for(LineColorMode::DepthGradient),
-            LineColorConfig::DEFAULT_DEPTH_GRADIENT
-        );
 
         memory.remember_background(Rgb::new(0xe5, 0x1a, 0x33));
         memory.remember_line(gradient);
-        memory.remember_line(depth_gradient);
+        memory.remember_line(topological_gradient);
 
         assert_eq!(memory.background(), Rgb::new(0xe5, 0x1a, 0x33));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
-        assert_eq!(memory.line_for(LineColorMode::Gradient), gradient);
         assert_eq!(
-            memory.line_for(LineColorMode::DepthGradient),
-            depth_gradient
+            memory.line_for(LineColorMode::Gradient),
+            topological_gradient
         );
     }
 
@@ -687,6 +682,7 @@ mod tests {
         let gradient = LineColorConfig::Gradient {
             start: Rgb::new(0x66, 0x80, 0x99),
             end: Rgb::new(0xb3, 0xcc, 0xe5),
+            topological_depth: false,
         };
         app.color_memory.remember_line(gradient);
 
@@ -701,7 +697,7 @@ mod tests {
         let generation_before = app.scene_generation.load(Ordering::Acquire);
         app.scene_pending = false;
 
-        let _ = app.update(Message::LineColorModeSelected(LineColorMode::DepthGradient));
+        let _ = app.update(Message::LineColorModeSelected(LineColorMode::Gradient));
         assert!(
             !app.scene_pending,
             "color change must not schedule geometry"
@@ -870,8 +866,7 @@ step = 1.0
 initial_heading = 0.0
 
 [colors.line]
-mode = "solid"
-color = "#00e680"
+solid = "#00e680"
 "##;
         app.config_workspace =
             ConfigWorkspace::from_presets(vec![("3d", three_d_config.to_string())]).unwrap();

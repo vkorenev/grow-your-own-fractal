@@ -419,8 +419,7 @@ initial_heading = 0.0
 background = "#000000"
 
 [colors.line]
-mode = "solid"
-color = "#00e680"
+solid = "#00e680"
 "##
         )
     }
@@ -441,8 +440,7 @@ turtle.angle = 60.0
 turtle.step = 1.0
 turtle.initial_heading = 0.0
 colors.background = "#000000"
-colors.line.mode = "solid"
-colors.line.color = "#00e680"
+colors.line.solid = "#00e680"
 "##
         .to_string()
     }
@@ -468,8 +466,7 @@ initial_heading = 0.0
 background = "#000000"
 
 [colors.line]
-mode = "solid"
-color = "#00e680"
+solid = "#00e680"
 "##
         .to_string()
     }
@@ -980,21 +977,18 @@ color = "#00e680"
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid {
-                color: Rgb::new(0x33, 0x4d, 0x66),
-            })
+            .set_line_color(LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66)))
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
-            LineColorConfig::Solid {
-                color: Rgb::new(0x33, 0x4d, 0x66),
-            }
+            LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66))
         );
 
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
                 start: Rgb::new(0x1a, 0x33, 0x4d),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
+                topological_depth: false,
             })
             .unwrap();
         assert_eq!(
@@ -1002,6 +996,7 @@ color = "#00e680"
             LineColorConfig::Gradient {
                 start: Rgb::new(0x1a, 0x33, 0x4d),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
+                topological_depth: false,
             }
         );
 
@@ -1018,16 +1013,18 @@ color = "#00e680"
         );
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::DepthGradient {
+            .set_line_color(LineColorConfig::Gradient {
                 start: Rgb::new(0x33, 0x4d, 0x66),
                 end: Rgb::new(0x80, 0x99, 0xb3),
+                topological_depth: true,
             })
             .unwrap();
         assert_eq!(
             workspace.selected().applied_config().colors.line,
-            LineColorConfig::DepthGradient {
+            LineColorConfig::Gradient {
                 start: Rgb::new(0x33, 0x4d, 0x66),
                 end: Rgb::new(0x80, 0x99, 0xb3),
+                topological_depth: true,
             }
         );
     }
@@ -1041,13 +1038,14 @@ color = "#00e680"
             .set_line_color(LineColorConfig::Gradient {
                 start: Rgb::new(0x1a, 0x33, 0x4d),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
+                topological_depth: false,
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
-        assert!(text.contains("mode = \"gradient\""));
+        assert!(text.contains("[colors.line.gradient]"));
         assert!(text.contains("start = \"#1a334d\""));
         assert!(text.contains("end = \"#b3cce6\""));
-        assert!(!text.contains("color ="));
+        assert!(!text.contains("solid ="));
         assert!(!text.contains("initial ="));
 
         clean_mut(&mut workspace)
@@ -1056,35 +1054,34 @@ color = "#00e680"
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
-        assert!(text.contains("mode = \"hue_cycle\""));
+        assert!(text.contains("[colors.line.hue_cycle]"));
         assert!(text.contains("initial = \"#668099\""));
-        assert!(!text.contains("color ="));
+        assert!(!text.contains("solid ="));
         assert!(!text.contains("start ="));
         assert!(!text.contains("end ="));
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid {
-                color: Rgb::new(0x33, 0x4d, 0x66),
-            })
+            .set_line_color(LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66)))
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
-        assert!(text.contains("mode = \"solid\""));
-        assert!(text.contains("color = \"#334d66\""));
+        assert!(text.contains("solid = \"#334d66\""));
         assert!(!text.contains("initial ="));
         assert!(!text.contains("start ="));
         assert!(!text.contains("end ="));
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::DepthGradient {
+            .set_line_color(LineColorConfig::Gradient {
                 start: Rgb::new(0x1a, 0x33, 0x4d),
                 end: Rgb::new(0x66, 0x80, 0x99),
+                topological_depth: true,
             })
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
-        assert!(text.contains("mode = \"depth_gradient\""));
+        assert!(text.contains("[colors.line.gradient]"));
         assert!(text.contains("start = \"#1a334d\""));
         assert!(text.contains("end = \"#668099\""));
-        assert!(!text.contains("color ="));
+        assert!(text.contains("topological_depth = true"));
+        assert!(!text.contains("solid ="));
         assert!(!text.contains("initial ="));
     }
 
@@ -1110,8 +1107,7 @@ initial_heading = 0.0
 background = "#000000" # keep background comment
 
 [colors.line]
-mode = "solid"
-color = "#00e680" # keep line color comment
+solid = "#00e680" # keep line color comment
 "##;
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("Decorated", text.to_string())]).unwrap();
@@ -1120,14 +1116,12 @@ color = "#00e680" # keep line color comment
             .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid {
-                color: Rgb::new(0x66, 0x80, 0x99),
-            })
+            .set_line_color(LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99)))
             .unwrap();
 
         let text = workspace.selected().draft_text().into_owned();
         assert!(text.contains("background = \"#1a334d\" # keep background comment"));
-        assert!(text.contains("color = \"#668099\" # keep line color comment"));
+        assert!(text.contains("solid = \"#668099\" # keep line color comment"));
     }
 
     #[test]
@@ -1151,8 +1145,7 @@ initial_heading = 0.0
 [colors]
 background = "#000000"
 
-[colors.line]
-mode = "gradient"
+[colors.line.gradient]
 start = "#00e680"
 end = "#ffffff"
 "##;
@@ -1166,6 +1159,7 @@ end = "#ffffff"
             .set_line_color(LineColorConfig::Gradient {
                 start: Rgb::new(0x66, 0x80, 0x99),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
+                topological_depth: false,
             })
             .unwrap();
 
@@ -1191,9 +1185,7 @@ end = "#ffffff"
         assert!(!workspace.can_reset());
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid {
-                color: Rgb::new(0x1a, 0x33, 0x4d),
-            })
+            .set_line_color(LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
 
         assert!(workspace.can_reset());
@@ -1222,7 +1214,7 @@ end = "#ffffff"
     }
 
     #[test]
-    fn clean_entry_color_mutators_preserve_dotted_toml() {
+    fn clean_entry_color_mutators_preserve_dotted_background_and_write_nested_line_color() {
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("Dotted", dotted_config_text())]).unwrap();
 
@@ -1235,6 +1227,7 @@ end = "#ffffff"
                 .set_line_color(LineColorConfig::Gradient {
                     start: Rgb::new(0x66, 0x80, 0x99),
                     end: Rgb::new(0xb3, 0xcc, 0xe6),
+                    topological_depth: true,
                 })
                 .unwrap();
         }
@@ -1242,9 +1235,10 @@ end = "#ffffff"
         let entry = workspace.selected();
         let text = entry.draft_text();
         assert!(text.contains("colors.background = \"#1a334d\""));
-        assert!(text.contains("colors.line.mode = \"gradient\""));
-        assert!(text.contains("colors.line.start = \"#668099\""));
-        assert!(text.contains("colors.line.end = \"#b3cce6\""));
+        assert!(text.contains("[colors.line.gradient]"));
+        assert!(text.contains("start = \"#668099\""));
+        assert!(text.contains("end = \"#b3cce6\""));
+        assert!(text.contains("topological_depth = true"));
         assert!(!text.contains("[colors]"));
         assert!(!text.contains("[colors.line]"));
         assert_eq!(
@@ -1256,6 +1250,7 @@ end = "#ffffff"
             LineColorConfig::Gradient {
                 start: Rgb::new(0x66, 0x80, 0x99),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
+                topological_depth: true,
             }
         );
         assert!(!entry.is_dirty());

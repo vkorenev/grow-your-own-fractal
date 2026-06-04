@@ -101,7 +101,7 @@ fn export_svg_with_segments(
 
 fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
     match line {
-        LineColorConfig::Solid { color: c } => {
+        LineColorConfig::Solid(c) => {
             let color = c.to_string();
             let mut d = String::new();
             for [a, b] in segments {
@@ -109,7 +109,11 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             }
             format!("<path d=\"{d}\" stroke=\"{color}\"/>\n")
         }
-        LineColorConfig::Gradient { start, end } => {
+        LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth: false,
+        } => {
             let start = start.to_array();
             let end = end.to_array();
             let n = segments.len();
@@ -147,15 +151,23 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             }
             out
         }
-        LineColorConfig::DepthGradient { .. } => {
-            unreachable!("depth-gradient SVG is built from topological-depth segments")
+        LineColorConfig::Gradient {
+            topological_depth: true,
+            ..
+        } => {
+            unreachable!("topological-depth SVG is built from topological-depth segments")
         }
     }
 }
 
 fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColorConfig) -> String {
-    let LineColorConfig::DepthGradient { start, end } = *line else {
-        unreachable!("depth body requires depth-gradient line color")
+    let LineColorConfig::Gradient {
+        start,
+        end,
+        topological_depth: true,
+    } = *line
+    else {
+        unreachable!("depth body requires topological-depth gradient line color")
     };
     let start = start.to_array();
     let end = end.to_array();
@@ -266,8 +278,7 @@ initial_heading = 0.0
 background = "#000000"
 
 [colors.line]
-mode = "solid"
-color = "#00e680"
+solid = "#00e680"
 "##;
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
@@ -293,8 +304,7 @@ initial_heading = 0.0
 [colors]
 
 [colors.line]
-mode = "solid"
-color = "#ff0000"
+solid = "#ff0000"
 "##;
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
@@ -303,10 +313,7 @@ color = "#ff0000"
 
     #[test]
     fn solid_contains_svg_and_color() {
-        let cfg = make_config(
-            r##"mode = "solid"
-color = "#ff0000""##,
-        );
+        let cfg = make_config(r##"solid = "#ff0000""##);
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -320,7 +327,8 @@ color = "#ff0000""##,
     #[test]
     fn gradient_first_and_last_segment_colors() {
         let cfg = make_config(
-            r##"mode = "gradient"
+            r##"
+[colors.line.gradient]
 start = "#ff0000"
 end = "#0000ff""##,
         );
@@ -338,7 +346,8 @@ end = "#0000ff""##,
     #[test]
     fn hue_cycle_start_color() {
         let cfg = make_config(
-            r##"mode = "hue_cycle"
+            r##"
+[colors.line.hue_cycle]
 initial = "#ff0000""##,
         );
         let svg = export_svg(&cfg);
@@ -354,18 +363,20 @@ initial = "#ff0000""##,
     }
 
     #[test]
-    fn depth_gradient_colors_equal_topological_depth_equally() {
+    fn topological_gradient_colors_equal_topological_depth_equally() {
         let cfg = make_config_with_axiom(
             "F[+F]F",
-            r##"mode = "depth_gradient"
+            r##"
+[colors.line.gradient]
 start = "#ff0000"
-end = "#0000ff""##,
+end = "#0000ff"
+topological_depth = true"##,
         );
         let svg = export_svg(&cfg);
 
         assert!(
             svg.contains("#ff0000"),
-            "missing depth-gradient start color"
+            "missing topological-gradient start color"
         );
         assert_eq!(
             svg.matches("#0000ff").count(),
@@ -375,12 +386,14 @@ end = "#0000ff""##,
     }
 
     #[test]
-    fn depth_gradient_single_segment_uses_start_color() {
+    fn topological_gradient_single_segment_uses_start_color() {
         let cfg = make_config_with_axiom(
             "F",
-            r##"mode = "depth_gradient"
+            r##"
+[colors.line.gradient]
 start = "#ff0000"
-end = "#0000ff""##,
+end = "#0000ff"
+topological_depth = true"##,
         );
         let svg = export_svg(&cfg);
 
@@ -401,12 +414,14 @@ end = "#0000ff""##,
     }
 
     #[test]
-    fn depth_gradient_empty_geometry_returns_minimal_svg() {
+    fn topological_gradient_empty_geometry_returns_minimal_svg() {
         let cfg = make_config_with_axiom(
             "+",
-            r##"mode = "depth_gradient"
+            r##"
+[colors.line.gradient]
 start = "#ff0000"
-end = "#0000ff""##,
+end = "#0000ff"
+topological_depth = true"##,
         );
         let svg = export_svg(&cfg);
 
