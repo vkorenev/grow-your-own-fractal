@@ -34,14 +34,6 @@ impl LineColorMode {
             Self::HueCycle => "hue_cycle",
         }
     }
-
-    pub(crate) fn default_line_color(self) -> LineColorConfig {
-        match self {
-            Self::Solid => LineColorConfig::DEFAULT_SOLID,
-            Self::Gradient => LineColorConfig::DEFAULT_GRADIENT,
-            Self::HueCycle => LineColorConfig::DEFAULT_HUE_CYCLE,
-        }
-    }
 }
 
 impl std::fmt::Display for LineColorMode {
@@ -89,6 +81,23 @@ impl ColorControlMemory {
         self.background = background;
     }
 
+    pub fn solid_color(&self) -> Rgb {
+        self.solid.unwrap_or(Rgb::DEFAULT_SOLID_LINE)
+    }
+
+    pub fn gradient_fields(&self) -> (Rgb, Rgb, bool) {
+        let gradient = self.gradient.unwrap_or(RememberedGradient {
+            start: Rgb::DEFAULT_GRADIENT_START,
+            end: Rgb::DEFAULT_GRADIENT_END,
+            topological_depth: false,
+        });
+        (gradient.start, gradient.end, gradient.topological_depth)
+    }
+
+    pub fn hue_cycle_initial(&self) -> Rgb {
+        self.hue_cycle.unwrap_or(Rgb::DEFAULT_HUE_CYCLE_INITIAL)
+    }
+
     pub fn remember_line(&mut self, line_color: LineColorConfig) {
         match line_color {
             LineColorConfig::Solid(color) => self.solid = Some(color),
@@ -109,22 +118,18 @@ impl ColorControlMemory {
 
     pub fn line_for(&self, mode: LineColorMode) -> LineColorConfig {
         match mode {
-            LineColorMode::Solid => self
-                .solid
-                .map(LineColorConfig::Solid)
-                .unwrap_or_else(|| mode.default_line_color()),
-            LineColorMode::Gradient => self
-                .gradient
-                .map(|gradient| LineColorConfig::Gradient {
-                    start: gradient.start,
-                    end: gradient.end,
-                    topological_depth: gradient.topological_depth,
-                })
-                .unwrap_or_else(|| mode.default_line_color()),
-            LineColorMode::HueCycle => self
-                .hue_cycle
-                .map(|initial| LineColorConfig::HueCycle { initial })
-                .unwrap_or_else(|| mode.default_line_color()),
+            LineColorMode::Solid => LineColorConfig::Solid(self.solid_color()),
+            LineColorMode::Gradient => {
+                let (start, end, topological_depth) = self.gradient_fields();
+                LineColorConfig::Gradient {
+                    start,
+                    end,
+                    topological_depth,
+                }
+            }
+            LineColorMode::HueCycle => LineColorConfig::HueCycle {
+                initial: self.hue_cycle_initial(),
+            },
         }
     }
 }
@@ -164,7 +169,7 @@ mod tests {
             LineColorMode::HueCycle
         );
         assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_DEPTH_GRADIENT),
+            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_TOPOLOGICAL_GRADIENT),
             LineColorMode::Gradient
         );
     }
@@ -188,11 +193,11 @@ mod tests {
         });
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
-            LineColorMode::Gradient.default_line_color()
+            LineColorConfig::DEFAULT_GRADIENT
         );
         assert_eq!(
             memory.line_for(LineColorMode::HueCycle),
-            LineColorMode::HueCycle.default_line_color()
+            LineColorConfig::DEFAULT_HUE_CYCLE
         );
     }
 

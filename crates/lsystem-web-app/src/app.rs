@@ -1010,14 +1010,7 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-solid-color"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::Solid,
-                                ) {
-                                    LineColorConfig::Solid(color) => color.to_string(),
-                                    _ => unreachable!("solid mode must provide solid color"),
-                                }
+                                solid_color_for_mode(color_config, color_memory).to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1054,14 +1047,11 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-gradient-start"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
+                                let (start, _, _) = gradient_fields_for_mode(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
-                                ) {
-                                    LineColorConfig::Gradient { start, .. } => start.to_string(),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                }
+                                );
+                                start.to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1069,19 +1059,10 @@ pub(crate) fn App() -> impl IntoView {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                let current = line_color_for_mode_untracked(
+                                let (_, end, topological_depth) = gradient_fields_for_mode_untracked(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
                                 );
-                                let (end, topological_depth) = match current {
-                                    LineColorConfig::Gradient {
-                                        end,
-                                        topological_depth,
-                                        ..
-                                    } => (end, topological_depth),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                };
                                 let line_color = LineColorConfig::Gradient {
                                     start,
                                     end,
@@ -1105,14 +1086,11 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-gradient-end"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
+                                let (_, end, _) = gradient_fields_for_mode(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
-                                ) {
-                                    LineColorConfig::Gradient { end, .. } => end.to_string(),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                }
+                                );
+                                end.to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1120,19 +1098,10 @@ pub(crate) fn App() -> impl IntoView {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                let current = line_color_for_mode_untracked(
+                                let (start, _, topological_depth) = gradient_fields_for_mode_untracked(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
                                 );
-                                let (start, topological_depth) = match current {
-                                    LineColorConfig::Gradient {
-                                        start,
-                                        topological_depth,
-                                        ..
-                                    } => (start, topological_depth),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                };
                                 let line_color = LineColorConfig::Gradient {
                                     start,
                                     end,
@@ -1156,29 +1125,18 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-gradient-topological-depth"
                             type="checkbox"
                             prop:checked=move || {
-                                match line_color_for_mode(
+                                let (_, _, topological_depth) = gradient_fields_for_mode(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
-                                ) {
-                                    LineColorConfig::Gradient {
-                                        topological_depth,
-                                        ..
-                                    } => topological_depth,
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                }
+                                );
+                                topological_depth
                             }
                             disabled=is_dirty
                             on:change:target=move |ev| {
-                                let current = line_color_for_mode_untracked(
+                                let (start, end, _) = gradient_fields_for_mode_untracked(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
                                 );
-                                let (start, end) = match current {
-                                    LineColorConfig::Gradient { start, end, .. } => (start, end),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                };
                                 let line_color = LineColorConfig::Gradient {
                                     start,
                                     end,
@@ -1212,14 +1170,7 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-hue-cycle-initial"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::HueCycle,
-                                ) {
-                                    LineColorConfig::HueCycle { initial } => initial.to_string(),
-                                    _ => unreachable!("hue-cycle mode must provide hue-cycle color"),
-                                }
+                                hue_cycle_initial_for_mode(color_config, color_memory).to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1570,29 +1521,51 @@ fn current_line_color(color_config: Memo<ColorConfig>) -> LineColorConfig {
     color_config.with(|c| c.line)
 }
 
-fn line_color_for_mode(
+fn solid_color_for_mode(
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
-    mode: LineColorMode,
-) -> LineColorConfig {
-    let current = current_line_color(color_config);
-    if LineColorMode::from_line_color(&current) == mode {
-        current
-    } else {
-        memory.with(|m| m.line_for(mode))
+) -> Rgb {
+    match current_line_color(color_config) {
+        LineColorConfig::Solid(color) => color,
+        _ => memory.with(|m| m.solid_color()),
     }
 }
 
-fn line_color_for_mode_untracked(
+fn gradient_fields_for_mode(
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
-    mode: LineColorMode,
-) -> LineColorConfig {
-    let current = color_config.with_untracked(|c| c.line);
-    if LineColorMode::from_line_color(&current) == mode {
-        current
-    } else {
-        memory.with_untracked(|m| m.line_for(mode))
+) -> (Rgb, Rgb, bool) {
+    match current_line_color(color_config) {
+        LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth,
+        } => (start, end, topological_depth),
+        _ => memory.with(|m| m.gradient_fields()),
+    }
+}
+
+fn gradient_fields_for_mode_untracked(
+    color_config: Memo<ColorConfig>,
+    memory: RwSignal<ColorControlMemory>,
+) -> (Rgb, Rgb, bool) {
+    match color_config.with_untracked(|c| c.line) {
+        LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth,
+        } => (start, end, topological_depth),
+        _ => memory.with_untracked(|m| m.gradient_fields()),
+    }
+}
+
+fn hue_cycle_initial_for_mode(
+    color_config: Memo<ColorConfig>,
+    memory: RwSignal<ColorControlMemory>,
+) -> Rgb {
+    match current_line_color(color_config) {
+        LineColorConfig::HueCycle { initial } => initial,
+        _ => memory.with(|m| m.hue_cycle_initial()),
     }
 }
 

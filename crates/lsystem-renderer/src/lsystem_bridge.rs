@@ -314,6 +314,10 @@ pub fn geometry_to_depth_segments_3d(
     builder.finish()
 }
 
+/// Builds the GPU color uniform for the selected line color mode.
+///
+/// Gradients with `topological_depth` enabled use `max_topological_depth` for
+/// interpolation; traversal gradients use `total_segments`.
 pub fn color_params_from_config(
     line: &LineColorConfig,
     total_segments: u32,

@@ -157,6 +157,11 @@ impl std::str::FromStr for Rgb {
 }
 
 /// Color mode for the fractal lines.
+///
+/// `Solid` renders every segment with one RGB color. `Gradient` interpolates
+/// from `start` to `end` either by traversal order or, when `topological_depth`
+/// is enabled, by turtle stack depth. `HueCycle` converts `initial` to HSV when
+/// building renderer color parameters and cycles through hue values from there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineColorConfig {
     Solid(Rgb),
@@ -180,11 +185,14 @@ impl LineColorConfig {
     pub const DEFAULT_HUE_CYCLE: Self = Self::HueCycle {
         initial: Rgb::DEFAULT_HUE_CYCLE_INITIAL,
     };
-    pub const DEFAULT_DEPTH_GRADIENT: Self = Self::Gradient {
+    /// Default gradient colors with topological-depth interpolation enabled.
+    pub const DEFAULT_TOPOLOGICAL_GRADIENT: Self = Self::Gradient {
         start: Rgb::DEFAULT_GRADIENT_START,
         end: Rgb::DEFAULT_GRADIENT_END,
         topological_depth: true,
     };
+    /// Compatibility alias for the former distinct depth-gradient mode.
+    pub const DEFAULT_DEPTH_GRADIENT: Self = Self::DEFAULT_TOPOLOGICAL_GRADIENT;
 
     pub fn needs_topological_depth(&self) -> bool {
         matches!(
@@ -531,9 +539,7 @@ fn parse_optional_rgb(
     default: Rgb,
     field: &str,
 ) -> Result<Rgb, ConfigError> {
-    value
-        .map(|value| parse_rgb(value, field))
-        .unwrap_or(Ok(default))
+    value.map_or(Ok(default), |value| parse_rgb(value, field))
 }
 
 /// Format-preserving TOML document for an L-system configuration.
@@ -715,6 +721,9 @@ impl ConfigDocument {
 }
 
 fn set_value_preserving_decor(item: &mut Item, mut next_value: Value) {
+    // This helper only preserves decor for scalar values. Callers that write
+    // line-color variant fields first ensure the active variant table exists,
+    // then pass only scalar child items here.
     debug_assert!(
         item.as_value().is_some() || item.is_none(),
         "expected scalar Value or absent item; decor will be lost for table items"
@@ -746,6 +755,8 @@ fn remove_inactive_line_color_entries(line: &mut Table, active_keys: &[&str]) {
 }
 
 fn line_color_table_mut<'a>(line: &'a mut Table, key: &str) -> &'a mut Table {
+    // Variant tables own their scalar fields. Replacing a non-table item here is
+    // intentional: a validated config cannot have a scalar active variant.
     if line.get(key).is_none_or(|item| !item.is_table()) {
         line[key] = Item::Table(Table::new());
     }
@@ -1090,12 +1101,16 @@ solid = "#00e680"
             }
         );
         assert_eq!(
-            LineColorConfig::DEFAULT_DEPTH_GRADIENT,
+            LineColorConfig::DEFAULT_TOPOLOGICAL_GRADIENT,
             LineColorConfig::Gradient {
                 start: hex("#0d590d"),
                 end: hex("#99e61a"),
                 topological_depth: true,
             }
+        );
+        assert_eq!(
+            LineColorConfig::DEFAULT_DEPTH_GRADIENT,
+            LineColorConfig::DEFAULT_TOPOLOGICAL_GRADIENT
         );
     }
 
@@ -1154,6 +1169,16 @@ solid = "#00e680"
         let cfg = parse_config(&toml).unwrap();
 
         assert_eq!(cfg.colors.line, LineColorConfig::DEFAULT_GRADIENT);
+    }
+
+    #[test]
+    fn rejects_empty_line_color_table() {
+        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "")
+            .replace("[colors.line]\nsolid = \"#00e680\"", "[colors.line]");
+
+        let err = parse_config(&toml).unwrap_err();
+
+        assert_toml_deserialize_error_contains(err, &["colors.line"]);
     }
 
     #[test]
@@ -1439,10 +1464,10 @@ initial_heading = 0.0
 background = "#000000"
 
 [colors.line]
-mode = "solid"
-color = "#00e680"
+solid = "#00e680"
 "##;
-        assert!(parse_config(toml).is_err());
+        let err = parse_config(toml).unwrap_err();
+        assert_toml_deserialize_error_mentions_path(err, "l-system.rules");
     }
 
     #[test]
@@ -1463,8 +1488,16 @@ color = "#00e680"
     }
 
     #[test]
-    fn rejects_invalid_hex_for_topological_gradient_colors() {
+    fn rejects_invalid_hex_for_gradient_colors() {
         for (expected_field, replacement) in [
+            (
+                "colors.line.gradient.start",
+                "[colors.line.gradient]\nstart = \"bad\"\nend = \"#b3cce6\"",
+            ),
+            (
+                "colors.line.gradient.end",
+                "[colors.line.gradient]\nstart = \"#1a334d\"\nend = \"bad\"",
+            ),
             (
                 "colors.line.gradient.start",
                 "[colors.line.gradient]\nstart = \"bad\"\nend = \"#b3cce6\"\ntopological_depth = true",
@@ -1999,6 +2032,57 @@ end = "#aabbcc" # keep end comment
                 start: Rgb::new(0x00, 0x11, 0x22),
                 end: Rgb::new(0xaa, 0xbb, 0xcc),
                 topological_depth: true,
+            }
+        );
+    }
+
+    #[test]
+    fn set_line_color_updates_gradient_topological_depth_false_in_place() {
+        let original = r##"[metadata]
+name = "Decorated Gradient"
+
+[l-system]
+dimensions = "2D"
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "FF"
+
+[turtle]
+angle = 90.0
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = "#000000"
+
+[colors.line.gradient] # keep gradient table comment
+start = "#001122" # keep start comment
+end = "#aabbcc" # keep end comment
+topological_depth = true # keep flag comment
+"##;
+        let mut source = ConfigSource::parse(original).unwrap();
+
+        source.set_line_color(&LineColorConfig::Gradient {
+            start: Rgb::new(0x00, 0x11, 0x22),
+            end: Rgb::new(0xaa, 0xbb, 0xcc),
+            topological_depth: false,
+        });
+
+        let result = source.to_toml_string();
+        assert!(result.contains("[colors.line.gradient] # keep gradient table comment"));
+        assert!(result.contains("start = \"#001122\" # keep start comment"));
+        assert!(result.contains("end = \"#aabbcc\" # keep end comment"));
+        assert!(result.contains("topological_depth = false # keep flag comment"));
+        assert!(!result.contains("topological_depth = true"));
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
+        assert_eq!(
+            doc.config().colors.line,
+            LineColorConfig::Gradient {
+                start: Rgb::new(0x00, 0x11, 0x22),
+                end: Rgb::new(0xaa, 0xbb, 0xcc),
+                topological_depth: false,
             }
         );
     }
