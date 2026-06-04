@@ -2,8 +2,8 @@ use glam::{Vec2, Vec3, Vec4};
 use lsystem_core::{LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth};
 
 use crate::line_renderer::{
-    ColorMode, ColorParams, Segment2D, Segment3D, TopologicalDepthSegment2D,
-    TopologicalDepthSegment3D, Transform,
+    ColorParams, Segment2D, Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D,
+    Transform,
 };
 
 pub struct SegmentData {
@@ -320,41 +320,24 @@ pub fn color_params_from_config(
     max_topological_depth: u32,
 ) -> ColorParams {
     match *line {
-        LineColorConfig::Solid { color: c } => ColorParams {
-            mode: ColorMode::Solid as u32,
+        LineColorConfig::Solid { color: c } => {
+            ColorParams::solid(total_segments, rgb_to_rgba(c.to_array()))
+        }
+        LineColorConfig::Gradient { start, end } => ColorParams::gradient(
             total_segments,
-            max_topological_depth: 0,
-            color_start: rgb_to_rgba(c.to_array()),
-            ..Default::default()
-        },
-        LineColorConfig::Gradient { start, end } => ColorParams {
-            mode: ColorMode::Gradient as u32,
-            total_segments,
-            max_topological_depth: 0,
-            color_start: rgb_to_rgba(start.to_array()),
-            color_end: rgb_to_rgba(end.to_array()),
-            ..Default::default()
-        },
+            rgb_to_rgba(start.to_array()),
+            rgb_to_rgba(end.to_array()),
+        ),
         LineColorConfig::HueCycle { initial } => {
             let (hue_start, saturation, value) = initial.to_hsv();
-            ColorParams {
-                mode: ColorMode::HueCycle as u32,
-                total_segments,
-                max_topological_depth: 0,
-                hue_start,
-                saturation,
-                value,
-                ..Default::default()
-            }
+            ColorParams::hue_cycle(total_segments, hue_start, saturation, value)
         }
-        LineColorConfig::DepthGradient { start, end } => ColorParams {
-            mode: ColorMode::DepthGradient as u32,
+        LineColorConfig::DepthGradient { start, end } => ColorParams::depth_gradient(
             total_segments,
             max_topological_depth,
-            color_start: rgb_to_rgba(start.to_array()),
-            color_end: rgb_to_rgba(end.to_array()),
-            ..Default::default()
-        },
+            rgb_to_rgba(start.to_array()),
+            rgb_to_rgba(end.to_array()),
+        ),
     }
 }
 
@@ -415,7 +398,6 @@ mod tests {
         let color = Rgb::DEFAULT_SOLID_LINE;
         let params = color_params_from_config(&LineColorConfig::Solid { color }, 10, 0);
 
-        assert_eq!(params.mode, ColorMode::Solid as u32);
         assert_eq!(params.total_segments, 10);
         assert_eq!(params.color_start, hex_rgba(color));
         assert_eq!(params.max_topological_depth, 0);
@@ -427,7 +409,6 @@ mod tests {
         let end = Rgb::new(0xb3, 0xcc, 0xe5);
         let params = color_params_from_config(&LineColorConfig::Gradient { start, end }, 7, 0);
 
-        assert_eq!(params.mode, ColorMode::Gradient as u32);
         assert_eq!(params.total_segments, 7);
         assert_eq!(params.color_start, hex_rgba(start));
         assert_eq!(params.color_end, hex_rgba(end));
@@ -440,7 +421,6 @@ mod tests {
         let initial = Rgb::new(0x40, 0x80, 0x80);
         let params = color_params_from_config(&LineColorConfig::HueCycle { initial }, 9, 0);
 
-        assert_eq!(params.mode, ColorMode::HueCycle as u32);
         assert_eq!(params.total_segments, 9);
         let (hue, sat, val) = initial.to_hsv();
         assert!(close(params.hue_start, hue));
@@ -454,7 +434,6 @@ mod tests {
         let end = Rgb::new(0xb3, 0xcc, 0xe5);
         let params = color_params_from_config(&LineColorConfig::DepthGradient { start, end }, 5, 3);
 
-        assert_eq!(params.mode, ColorMode::DepthGradient as u32);
         assert_eq!(params.total_segments, 5);
         assert_eq!(params.max_topological_depth, 3);
         assert_eq!(params.color_start, hex_rgba(start));
@@ -467,7 +446,6 @@ mod tests {
         let end = Rgb::new(0xb3, 0xcc, 0xe5);
         let params = color_params_from_config(&LineColorConfig::DepthGradient { start, end }, 1, 0);
 
-        assert_eq!(params.mode, ColorMode::DepthGradient as u32);
         assert_eq!(params.max_topological_depth, 0);
     }
 

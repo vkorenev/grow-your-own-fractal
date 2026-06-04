@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use bytemuck::{NoUninit, Pod, Zeroable};
+use bytemuck::{Pod, Zeroable};
 use encase::{ShaderType, UniformBuffer};
 use lsystem_core::Dimensions;
 use wgpu::util::DeviceExt;
@@ -99,7 +99,7 @@ pub fn max_segments_for_line_color(dimensions: Dimensions, uses_topological_dept
 /// Discriminant values are matched by literal in `shader.wgsl` and `shader3d.wgsl`;
 /// keep them in sync when adding or renumbering variants.
 #[repr(u32)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, NoUninit, Zeroable)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum ColorMode {
     #[default]
     Solid = 0,
@@ -109,9 +109,9 @@ pub enum ColorMode {
 }
 
 /// Per-frame color parameters written to the GPU as a WGSL uniform.
-#[derive(Copy, Clone, Default, ShaderType)]
+#[derive(Copy, Clone, ShaderType)]
 pub struct ColorParams {
-    pub mode: u32,
+    mode: u32,
     pub total_segments: u32,
     pub max_topological_depth: u32,
     pub color_start: glam::Vec4,
@@ -121,7 +121,68 @@ pub struct ColorParams {
     pub value: f32,
 }
 
+impl Default for ColorParams {
+    fn default() -> Self {
+        Self {
+            mode: ColorMode::Solid as u32,
+            total_segments: 0,
+            max_topological_depth: 0,
+            color_start: glam::Vec4::ZERO,
+            color_end: glam::Vec4::ZERO,
+            hue_start: 0.0,
+            saturation: 0.0,
+            value: 0.0,
+        }
+    }
+}
+
 impl ColorParams {
+    pub fn solid(total_segments: u32, color_start: glam::Vec4) -> Self {
+        Self {
+            mode: ColorMode::Solid as u32,
+            total_segments,
+            color_start,
+            ..Default::default()
+        }
+    }
+
+    pub fn gradient(total_segments: u32, color_start: glam::Vec4, color_end: glam::Vec4) -> Self {
+        Self {
+            mode: ColorMode::Gradient as u32,
+            total_segments,
+            color_start,
+            color_end,
+            ..Default::default()
+        }
+    }
+
+    pub fn hue_cycle(total_segments: u32, hue_start: f32, saturation: f32, value: f32) -> Self {
+        Self {
+            mode: ColorMode::HueCycle as u32,
+            total_segments,
+            hue_start,
+            saturation,
+            value,
+            ..Default::default()
+        }
+    }
+
+    pub fn depth_gradient(
+        total_segments: u32,
+        max_topological_depth: u32,
+        color_start: glam::Vec4,
+        color_end: glam::Vec4,
+    ) -> Self {
+        Self {
+            mode: ColorMode::DepthGradient as u32,
+            total_segments,
+            max_topological_depth,
+            color_start,
+            color_end,
+            ..Default::default()
+        }
+    }
+
     /// Applies a hue offset only for `HueCycle`; other color modes are unchanged.
     pub fn with_hue_offset_degrees(mut self, offset: f32) -> Self {
         if self.mode == ColorMode::HueCycle as u32 {
@@ -183,7 +244,7 @@ macro_rules! impl_uniform_bytes {
         impl $ty {
             fn uniform_bytes(&self) -> Vec<u8> {
                 UniformBuffer::<Vec<u8>>::content_of(self)
-                    .expect("fixed renderer uniform layout should encode")
+                    .expect(concat!(stringify!($ty), " uniform layout should encode"))
             }
         }
     };
@@ -834,24 +895,22 @@ mod tests {
     use super::*;
 
     fn sample_params(mode: ColorMode, hue_start: f32) -> ColorParams {
-        ColorParams {
-            mode: mode as u32,
-            total_segments: 10,
-            max_topological_depth: 3,
-            color_start: glam::vec4(0.1, 0.2, 0.3, 1.0),
-            color_end: glam::vec4(0.7, 0.8, 0.9, 1.0),
-            hue_start,
-            saturation: 0.5,
-            value: 0.75,
+        let color_start = glam::vec4(0.1, 0.2, 0.3, 1.0);
+        let color_end = glam::vec4(0.7, 0.8, 0.9, 1.0);
+        match mode {
+            ColorMode::Solid => ColorParams::solid(10, color_start),
+            ColorMode::Gradient => ColorParams::gradient(10, color_start, color_end),
+            ColorMode::HueCycle => ColorParams::hue_cycle(10, hue_start, 0.5, 0.75),
+            ColorMode::DepthGradient => ColorParams::depth_gradient(10, 3, color_start, color_end),
         }
     }
 
     fn push_u32(bytes: &mut Vec<u8>, value: u32) {
-        bytes.extend_from_slice(&value.to_ne_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
     }
 
     fn push_f32(bytes: &mut Vec<u8>, value: f32) {
-        bytes.extend_from_slice(&value.to_ne_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
     }
 
     fn push_vec2(bytes: &mut Vec<u8>, value: glam::Vec2) {
@@ -907,6 +966,11 @@ mod tests {
         assert_eq!(Transform::min_size().get(), 16);
         assert_eq!(Mvp::min_size().get(), 64);
         assert_eq!(ColorParams::min_size().get(), 64);
+    }
+
+    #[test]
+    fn default_color_params_use_solid_mode() {
+        assert_eq!(ColorParams::default().mode, ColorMode::Solid as u32);
     }
 
     #[test]
