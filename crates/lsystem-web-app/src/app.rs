@@ -997,13 +997,12 @@ pub(crate) fn App() -> impl IntoView {
                         <option value="solid">"Solid"</option>
                         <option value="gradient">"Gradient"</option>
                         <option value="hue_cycle">"Hue cycle"</option>
-                        <option value="depth_gradient">"Depth gradient"</option>
                     </select>
 
                     <div
                         class="color-row"
                         class:hidden=move || {
-                            !matches!(current_line_color(color_config), LineColorConfig::Solid { .. })
+                            !matches!(current_line_color(color_config), LineColorConfig::Solid(_))
                         }
                     >
                         <label for="line-solid-color">"Line color"</label>
@@ -1011,14 +1010,7 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-solid-color"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::Solid,
-                                ) {
-                                    LineColorConfig::Solid { color } => color.to_string(),
-                                    _ => unreachable!("solid mode must provide solid color"),
-                                }
+                                solid_color_for_mode(color_config, color_memory).to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1026,117 +1018,11 @@ pub(crate) fn App() -> impl IntoView {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                let line_color = LineColorConfig::Solid { color };
+                                let line_color = LineColorConfig::Solid(color);
                                 if update_clean_config(
                                     config_workspace,
                                     error,
                                     "solid line color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
-                            }
-                        />
-                    </div>
-
-                    <div
-                        class="color-row"
-                        class:hidden=move || {
-                            !matches!(
-                                current_line_color(color_config),
-                                LineColorConfig::DepthGradient { .. }
-                            )
-                        }
-                    >
-                        <label for="line-depth-gradient-start">"Depth start"</label>
-                        <input
-                            id="line-depth-gradient-start"
-                            type="color"
-                            prop:value=move || {
-                                match line_color_for_mode(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::DepthGradient,
-                                ) {
-                                    LineColorConfig::DepthGradient { start, .. } => {
-                                        start.to_string()
-                                    }
-                                    _ => unreachable!(
-                                        "depth-gradient mode must provide depth-gradient color"
-                                    ),
-                                }
-                            }
-                            disabled=is_dirty
-                            on:input:target=move |ev| {
-                                let Ok(start) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
-                                    return;
-                                };
-                                let current = line_color_for_mode_untracked(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::DepthGradient,
-                                );
-                                let end = match current {
-                                    LineColorConfig::DepthGradient { end, .. } => end,
-                                    _ => unreachable!(
-                                        "depth-gradient mode must provide depth-gradient color"
-                                    ),
-                                };
-                                let line_color = LineColorConfig::DepthGradient { start, end };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "depth-gradient start color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
-                                }
-                            }
-                        />
-
-                        <label for="line-depth-gradient-end">"Depth end"</label>
-                        <input
-                            id="line-depth-gradient-end"
-                            type="color"
-                            prop:value=move || {
-                                match line_color_for_mode(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::DepthGradient,
-                                ) {
-                                    LineColorConfig::DepthGradient { end, .. } => end.to_string(),
-                                    _ => unreachable!(
-                                        "depth-gradient mode must provide depth-gradient color"
-                                    ),
-                                }
-                            }
-                            disabled=is_dirty
-                            on:input:target=move |ev| {
-                                let Ok(end) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
-                                    return;
-                                };
-                                let current = line_color_for_mode_untracked(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::DepthGradient,
-                                );
-                                let start = match current {
-                                    LineColorConfig::DepthGradient { start, .. } => start,
-                                    _ => unreachable!(
-                                        "depth-gradient mode must provide depth-gradient color"
-                                    ),
-                                };
-                                let line_color = LineColorConfig::DepthGradient { start, end };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "depth-gradient end color input",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
                                     color_memory.update(|memory| {
@@ -1161,14 +1047,11 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-gradient-start"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
+                                let (start, _, _) = gradient_fields_for_mode(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
-                                ) {
-                                    LineColorConfig::Gradient { start, .. } => start.to_string(),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                }
+                                );
+                                start.to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1176,16 +1059,15 @@ pub(crate) fn App() -> impl IntoView {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                let current = line_color_for_mode_untracked(
+                                let (_, end, topological_depth) = gradient_fields_for_mode_untracked(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
                                 );
-                                let end = match current {
-                                    LineColorConfig::Gradient { end, .. } => end,
-                                    _ => unreachable!("gradient mode must provide gradient color"),
+                                let line_color = LineColorConfig::Gradient {
+                                    start,
+                                    end,
+                                    topological_depth,
                                 };
-                                let line_color = LineColorConfig::Gradient { start, end };
                                 if update_clean_config(
                                     config_workspace,
                                     error,
@@ -1204,14 +1086,11 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-gradient-end"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
+                                let (_, end, _) = gradient_fields_for_mode(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
-                                ) {
-                                    LineColorConfig::Gradient { end, .. } => end.to_string(),
-                                    _ => unreachable!("gradient mode must provide gradient color"),
-                                }
+                                );
+                                end.to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1219,20 +1098,54 @@ pub(crate) fn App() -> impl IntoView {
                                     error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
-                                let current = line_color_for_mode_untracked(
+                                let (start, _, topological_depth) = gradient_fields_for_mode_untracked(
                                     color_config,
                                     color_memory,
-                                    LineColorMode::Gradient,
                                 );
-                                let start = match current {
-                                    LineColorConfig::Gradient { start, .. } => start,
-                                    _ => unreachable!("gradient mode must provide gradient color"),
+                                let line_color = LineColorConfig::Gradient {
+                                    start,
+                                    end,
+                                    topological_depth,
                                 };
-                                let line_color = LineColorConfig::Gradient { start, end };
                                 if update_clean_config(
                                     config_workspace,
                                     error,
                                     "gradient end color input",
+                                    move |clean| clean.set_line_color(line_color),
+                                ) {
+                                    color_memory.update(|memory| {
+                                        memory.remember_line(line_color);
+                                    });
+                                }
+                            }
+                        />
+
+                        <label for="line-gradient-topological-depth">"Topological depth"</label>
+                        <input
+                            id="line-gradient-topological-depth"
+                            type="checkbox"
+                            prop:checked=move || {
+                                let (_, _, topological_depth) = gradient_fields_for_mode(
+                                    color_config,
+                                    color_memory,
+                                );
+                                topological_depth
+                            }
+                            disabled=is_dirty
+                            on:change:target=move |ev| {
+                                let (start, end, _) = gradient_fields_for_mode_untracked(
+                                    color_config,
+                                    color_memory,
+                                );
+                                let line_color = LineColorConfig::Gradient {
+                                    start,
+                                    end,
+                                    topological_depth: ev.target().checked(),
+                                };
+                                if update_clean_config(
+                                    config_workspace,
+                                    error,
+                                    "gradient topological depth toggle",
                                     move |clean| clean.set_line_color(line_color),
                                 ) {
                                     color_memory.update(|memory| {
@@ -1257,14 +1170,7 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-hue-cycle-initial"
                             type="color"
                             prop:value=move || {
-                                match line_color_for_mode(
-                                    color_config,
-                                    color_memory,
-                                    LineColorMode::HueCycle,
-                                ) {
-                                    LineColorConfig::HueCycle { initial } => initial.to_string(),
-                                    _ => unreachable!("hue-cycle mode must provide hue-cycle color"),
-                                }
+                                hue_cycle_initial_for_mode(color_config, color_memory).to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1615,29 +1521,54 @@ fn current_line_color(color_config: Memo<ColorConfig>) -> LineColorConfig {
     color_config.with(|c| c.line)
 }
 
-fn line_color_for_mode(
+fn solid_color_for_mode(
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
-    mode: LineColorMode,
-) -> LineColorConfig {
-    let current = current_line_color(color_config);
-    if LineColorMode::from_line_color(&current) == mode {
-        current
-    } else {
-        memory.with(|m| m.line_for(mode))
+) -> Rgb {
+    match current_line_color(color_config) {
+        LineColorConfig::Solid(color) => color,
+        _ => memory.with(|m| m.solid_color()),
     }
 }
 
-fn line_color_for_mode_untracked(
+fn gradient_fields_from(line: LineColorConfig, fallback: (Rgb, Rgb, bool)) -> (Rgb, Rgb, bool) {
+    match line {
+        LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth,
+        } => (start, end, topological_depth),
+        _ => fallback,
+    }
+}
+
+fn gradient_fields_for_mode(
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
-    mode: LineColorMode,
-) -> LineColorConfig {
-    let current = color_config.with_untracked(|c| c.line);
-    if LineColorMode::from_line_color(&current) == mode {
-        current
-    } else {
-        memory.with_untracked(|m| m.line_for(mode))
+) -> (Rgb, Rgb, bool) {
+    gradient_fields_from(
+        current_line_color(color_config),
+        memory.with(|m| m.gradient_fields()),
+    )
+}
+
+fn gradient_fields_for_mode_untracked(
+    color_config: Memo<ColorConfig>,
+    memory: RwSignal<ColorControlMemory>,
+) -> (Rgb, Rgb, bool) {
+    gradient_fields_from(
+        color_config.with_untracked(|c| c.line),
+        memory.with_untracked(|m| m.gradient_fields()),
+    )
+}
+
+fn hue_cycle_initial_for_mode(
+    color_config: Memo<ColorConfig>,
+    memory: RwSignal<ColorControlMemory>,
+) -> Rgb {
+    match current_line_color(color_config) {
+        LineColorConfig::HueCycle { initial } => initial,
+        _ => memory.with(|m| m.hue_cycle_initial()),
     }
 }
 

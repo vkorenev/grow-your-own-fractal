@@ -17,7 +17,6 @@ initial_heading = 90.0
 [colors]
 background = "#000000"
 
-[colors.line]
-mode = "gradient"
+[colors.line.gradient]
 start = "#59590d"
 end = "#33d940"

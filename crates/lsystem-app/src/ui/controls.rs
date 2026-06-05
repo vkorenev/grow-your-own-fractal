@@ -164,23 +164,39 @@ fn push_color_controls<'a>(
     );
 
     match *line_color {
-        LineColorConfig::Solid { color } => controls.push(rgb_controls("Line RGB", color, |hex| {
-            Message::LineColorChanged(LineColorConfig::Solid { color: hex })
+        LineColorConfig::Solid(color) => controls.push(rgb_controls("Line RGB", color, |hex| {
+            Message::LineColorChanged(LineColorConfig::Solid(hex))
         })),
-        LineColorConfig::Gradient { start, end } => controls
+        LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth,
+        } => controls
             .push(rgb_controls("Gradient start", start, move |hex| {
-                Message::LineColorChanged(LineColorConfig::Gradient { start: hex, end })
+                Message::LineColorChanged(LineColorConfig::Gradient {
+                    start: hex,
+                    end,
+                    topological_depth,
+                })
             }))
             .push(rgb_controls("Gradient end", end, move |hex| {
-                Message::LineColorChanged(LineColorConfig::Gradient { start, end: hex })
-            })),
-        LineColorConfig::DepthGradient { start, end } => controls
-            .push(rgb_controls("Depth start", start, move |hex| {
-                Message::LineColorChanged(LineColorConfig::DepthGradient { start: hex, end })
+                Message::LineColorChanged(LineColorConfig::Gradient {
+                    start,
+                    end: hex,
+                    topological_depth,
+                })
             }))
-            .push(rgb_controls("Depth end", end, move |hex| {
-                Message::LineColorChanged(LineColorConfig::DepthGradient { start, end: hex })
-            })),
+            .push(
+                checkbox(topological_depth)
+                    .label("Topological depth")
+                    .on_toggle(move |enabled| {
+                        Message::LineColorChanged(LineColorConfig::Gradient {
+                            start,
+                            end,
+                            topological_depth: enabled,
+                        })
+                    }),
+            ),
         LineColorConfig::HueCycle { initial } => {
             let rotation_label = if hue_rotation.is_enabled() {
                 "Hue rotation: On"

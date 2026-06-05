@@ -17,6 +17,5 @@ initial_heading = 90.0
 [colors]
 background = "#000000"
 
-[colors.line]
-mode = "hue_cycle"
+[colors.line.hue_cycle]
 initial = "#e60000"
