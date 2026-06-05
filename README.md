@@ -115,6 +115,14 @@ optional and falls back to black when omitted; omitted `colors.line` falls back
 to the default solid line color. All present colors are hex color strings in
 `"#rrggbb"` format, including `hue_cycle`'s `initial` color.
 
+Built-in defaults use the same property paths as config TOML for
+`turtle.step`, `turtle.initial_heading`, `colors.background`,
+`colors.line.solid`, `colors.line.gradient.*`, and
+`colors.line.hue_cycle.initial`. Regular L-System configs still select exactly
+one `colors.line` mode. Omitting `colors.line` selects the built-in default
+mode. See `crates/lsystem-core/src/defaults.toml` for the default values.
+Unknown keys are rejected.
+
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.
 
