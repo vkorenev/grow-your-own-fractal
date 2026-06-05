@@ -191,9 +191,6 @@ impl LineColorConfig {
         end: Rgb::DEFAULT_GRADIENT_END,
         topological_depth: true,
     };
-    /// Compatibility alias for the former distinct depth-gradient mode.
-    pub const DEFAULT_DEPTH_GRADIENT: Self = Self::DEFAULT_TOPOLOGICAL_GRADIENT;
-
     pub fn needs_topological_depth(&self) -> bool {
         matches!(
             self,
@@ -640,7 +637,7 @@ impl ConfigSource {
         let line = line_table_mut(&mut self.document);
         match line_color {
             LineColorConfig::Solid(color) => {
-                remove_inactive_line_color_entries(line, &["solid"]);
+                remove_inactive_line_color_entries(line, "solid");
                 set_value_preserving_decor(&mut line["solid"], Value::from(color.to_string()));
             }
             LineColorConfig::Gradient {
@@ -648,7 +645,7 @@ impl ConfigSource {
                 end,
                 topological_depth,
             } => {
-                remove_inactive_line_color_entries(line, &["gradient"]);
+                remove_inactive_line_color_entries(line, "gradient");
                 let gradient = line_color_table_mut(line, "gradient");
                 set_value_preserving_decor(&mut gradient["start"], Value::from(start.to_string()));
                 set_value_preserving_decor(&mut gradient["end"], Value::from(end.to_string()));
@@ -658,7 +655,7 @@ impl ConfigSource {
                 );
             }
             LineColorConfig::HueCycle { initial } => {
-                remove_inactive_line_color_entries(line, &["hue_cycle"]);
+                remove_inactive_line_color_entries(line, "hue_cycle");
                 let hue_cycle = line_color_table_mut(line, "hue_cycle");
                 set_value_preserving_decor(
                     &mut hue_cycle["initial"],
@@ -746,9 +743,9 @@ const LINE_COLOR_KEYS: &[&str] = &[
     "initial",
 ];
 
-fn remove_inactive_line_color_entries(line: &mut Table, active_keys: &[&str]) {
+fn remove_inactive_line_color_entries(line: &mut Table, active_key: &str) {
     for key in LINE_COLOR_KEYS {
-        if !active_keys.contains(key) {
+        if *key != active_key {
             line.remove(key);
         }
     }
@@ -1107,10 +1104,6 @@ solid = "#00e680"
                 end: hex("#99e61a"),
                 topological_depth: true,
             }
-        );
-        assert_eq!(
-            LineColorConfig::DEFAULT_DEPTH_GRADIENT,
-            LineColorConfig::DEFAULT_TOPOLOGICAL_GRADIENT
         );
     }
 

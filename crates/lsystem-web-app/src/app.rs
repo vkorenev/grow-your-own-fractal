@@ -1531,32 +1531,35 @@ fn solid_color_for_mode(
     }
 }
 
-fn gradient_fields_for_mode(
-    color_config: Memo<ColorConfig>,
-    memory: RwSignal<ColorControlMemory>,
-) -> (Rgb, Rgb, bool) {
-    match current_line_color(color_config) {
+fn gradient_fields_from(line: LineColorConfig, fallback: (Rgb, Rgb, bool)) -> (Rgb, Rgb, bool) {
+    match line {
         LineColorConfig::Gradient {
             start,
             end,
             topological_depth,
         } => (start, end, topological_depth),
-        _ => memory.with(|m| m.gradient_fields()),
+        _ => fallback,
     }
+}
+
+fn gradient_fields_for_mode(
+    color_config: Memo<ColorConfig>,
+    memory: RwSignal<ColorControlMemory>,
+) -> (Rgb, Rgb, bool) {
+    gradient_fields_from(
+        current_line_color(color_config),
+        memory.with(|m| m.gradient_fields()),
+    )
 }
 
 fn gradient_fields_for_mode_untracked(
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
 ) -> (Rgb, Rgb, bool) {
-    match color_config.with_untracked(|c| c.line) {
-        LineColorConfig::Gradient {
-            start,
-            end,
-            topological_depth,
-        } => (start, end, topological_depth),
-        _ => memory.with_untracked(|m| m.gradient_fields()),
-    }
+    gradient_fields_from(
+        color_config.with_untracked(|c| c.line),
+        memory.with_untracked(|m| m.gradient_fields()),
+    )
 }
 
 fn hue_cycle_initial_for_mode(
