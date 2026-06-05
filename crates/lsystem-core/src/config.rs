@@ -232,8 +232,25 @@ impl ConfigDefaults {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TurtleDefaults {
-    pub step: f32,
-    pub initial_heading: f32,
+    step: f32,
+    initial_heading: f32,
+}
+
+impl TurtleDefaults {
+    pub fn try_new(step: f32, initial_heading: f32) -> Result<Self, ConfigError> {
+        Ok(Self {
+            step: validate_step(step)?,
+            initial_heading: validate_initial_heading(initial_heading)?,
+        })
+    }
+
+    pub fn step(self) -> f32 {
+        self.step
+    }
+
+    pub fn initial_heading(self) -> f32 {
+        self.initial_heading
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,7 +268,7 @@ pub struct LineColorDefaults {
 }
 
 impl LineColorDefaults {
-    pub fn default_line_color(&self) -> LineColorConfig {
+    pub fn default_line_color(self) -> LineColorConfig {
         match self.default {
             DefaultLineColorMode::Solid => LineColorConfig::Solid(self.solid),
             DefaultLineColorMode::Gradient => LineColorConfig::Gradient {
@@ -499,18 +516,9 @@ impl TryFrom<RawConfig> for Config {
     fn try_from(raw: RawConfig) -> Result<Self, Self::Error> {
         let dimensions = Dimensions::from(raw.l_system.dimensions);
 
-        let angle = raw.turtle.angle as f32;
-        let step = raw.turtle.step as f32;
-        let initial_heading = raw.turtle.initial_heading as f32;
-        if !step.is_finite() || step <= 0.0 {
-            return Err(ConfigError::InvalidStep(step));
-        }
-        if !angle.is_finite() {
-            return Err(ConfigError::InvalidAngle(angle));
-        }
-        if !initial_heading.is_finite() {
-            return Err(ConfigError::InvalidInitialHeading(initial_heading));
-        }
+        let angle = validate_angle(raw.turtle.angle as f32)?;
+        let step = validate_step(raw.turtle.step as f32)?;
+        let initial_heading = validate_initial_heading(raw.turtle.initial_heading as f32)?;
 
         let axiom: String = raw
             .l_system
@@ -571,20 +579,11 @@ impl TryFrom<RawDefaults> for ConfigDefaults {
     type Error = ConfigError;
 
     fn try_from(raw: RawDefaults) -> Result<Self, Self::Error> {
-        let step = raw.turtle.step as f32;
-        let initial_heading = raw.turtle.initial_heading as f32;
-        if !step.is_finite() || step <= 0.0 {
-            return Err(ConfigError::InvalidStep(step));
-        }
-        if !initial_heading.is_finite() {
-            return Err(ConfigError::InvalidInitialHeading(initial_heading));
-        }
-
         Ok(Self {
-            turtle: TurtleDefaults {
-                step,
-                initial_heading,
-            },
+            turtle: TurtleDefaults::try_new(
+                raw.turtle.step as f32,
+                raw.turtle.initial_heading as f32,
+            )?,
             colors: ColorDefaults {
                 background: parse_rgb(raw.colors.background, "colors.background")?,
                 line: LineColorDefaults {
@@ -656,6 +655,27 @@ impl TryFrom<RawLineColor> for LineColorConfig {
 
 fn default_step() -> f64 {
     1.0
+}
+
+fn validate_step(step: f32) -> Result<f32, ConfigError> {
+    if !step.is_finite() || step <= 0.0 {
+        return Err(ConfigError::InvalidStep(step));
+    }
+    Ok(step)
+}
+
+fn validate_angle(angle: f32) -> Result<f32, ConfigError> {
+    if !angle.is_finite() {
+        return Err(ConfigError::InvalidAngle(angle));
+    }
+    Ok(angle)
+}
+
+fn validate_initial_heading(initial_heading: f32) -> Result<f32, ConfigError> {
+    if !initial_heading.is_finite() {
+        return Err(ConfigError::InvalidInitialHeading(initial_heading));
+    }
+    Ok(initial_heading)
 }
 
 fn deserialize_number<'de, D>(deserializer: D) -> Result<f64, D::Error>
@@ -1017,9 +1037,9 @@ mod tests {
     fn embedded_defaults_toml_parses_and_preserves_current_values() {
         let defaults = ConfigDefaults::embedded();
 
-        assert_eq!(defaults.turtle.step, 1.0);
-        assert_eq!(defaults.turtle.initial_heading, 0.0);
-        assert_eq!(defaults.colors.background, hex("#000000"));
+        assert_eq!(defaults.turtle.step(), 1.0);
+        assert_eq!(defaults.turtle.initial_heading(), 0.0);
+        assert_eq!(defaults.colors.background, ColorConfig::DEFAULT_BACKGROUND);
         assert_eq!(defaults.colors.line.default, DefaultLineColorMode::Solid);
         assert_eq!(
             defaults.colors.line.default_line_color(),
@@ -1029,27 +1049,85 @@ mod tests {
         assert_eq!(
             defaults.colors.line.gradient,
             GradientDefaults {
-                start: hex("#0d590d"),
-                end: hex("#99e61a"),
+                start: Rgb::DEFAULT_GRADIENT_START,
+                end: Rgb::DEFAULT_GRADIENT_END,
                 topological_depth: false,
             }
         );
         assert_eq!(
             defaults.colors.line.hue_cycle,
             HueCycleDefaults {
-                initial: hex("#e60000"),
+                initial: Rgb::DEFAULT_HUE_CYCLE_INITIAL,
             }
         );
+    }
+
+    #[test]
+    fn parses_custom_default_line_color_modes_from_toml() {
+        let gradient_toml = DEFAULTS_TOML
+            .replace("default = \"solid\"", "default = \"gradient\"")
+            .replace("start = \"#0d590d\"", "start = \"#112233\"")
+            .replace("end = \"#99e61a\"", "end = \"#445566\"")
+            .replace("topological_depth = false", "topological_depth = true");
+        let defaults = ConfigDefaults::parse(&gradient_toml).unwrap();
+        assert_eq!(
+            defaults.colors.line.default_line_color(),
+            LineColorConfig::Gradient {
+                start: hex("#112233"),
+                end: hex("#445566"),
+                topological_depth: true,
+            }
+        );
+
+        let hue_cycle_toml = DEFAULTS_TOML
+            .replace("default = \"solid\"", "default = \"hue_cycle\"")
+            .replace("initial = \"#e60000\"", "initial = \"#abcdef\"");
+        let defaults = ConfigDefaults::parse(&hue_cycle_toml).unwrap();
+        assert_eq!(
+            defaults.colors.line.default_line_color(),
+            LineColorConfig::HueCycle {
+                initial: hex("#abcdef"),
+            }
+        );
+    }
+
+    #[test]
+    fn turtle_defaults_reject_invalid_values() {
+        assert!(matches!(
+            TurtleDefaults::try_new(0.0, 0.0),
+            Err(ConfigError::InvalidStep(0.0))
+        ));
+        assert!(matches!(
+            TurtleDefaults::try_new(-1.0, 0.0),
+            Err(ConfigError::InvalidStep(-1.0))
+        ));
+        assert!(matches!(
+            TurtleDefaults::try_new(f32::NAN, 0.0),
+            Err(ConfigError::InvalidStep(step)) if step.is_nan()
+        ));
+        assert!(matches!(
+            TurtleDefaults::try_new(1.0, f32::NAN),
+            Err(ConfigError::InvalidInitialHeading(initial_heading)) if initial_heading.is_nan()
+        ));
     }
 
     #[test]
     fn raw_defaults_reject_unknown_keys() {
         let cases = [
             format!("{DEFAULTS_TOML}\n[unknown]\nvalue = true\n"),
+            DEFAULTS_TOML.replace("step = 1.0", "step = 1.0\nunknown = true"),
+            DEFAULTS_TOML.replace(
+                "background = \"#000000\"",
+                "background = \"#000000\"\nunknown = true",
+            ),
             DEFAULTS_TOML.replace("solid = \"#00e680\"", "solid = \"#00e680\"\nunknown = true"),
             DEFAULTS_TOML.replace(
                 "topological_depth = false",
                 "topological_depth = false\nunknown = true",
+            ),
+            DEFAULTS_TOML.replace(
+                "initial = \"#e60000\"",
+                "initial = \"#e60000\"\nunknown = true",
             ),
         ];
 
