@@ -7,6 +7,8 @@ use toml_edit::{DocumentMut, Item, Table, Value, value};
 
 use crate::alphabet::{validate_bracket_balance, validate_symbols};
 
+const DEFAULTS_TOML: &str = include_str!("defaults.toml");
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("TOML parse error: {0}")]
@@ -208,6 +210,81 @@ impl Default for LineColorConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConfigDefaults {
+    pub turtle: TurtleDefaults,
+    pub colors: ColorDefaults,
+}
+
+impl ConfigDefaults {
+    pub fn embedded() -> &'static Self {
+        static DEFAULTS: std::sync::OnceLock<ConfigDefaults> = std::sync::OnceLock::new();
+        DEFAULTS.get_or_init(|| {
+            Self::parse(DEFAULTS_TOML).expect("embedded config defaults should validate")
+        })
+    }
+
+    fn parse(toml_str: &str) -> Result<Self, ConfigError> {
+        let raw = toml_edit::de::from_str::<RawDefaults>(toml_str)?;
+        raw.try_into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TurtleDefaults {
+    pub step: f32,
+    pub initial_heading: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColorDefaults {
+    pub background: Rgb,
+    pub line: LineColorDefaults,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineColorDefaults {
+    pub default: DefaultLineColorMode,
+    pub solid: Rgb,
+    pub gradient: GradientDefaults,
+    pub hue_cycle: HueCycleDefaults,
+}
+
+impl LineColorDefaults {
+    pub fn default_line_color(&self) -> LineColorConfig {
+        match self.default {
+            DefaultLineColorMode::Solid => LineColorConfig::Solid(self.solid),
+            DefaultLineColorMode::Gradient => LineColorConfig::Gradient {
+                start: self.gradient.start,
+                end: self.gradient.end,
+                topological_depth: self.gradient.topological_depth,
+            },
+            DefaultLineColorMode::HueCycle => LineColorConfig::HueCycle {
+                initial: self.hue_cycle.initial,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultLineColorMode {
+    Solid,
+    Gradient,
+    HueCycle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GradientDefaults {
+    pub start: Rgb,
+    pub end: Rgb,
+    pub topological_depth: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HueCycleDefaults {
+    pub initial: Rgb,
+}
+
 /// Visual color settings for background and fractal lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ColorConfig {
@@ -361,6 +438,61 @@ enum RawLineColor {
     },
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDefaults {
+    turtle: RawTurtleDefaults,
+    colors: RawColorDefaults,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTurtleDefaults {
+    #[serde(deserialize_with = "deserialize_number")]
+    step: f64,
+    #[serde(deserialize_with = "deserialize_number")]
+    initial_heading: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawColorDefaults {
+    background: String,
+    line: RawLineColorDefaults,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLineColorDefaults {
+    #[serde(rename = "default")]
+    default_mode: RawDefaultLineColorMode,
+    solid: String,
+    gradient: RawGradientDefaults,
+    hue_cycle: RawHueCycleDefaults,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RawDefaultLineColorMode {
+    Solid,
+    Gradient,
+    HueCycle,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGradientDefaults {
+    start: String,
+    end: String,
+    topological_depth: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHueCycleDefaults {
+    initial: String,
+}
+
 impl TryFrom<RawConfig> for Config {
     type Error = ConfigError;
 
@@ -432,6 +564,59 @@ impl TryFrom<RawConfig> for Config {
                     .unwrap_or_default(),
             },
         })
+    }
+}
+
+impl TryFrom<RawDefaults> for ConfigDefaults {
+    type Error = ConfigError;
+
+    fn try_from(raw: RawDefaults) -> Result<Self, Self::Error> {
+        let step = raw.turtle.step as f32;
+        let initial_heading = raw.turtle.initial_heading as f32;
+        if !step.is_finite() || step <= 0.0 {
+            return Err(ConfigError::InvalidStep(step));
+        }
+        if !initial_heading.is_finite() {
+            return Err(ConfigError::InvalidInitialHeading(initial_heading));
+        }
+
+        Ok(Self {
+            turtle: TurtleDefaults {
+                step,
+                initial_heading,
+            },
+            colors: ColorDefaults {
+                background: parse_rgb(raw.colors.background, "colors.background")?,
+                line: LineColorDefaults {
+                    default: raw.colors.line.default_mode.into(),
+                    solid: parse_rgb(raw.colors.line.solid, "colors.line.solid")?,
+                    gradient: GradientDefaults {
+                        start: parse_rgb(
+                            raw.colors.line.gradient.start,
+                            "colors.line.gradient.start",
+                        )?,
+                        end: parse_rgb(raw.colors.line.gradient.end, "colors.line.gradient.end")?,
+                        topological_depth: raw.colors.line.gradient.topological_depth,
+                    },
+                    hue_cycle: HueCycleDefaults {
+                        initial: parse_rgb(
+                            raw.colors.line.hue_cycle.initial,
+                            "colors.line.hue_cycle.initial",
+                        )?,
+                    },
+                },
+            },
+        })
+    }
+}
+
+impl From<RawDefaultLineColorMode> for DefaultLineColorMode {
+    fn from(mode: RawDefaultLineColorMode) -> Self {
+        match mode {
+            RawDefaultLineColorMode::Solid => Self::Solid,
+            RawDefaultLineColorMode::Gradient => Self::Gradient,
+            RawDefaultLineColorMode::HueCycle => Self::HueCycle,
+        }
     }
 }
 
@@ -824,6 +1009,56 @@ mod tests {
             assert!(
                 message.contains(path),
                 "error should mention path {path:?}, got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_defaults_toml_parses_and_preserves_current_values() {
+        let defaults = ConfigDefaults::embedded();
+
+        assert_eq!(defaults.turtle.step, 1.0);
+        assert_eq!(defaults.turtle.initial_heading, 0.0);
+        assert_eq!(defaults.colors.background, hex("#000000"));
+        assert_eq!(defaults.colors.line.default, DefaultLineColorMode::Solid);
+        assert_eq!(
+            defaults.colors.line.default_line_color(),
+            LineColorConfig::DEFAULT_SOLID
+        );
+        assert_eq!(defaults.colors.line.solid, hex("#00e680"));
+        assert_eq!(
+            defaults.colors.line.gradient,
+            GradientDefaults {
+                start: hex("#0d590d"),
+                end: hex("#99e61a"),
+                topological_depth: false,
+            }
+        );
+        assert_eq!(
+            defaults.colors.line.hue_cycle,
+            HueCycleDefaults {
+                initial: hex("#e60000"),
+            }
+        );
+    }
+
+    #[test]
+    fn raw_defaults_reject_unknown_keys() {
+        let cases = [
+            format!("{DEFAULTS_TOML}\n[unknown]\nvalue = true\n"),
+            DEFAULTS_TOML.replace("solid = \"#00e680\"", "solid = \"#00e680\"\nunknown = true"),
+            DEFAULTS_TOML.replace(
+                "topological_depth = false",
+                "topological_depth = false\nunknown = true",
+            ),
+        ];
+
+        for toml in cases {
+            let err = ConfigDefaults::parse(&toml).unwrap_err();
+
+            assert!(
+                matches!(err, ConfigError::TomlDeserialize(_)),
+                "unexpected error: {err}"
             );
         }
     }

@@ -1,0 +1,18 @@
+[turtle]
+step = 1.0
+initial_heading = 0.0
+
+[colors]
+background = "#000000"
+
+[colors.line]
+default = "solid"
+solid = "#00e680"
+
+[colors.line.gradient]
+start = "#0d590d"
+end = "#99e61a"
+topological_depth = false
+
+[colors.line.hue_cycle]
+initial = "#e60000"
