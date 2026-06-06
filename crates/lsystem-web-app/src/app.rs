@@ -6,11 +6,11 @@ use leptos::prelude::*;
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
     LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
-    resolved_line_color_for_controls,
+    resolved_line_color_for_controls, selected_line_color_mode,
 };
 use lsystem_core::{
-    ColorConfig, ConfigError, Dimensions, EditorColorConfig, GenerationConfig, LineColorConfig,
-    Rgb, contains_3d_symbols,
+    ColorConfig, ConfigDefaults, ConfigError, Dimensions, EditorColorConfig, GenerationConfig,
+    LineColorConfig, Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
@@ -970,16 +970,9 @@ pub(crate) fn App() -> impl IntoView {
                         prop:value=move || {
                             editor_color_config
                                 .with(|editor| {
-                                    editor
-                                        .line
-                                        .as_ref()
-                                        .map(LineColorMode::from_editor_line_color)
-                                })
-                                .unwrap_or_else(|| {
-                                    LineColorMode::from_line_color(&current_line_color(
-                                        editor_color_config,
-                                        color_config,
-                                    ))
+                                    color_config.with(|resolved| {
+                                        selected_line_color_mode(editor, resolved)
+                                    })
                                 })
                                 .key()
                                 .to_string()
@@ -993,7 +986,11 @@ pub(crate) fn App() -> impl IntoView {
                             };
                             let editor = editor_color_config.get_untracked();
                             let resolved = color_config.get_untracked();
-                            let current = resolved_line_color_for_controls(&editor, &resolved);
+                            let current = resolved_line_color_for_controls(
+                                &editor,
+                                &resolved,
+                                &ConfigDefaults::embedded().colors.line,
+                            );
                             let Some(line_color) = color_memory.try_update(|memory| {
                                 memory.remember_line(current);
                                 memory.line_for(mode)
@@ -1565,7 +1562,13 @@ fn current_line_color(
     color_config: Memo<ColorConfig>,
 ) -> LineColorConfig {
     editor_color_config.with(|editor| {
-        color_config.with(|resolved| resolved_line_color_for_controls(editor, resolved))
+        color_config.with(|resolved| {
+            resolved_line_color_for_controls(
+                editor,
+                resolved,
+                &ConfigDefaults::embedded().colors.line,
+            )
+        })
     })
 }
 
@@ -1610,7 +1613,11 @@ fn gradient_fields_for_mode_untracked(
     let editor = editor_color_config.get_untracked();
     let resolved = color_config.get_untracked();
     gradient_fields_from(
-        resolved_line_color_for_controls(&editor, &resolved),
+        resolved_line_color_for_controls(
+            &editor,
+            &resolved,
+            &ConfigDefaults::embedded().colors.line,
+        ),
         memory.with_untracked(|m| m.gradient_fields()),
     )
 }

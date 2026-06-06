@@ -6,8 +6,9 @@ use iced::{Color, Element, Length, Theme};
 use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, LineColorMode, resolved_line_color_for_controls,
+    selected_line_color_mode,
 };
-use lsystem_core::{EditorColorConfig, LineColorConfig, Rgb};
+use lsystem_core::{ConfigDefaults, EditorColorConfig, LineColorConfig, Rgb};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
@@ -156,14 +157,12 @@ fn push_color_controls<'a>(
         ));
     }
 
-    let line_color = resolved_line_color_for_controls(editor_colors, &config.colors);
-    let selected_mode = Some(
-        editor_colors
-            .line
-            .as_ref()
-            .map(LineColorMode::from_editor_line_color)
-            .unwrap_or_else(|| LineColorMode::from_line_color(&line_color)),
+    let line_color = resolved_line_color_for_controls(
+        editor_colors,
+        &config.colors,
+        &ConfigDefaults::embedded().colors.line,
     );
+    let selected_mode = Some(selected_line_color_mode(editor_colors, &config.colors));
     controls = controls.push(text("Line color").size(13)).push(
         pick_list(selected_mode, LineColorMode::ALL, |choice| {
             choice.to_string()

@@ -1,5 +1,6 @@
 use lsystem_core::{
-    ColorConfig, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig, Rgb,
+    ColorConfig, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig,
+    LineColorDefaults, Rgb,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +80,11 @@ impl ColorControlMemory {
             gradient: None,
             hue_cycle: None,
         };
-        memory.remember_line(resolved_line_color_for_controls(editor, resolved));
+        memory.remember_line(resolved_line_color_for_controls(
+            editor,
+            resolved,
+            &ConfigDefaults::embedded().colors.line,
+        ));
         memory
     }
 
@@ -156,11 +161,29 @@ impl ColorControlMemory {
 pub fn resolved_line_color_for_controls(
     editor: &EditorColorConfig,
     resolved: &ColorConfig,
+    defaults: &LineColorDefaults,
 ) -> LineColorConfig {
     editor
         .line
-        .map(|line| line.resolve(&ConfigDefaults::embedded().colors.line))
+        .map(|line| line.resolve(defaults))
         .unwrap_or(resolved.line)
+}
+
+pub fn selected_line_color_mode(
+    editor: &EditorColorConfig,
+    resolved: &ColorConfig,
+) -> LineColorMode {
+    editor
+        .line
+        .as_ref()
+        .map(LineColorMode::from_editor_line_color)
+        .unwrap_or_else(|| {
+            LineColorMode::from_line_color(&resolved_line_color_for_controls(
+                editor,
+                resolved,
+                &ConfigDefaults::embedded().colors.line,
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -285,7 +308,11 @@ mod tests {
             topological_depth: true,
         };
         assert_eq!(
-            resolved_line_color_for_controls(&editor, &resolved),
+            resolved_line_color_for_controls(
+                &editor,
+                &resolved,
+                &ConfigDefaults::embedded().colors.line,
+            ),
             expected
         );
         assert_eq!(

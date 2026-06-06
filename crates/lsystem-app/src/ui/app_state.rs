@@ -6,7 +6,7 @@ use lsystem_app_model::{
     LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
     resolved_line_color_for_controls,
 };
-use lsystem_core::{Config, ConfigError, Dimensions, LineColorConfig, Rgb};
+use lsystem_core::{Config, ConfigDefaults, ConfigError, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -215,6 +215,7 @@ impl FractalApp {
                     resolved_line_color_for_controls(
                         &entry.editor_config().colors,
                         &entry.applied_config().colors,
+                        &ConfigDefaults::embedded().colors.line,
                     )
                 };
                 self.color_memory.remember_line(current);
