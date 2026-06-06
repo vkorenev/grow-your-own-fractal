@@ -69,8 +69,6 @@ pub struct Rgb {
 pub struct RgbError;
 
 impl Rgb {
-    pub const BLACK: Self = Self::new(0x00, 0x00, 0x00);
-
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { bytes: [r, g, b] }
     }
@@ -1122,7 +1120,7 @@ mod tests {
 
         assert_eq!(defaults.turtle.step(), 1.0);
         assert_eq!(defaults.turtle.initial_heading(), 0.0);
-        assert_eq!(defaults.colors.background, Rgb::BLACK);
+        assert_eq!(defaults.colors.background, hex("#000000"));
         assert_eq!(defaults.colors.line.default, DefaultLineColorMode::Solid);
         assert_eq!(
             defaults.colors.line.default_line_color(),
@@ -2665,7 +2663,7 @@ mod hex_color {
     fn display_emits_canonical_lowercase() {
         assert_eq!(Rgb::new(0x00, 0xe6, 0x80).to_string(), "#00e680");
         assert_eq!(Rgb::new(0xAB, 0xCD, 0xEF).to_string(), "#abcdef");
-        assert_eq!(Rgb::BLACK.to_string(), "#000000");
+        assert_eq!(Rgb::new(0x00, 0x00, 0x00).to_string(), "#000000");
     }
 
     // --- Rejection cases ---
@@ -2745,13 +2743,6 @@ mod hex_color {
         assert_eq!(Rgb::new(0xff, 0xff, 0xff).to_array(), [1.0, 1.0, 1.0]);
     }
 
-    // --- Constants ---
-
-    #[test]
-    fn constants_have_correct_css_hex() {
-        assert_eq!(Rgb::BLACK.to_string(), "#000000");
-    }
-
     // --- to_hsv ---
 
     const EPS: f32 = 1e-5;
@@ -2787,7 +2778,7 @@ mod hex_color {
 
     #[test]
     fn to_hsv_black_has_zero_saturation_and_value() {
-        let (hue, saturation, value) = Rgb::BLACK.to_hsv();
+        let (hue, saturation, value) = Rgb::new(0x00, 0x00, 0x00).to_hsv();
         assert!(close(hue, 0.0));
         assert!(close(saturation, 0.0));
         assert!(close(value, 0.0));

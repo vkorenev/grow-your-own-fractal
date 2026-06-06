@@ -672,7 +672,7 @@ mod tests {
                 line: None,
             },
             &lsystem_core::ColorConfig {
-                background: Rgb::BLACK,
+                background: lsystem_core::ConfigDefaults::embedded().colors.background,
                 line: solid,
             },
         );

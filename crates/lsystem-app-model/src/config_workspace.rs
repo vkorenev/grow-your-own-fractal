@@ -977,7 +977,10 @@ solid = "#00e680"
         let entry = workspace.selected();
         assert!(!entry.draft_text().contains("background ="));
         assert_eq!(entry.editor_config().colors.background, None);
-        assert_eq!(entry.applied_config().colors.background, Rgb::BLACK);
+        assert_eq!(
+            entry.applied_config().colors.background,
+            lsystem_core::ConfigDefaults::embedded().colors.background
+        );
         assert!(!entry.is_dirty());
     }
 
@@ -1273,7 +1276,10 @@ end = "#ffffff"
         let entry = workspace.selected();
         assert!(!entry.draft_text().contains("colors.background"));
         assert_eq!(entry.editor_config().colors.background, None);
-        assert_eq!(entry.applied_config().colors.background, Rgb::BLACK);
+        assert_eq!(
+            entry.applied_config().colors.background,
+            lsystem_core::ConfigDefaults::embedded().colors.background
+        );
     }
 
     #[test]

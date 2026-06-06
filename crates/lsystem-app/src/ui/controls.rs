@@ -325,7 +325,10 @@ mod tests {
 
     #[test]
     fn rgb_from_f32_array_boundary_values() {
-        assert_eq!(rgb_from_f32_array([0.0, 0.0, 0.0]), Rgb::BLACK);
+        assert_eq!(
+            rgb_from_f32_array([0.0, 0.0, 0.0]),
+            Rgb::new(0x00, 0x00, 0x00)
+        );
         assert_eq!(
             rgb_from_f32_array([1.0, 1.0, 1.0]),
             Rgb::new(0xff, 0xff, 0xff)

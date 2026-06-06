@@ -236,7 +236,7 @@ mod tests {
         let mut memory = ColorControlMemory::from_configs(
             &EditorColorConfig::default(),
             &ColorConfig {
-                background: Rgb::BLACK,
+                background: ConfigDefaults::embedded().colors.background,
                 line: solid,
             },
         );
@@ -249,7 +249,7 @@ mod tests {
         let memory = ColorControlMemory::from_configs(
             &EditorColorConfig::default(),
             &ColorConfig {
-                background: Rgb::BLACK,
+                background: ConfigDefaults::embedded().colors.background,
                 line: LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d)),
             },
         );
@@ -271,7 +271,7 @@ mod tests {
             }),
         };
         let resolved = ColorConfig {
-            background: Rgb::BLACK,
+            background: ConfigDefaults::embedded().colors.background,
             line: LineColorConfig::Gradient {
                 start: Rgb::new(0x1a, 0x33, 0x4d),
                 end: Rgb::new(0x80, 0x99, 0xb3),
@@ -304,7 +304,7 @@ mod tests {
         let mut memory = ColorControlMemory::from_configs(
             &EditorColorConfig::default(),
             &ColorConfig {
-                background: Rgb::BLACK,
+                background: ConfigDefaults::embedded().colors.background,
                 line: topological,
             },
         );
@@ -324,7 +324,7 @@ mod tests {
                 line: None,
             },
             &ColorConfig {
-                background: Rgb::BLACK,
+                background: ConfigDefaults::embedded().colors.background,
                 line: LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99)),
             },
         );
