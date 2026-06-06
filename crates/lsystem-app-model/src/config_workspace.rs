@@ -4,7 +4,8 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use lsystem_core::{
-    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, LineColorConfig, Rgb,
+    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, EditorConfig, LineColorConfig,
+    Rgb,
 };
 
 #[derive(Debug, Error)]
@@ -171,9 +172,9 @@ impl ConfigWorkspace {
         let Some(applied) = self.entries[idx].pending_apply()? else {
             return Ok(&self.entries[idx]);
         };
-        if self.name_exists_except(&applied.config().name, idx) {
+        if self.name_exists_except(applied.name(), idx) {
             return Err(ConfigWorkspaceError::DuplicateName(
-                applied.config().name.clone(),
+                applied.name().to_string(),
             ));
         }
         self.entries[idx].commit_apply(applied);
@@ -241,6 +242,10 @@ impl ConfigEntry {
 
     pub fn applied_config(&self) -> &Config {
         self.last_applied.config()
+    }
+
+    pub fn editor_config(&self) -> &EditorConfig {
+        self.last_applied.editor_config()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -952,8 +957,12 @@ solid = "#00e680"
         let entry = workspace.selected();
         assert!(entry.draft_text().contains("background = \"#1a334d\""));
         assert_eq!(
-            entry.applied_config().colors.background,
+            entry.editor_config().colors.background,
             Some(Rgb::new(0x1a, 0x33, 0x4d))
+        );
+        assert_eq!(
+            entry.applied_config().colors.background,
+            Rgb::new(0x1a, 0x33, 0x4d)
         );
         assert!(!entry.is_dirty());
     }
@@ -967,7 +976,8 @@ solid = "#00e680"
 
         let entry = workspace.selected();
         assert!(!entry.draft_text().contains("background ="));
-        assert_eq!(entry.applied_config().colors.background, None);
+        assert_eq!(entry.editor_config().colors.background, None);
+        assert_eq!(entry.applied_config().colors.background, Rgb::BLACK);
         assert!(!entry.is_dirty());
     }
 
@@ -1024,7 +1034,7 @@ solid = "#00e680"
             LineColorConfig::Gradient {
                 start: Rgb::new(0x33, 0x4d, 0x66),
                 end: Rgb::new(0x80, 0x99, 0xb3),
-                topological_depth: true,
+                topological_depth: false,
             }
         );
     }
@@ -1242,15 +1252,19 @@ end = "#ffffff"
         assert!(!text.contains("[colors]"));
         assert!(!text.contains("[colors.line]"));
         assert_eq!(
-            entry.applied_config().colors.background,
+            entry.editor_config().colors.background,
             Some(Rgb::new(0x1a, 0x33, 0x4d))
+        );
+        assert_eq!(
+            entry.applied_config().colors.background,
+            Rgb::new(0x1a, 0x33, 0x4d)
         );
         assert_eq!(
             entry.applied_config().colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x66, 0x80, 0x99),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
-                topological_depth: true,
+                topological_depth: false,
             }
         );
         assert!(!entry.is_dirty());
@@ -1258,7 +1272,8 @@ end = "#ffffff"
         clean_mut(&mut workspace).set_background(None).unwrap();
         let entry = workspace.selected();
         assert!(!entry.draft_text().contains("colors.background"));
-        assert_eq!(entry.applied_config().colors.background, None);
+        assert_eq!(entry.editor_config().colors.background, None);
+        assert_eq!(entry.applied_config().colors.background, Rgb::BLACK);
     }
 
     #[test]

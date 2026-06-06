@@ -6,10 +6,11 @@ use leptos::prelude::*;
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
     LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
+    resolved_line_color_for_controls,
 };
 use lsystem_core::{
-    ColorConfig, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb,
-    contains_3d_symbols,
+    ColorConfig, ConfigError, Dimensions, EditorColorConfig, GenerationConfig, LineColorConfig,
+    Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
@@ -23,8 +24,10 @@ const ROTATION_STEP_DEG: f32 = 5.0;
 pub(crate) fn App() -> impl IntoView {
     let initial_workspace =
         ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
-    let color_memory = RwSignal::new(ColorControlMemory::from_colors(
-        &initial_workspace.selected().applied_config().colors,
+    let selected_entry = initial_workspace.selected();
+    let color_memory = RwSignal::new(ColorControlMemory::from_configs(
+        &selected_entry.editor_config().colors,
+        &selected_entry.applied_config().colors,
     ));
     let config_workspace = RwSignal::new(initial_workspace);
     let error = RwSignal::new(None::<String>);
@@ -57,6 +60,8 @@ pub(crate) fn App() -> impl IntoView {
     });
     let color_config =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_config().colors));
+    let editor_color_config =
+        Memo::new(move |_| config_workspace.with(|ws| ws.selected().editor_config().colors));
     let iterations = Memo::new(move |_| generation_config.with(|g| g.iterations));
     let angle = Memo::new(move |_| generation_config.with(|g| g.angle));
 
@@ -243,7 +248,8 @@ pub(crate) fn App() -> impl IntoView {
     install_resize_listener(canvas_ref, renderer, recover_after_render);
 
     let refresh_color_memory = move || {
-        color_memory.set(ColorControlMemory::from_colors(
+        color_memory.set(ColorControlMemory::from_configs(
+            &editor_color_config.get_untracked(),
             &color_config.get_untracked(),
         ));
     };
@@ -894,14 +900,18 @@ pub(crate) fn App() -> impl IntoView {
                         <input
                             id="background-override"
                             type="checkbox"
-                            prop:checked=move || color_config.with(|c| c.background.is_some())
+                            prop:checked=move || {
+                                editor_color_config.with(|c| c.background.is_some())
+                            }
                             disabled=is_dirty
                             on:change:target=move |ev| {
                                 let current_bg =
                                     color_config.with_untracked(|c| c.background);
-                                if let Some(background) = current_bg {
+                                if editor_color_config
+                                    .with_untracked(|c| c.background.is_some())
+                                {
                                     color_memory.update(|memory| {
-                                        memory.remember_background(background);
+                                        memory.remember_background(current_bg);
                                     });
                                 }
                                 let enabled = ev.target().checked();
@@ -923,16 +933,16 @@ pub(crate) fn App() -> impl IntoView {
 
                     <div
                         class="color-row"
-                        class:hidden=move || color_config.with(|c| c.background.is_none())
+                        class:hidden=move || {
+                            editor_color_config.with(|c| c.background.is_none())
+                        }
                     >
                         <label for="background-color">"Background color"</label>
                         <input
                             id="background-color"
                             type="color"
                             prop:value=move || {
-                                color_config.with(|c| {
-                                    c.background.unwrap_or(ColorConfig::DEFAULT_BACKGROUND).to_string()
-                                })
+                                color_config.with(|c| c.background.to_string())
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -958,7 +968,19 @@ pub(crate) fn App() -> impl IntoView {
                     <select
                         id="line-color-mode"
                         prop:value=move || {
-                            LineColorMode::from_line_color(&current_line_color(color_config))
+                            editor_color_config
+                                .with(|editor| {
+                                    editor
+                                        .line
+                                        .as_ref()
+                                        .map(LineColorMode::from_editor_line_color)
+                                })
+                                .unwrap_or_else(|| {
+                                    LineColorMode::from_line_color(&current_line_color(
+                                        editor_color_config,
+                                        color_config,
+                                    ))
+                                })
                                 .key()
                                 .to_string()
                         }
@@ -969,7 +991,9 @@ pub(crate) fn App() -> impl IntoView {
                                 log::error!("unknown line color mode selected: {mode_key}");
                                 return;
                             };
-                            let current = color_config.with_untracked(|c| c.line);
+                            let editor = editor_color_config.get_untracked();
+                            let resolved = color_config.get_untracked();
+                            let current = resolved_line_color_for_controls(&editor, &resolved);
                             let Some(line_color) = color_memory.try_update(|memory| {
                                 memory.remember_line(current);
                                 memory.line_for(mode)
@@ -1002,7 +1026,10 @@ pub(crate) fn App() -> impl IntoView {
                     <div
                         class="color-row"
                         class:hidden=move || {
-                            !matches!(current_line_color(color_config), LineColorConfig::Solid(_))
+                            !matches!(
+                                current_line_color(editor_color_config, color_config),
+                                LineColorConfig::Solid(_)
+                            )
                         }
                     >
                         <label for="line-solid-color">"Line color"</label>
@@ -1010,7 +1037,12 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-solid-color"
                             type="color"
                             prop:value=move || {
-                                solid_color_for_mode(color_config, color_memory).to_string()
+                                solid_color_for_mode(
+                                    editor_color_config,
+                                    color_config,
+                                    color_memory,
+                                )
+                                .to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1037,7 +1069,7 @@ pub(crate) fn App() -> impl IntoView {
                         class="color-row"
                         class:hidden=move || {
                             !matches!(
-                                current_line_color(color_config),
+                                current_line_color(editor_color_config, color_config),
                                 LineColorConfig::Gradient { .. }
                             )
                         }
@@ -1048,6 +1080,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 let (start, _, _) = gradient_fields_for_mode(
+                                    editor_color_config,
                                     color_config,
                                     color_memory,
                                 );
@@ -1060,6 +1093,7 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let (_, end, topological_depth) = gradient_fields_for_mode_untracked(
+                                    editor_color_config,
                                     color_config,
                                     color_memory,
                                 );
@@ -1087,6 +1121,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="color"
                             prop:value=move || {
                                 let (_, end, _) = gradient_fields_for_mode(
+                                    editor_color_config,
                                     color_config,
                                     color_memory,
                                 );
@@ -1099,6 +1134,7 @@ pub(crate) fn App() -> impl IntoView {
                                     return;
                                 };
                                 let (start, _, topological_depth) = gradient_fields_for_mode_untracked(
+                                    editor_color_config,
                                     color_config,
                                     color_memory,
                                 );
@@ -1126,6 +1162,7 @@ pub(crate) fn App() -> impl IntoView {
                             type="checkbox"
                             prop:checked=move || {
                                 let (_, _, topological_depth) = gradient_fields_for_mode(
+                                    editor_color_config,
                                     color_config,
                                     color_memory,
                                 );
@@ -1134,6 +1171,7 @@ pub(crate) fn App() -> impl IntoView {
                             disabled=is_dirty
                             on:change:target=move |ev| {
                                 let (start, end, _) = gradient_fields_for_mode_untracked(
+                                    editor_color_config,
                                     color_config,
                                     color_memory,
                                 );
@@ -1160,7 +1198,7 @@ pub(crate) fn App() -> impl IntoView {
                         class="color-row"
                         class:hidden=move || {
                             !matches!(
-                                current_line_color(color_config),
+                                current_line_color(editor_color_config, color_config),
                                 LineColorConfig::HueCycle { .. }
                             )
                         }
@@ -1170,7 +1208,12 @@ pub(crate) fn App() -> impl IntoView {
                             id="line-hue-cycle-initial"
                             type="color"
                             prop:value=move || {
-                                hue_cycle_initial_for_mode(color_config, color_memory).to_string()
+                                hue_cycle_initial_for_mode(
+                                    editor_color_config,
+                                    color_config,
+                                    color_memory,
+                                )
+                                .to_string()
                             }
                             disabled=is_dirty
                             on:input:target=move |ev| {
@@ -1229,7 +1272,7 @@ pub(crate) fn App() -> impl IntoView {
 
                     <div style="display:flex;flex-direction:column;gap:6px">
                         <span class="section-label">"Hue rotation"</span>
-                        <div title=move || if !matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue rotation" } else { "" }>
+                        <div title=move || if !matches!(current_line_color(editor_color_config, color_config), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue rotation" } else { "" }>
                         <crate::ui::SegmentedToggle
                             options=vec![("off", "Off"), ("forward", "Forward"), ("backward", "Backward")]
                             selected=Signal::derive(move || {
@@ -1241,7 +1284,7 @@ pub(crate) fn App() -> impl IntoView {
                             })
                             on_change=move |key| try_set_hue_rotation(key)
                             disabled_keys=Signal::derive(move || {
-                                if matches!(current_line_color(color_config), LineColorConfig::HueCycle { .. }) {
+                                if matches!(current_line_color(editor_color_config, color_config), LineColorConfig::HueCycle { .. }) {
                                     vec![]
                                 } else {
                                     vec!["forward", "backward"]
@@ -1517,15 +1560,21 @@ fn update_clean_config(
     }
 }
 
-fn current_line_color(color_config: Memo<ColorConfig>) -> LineColorConfig {
-    color_config.with(|c| c.line)
+fn current_line_color(
+    editor_color_config: Memo<EditorColorConfig>,
+    color_config: Memo<ColorConfig>,
+) -> LineColorConfig {
+    editor_color_config.with(|editor| {
+        color_config.with(|resolved| resolved_line_color_for_controls(editor, resolved))
+    })
 }
 
 fn solid_color_for_mode(
+    editor_color_config: Memo<EditorColorConfig>,
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
 ) -> Rgb {
-    match current_line_color(color_config) {
+    match current_line_color(editor_color_config, color_config) {
         LineColorConfig::Solid(color) => color,
         _ => memory.with(|m| m.solid_color()),
     }
@@ -1543,30 +1592,35 @@ fn gradient_fields_from(line: LineColorConfig, fallback: (Rgb, Rgb, bool)) -> (R
 }
 
 fn gradient_fields_for_mode(
+    editor_color_config: Memo<EditorColorConfig>,
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
 ) -> (Rgb, Rgb, bool) {
     gradient_fields_from(
-        current_line_color(color_config),
+        current_line_color(editor_color_config, color_config),
         memory.with(|m| m.gradient_fields()),
     )
 }
 
 fn gradient_fields_for_mode_untracked(
+    editor_color_config: Memo<EditorColorConfig>,
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
 ) -> (Rgb, Rgb, bool) {
+    let editor = editor_color_config.get_untracked();
+    let resolved = color_config.get_untracked();
     gradient_fields_from(
-        color_config.with_untracked(|c| c.line),
+        resolved_line_color_for_controls(&editor, &resolved),
         memory.with_untracked(|m| m.gradient_fields()),
     )
 }
 
 fn hue_cycle_initial_for_mode(
+    editor_color_config: Memo<EditorColorConfig>,
     color_config: Memo<ColorConfig>,
     memory: RwSignal<ColorControlMemory>,
 ) -> Rgb {
-    match current_line_color(color_config) {
+    match current_line_color(editor_color_config, color_config) {
         LineColorConfig::HueCycle { initial } => initial,
         _ => memory.with(|m| m.hue_cycle_initial()),
     }

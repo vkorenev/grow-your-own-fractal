@@ -4,6 +4,7 @@ use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, windo
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
     LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
+    resolved_line_color_for_controls,
 };
 use lsystem_core::{Config, ConfigError, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
@@ -93,7 +94,10 @@ impl FractalApp {
             .expect("at least one bundled preset should parse");
         let selected_entry = config_workspace.selected();
         let toml_text = selected_entry.draft_text().into_owned();
-        let color_memory = ColorControlMemory::from_colors(&selected_entry.applied_config().colors);
+        let color_memory = ColorControlMemory::from_configs(
+            &selected_entry.editor_config().colors,
+            &selected_entry.applied_config().colors,
+        );
 
         let mut app = Self {
             config_workspace,
@@ -179,8 +183,16 @@ impl FractalApp {
                 self.update_clean_config("angle slider", |clean| clean.set_angle(angle))
             }
             Message::BackgroundOverrideToggled(enabled) => {
-                if let Some(background) = self.selected_config().colors.background {
-                    self.color_memory.remember_background(background);
+                if self
+                    .config_workspace
+                    .selected()
+                    .editor_config()
+                    .colors
+                    .background
+                    .is_some()
+                {
+                    self.color_memory
+                        .remember_background(self.selected_config().colors.background);
                 }
                 let background = if enabled {
                     Some(self.color_memory.background())
@@ -198,7 +210,13 @@ impl FractalApp {
                 })
             }
             Message::LineColorModeSelected(mode) => {
-                let current = self.selected_config().colors.line;
+                let current = {
+                    let entry = self.config_workspace.selected();
+                    resolved_line_color_for_controls(
+                        &entry.editor_config().colors,
+                        &entry.applied_config().colors,
+                    )
+                };
                 self.color_memory.remember_line(current);
                 let line_color = self.color_memory.line_for(mode);
                 self.update_clean_color_config("line color mode select", |clean| {
@@ -239,7 +257,7 @@ impl FractalApp {
                 } = result
                     && self.is_current_generation(generation)
                 {
-                    scene.update_colors(&self.selected_config().effective_colors());
+                    scene.update_colors(&self.selected_config().colors);
                     self.scene = scene;
                     self.scene_pending = false;
                 }
@@ -491,19 +509,19 @@ impl FractalApp {
         self.recompute_max_iterations();
         self.iterations = current_iterations.min(self.max_iterations);
 
-        let colors = self
-            .config_workspace
-            .selected()
-            .applied_config()
-            .effective_colors();
-        self.scene.update_colors(&colors);
+        self.scene
+            .update_colors(&self.config_workspace.selected().applied_config().colors);
         self.error = None;
         self.export_status = None;
         Task::none()
     }
 
     fn reset_color_memory_from_workspace(&mut self) {
-        self.color_memory = ColorControlMemory::from_colors(&self.selected_config().colors);
+        let entry = self.config_workspace.selected();
+        self.color_memory = ColorControlMemory::from_configs(
+            &entry.editor_config().colors,
+            &entry.applied_config().colors,
+        );
     }
 
     fn reset_hue_rotation(&mut self) {
@@ -648,10 +666,16 @@ mod tests {
             topological_depth: true,
         };
 
-        let mut memory = ColorControlMemory::from_colors(&lsystem_core::ColorConfig {
-            background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
-            line: solid,
-        });
+        let mut memory = ColorControlMemory::from_configs(
+            &lsystem_core::EditorColorConfig {
+                background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
+                line: None,
+            },
+            &lsystem_core::ColorConfig {
+                background: Rgb::BLACK,
+                line: solid,
+            },
+        );
 
         assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
@@ -730,7 +754,7 @@ mod tests {
         assert_eq!(
             app.config_workspace
                 .selected()
-                .applied_config()
+                .editor_config()
                 .colors
                 .background,
             None
@@ -741,7 +765,7 @@ mod tests {
         assert_eq!(
             app.config_workspace
                 .selected()
-                .applied_config()
+                .editor_config()
                 .colors
                 .background,
             Some(background)

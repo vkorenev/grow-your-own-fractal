@@ -10,7 +10,7 @@ use crate::{
 /// The SVG uses the natural turtle coordinate system, scaled to fit the fractal.
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> String {
-    let colors = config.effective_colors();
+    let colors = config.colors;
     if colors.line.needs_topological_depth() {
         let segments: Vec<Segment2DWithTopologicalDepth> =
             generate_with_topological_depth(&config.generation).collect();
@@ -54,7 +54,7 @@ fn export_svg_with_segments(
         }
     }
     if !has_segments {
-        let bg = colors.effective_background().to_string();
+        let bg = colors.background.to_string();
         return format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="{bg}"/></svg>"#
         );
@@ -84,7 +84,7 @@ fn export_svg_with_segments(
     let w = max_x - min_x;
     let h = max_y - min_y;
 
-    let bg = colors.effective_background().to_string();
+    let bg = colors.background.to_string();
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
