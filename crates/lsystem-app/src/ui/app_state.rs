@@ -679,13 +679,20 @@ mod tests {
 
         assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
+        let defaults = lsystem_core::ConfigDefaults::embedded().colors.line;
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
-            LineColorConfig::DEFAULT_GRADIENT
+            LineColorConfig::Gradient {
+                start: defaults.gradient.start,
+                end: defaults.gradient.end,
+                topological_depth: defaults.gradient.topological_depth,
+            }
         );
         assert_eq!(
             memory.line_for(LineColorMode::HueCycle),
-            LineColorConfig::DEFAULT_HUE_CYCLE
+            LineColorConfig::HueCycle {
+                initial: defaults.hue_cycle.initial,
+            }
         );
 
         memory.remember_background(Rgb::new(0xe5, 0x1a, 0x33));

@@ -147,6 +147,12 @@ impl ColorControlMemory {
     }
 }
 
+/// Returns the line color that controls should display and edit.
+///
+/// This resolves omitted mode parameters from defaults, but intentionally does
+/// not apply runtime-only normalization such as disabling topological-depth
+/// gradients for bracketless grammars. That keeps authored editor state intact
+/// while the runtime `Config` remains optimized for rendering/export.
 pub fn resolved_line_color_for_controls(
     editor: &EditorColorConfig,
     resolved: &ColorConfig,
@@ -160,10 +166,25 @@ pub fn resolved_line_color_for_controls(
 #[cfg(test)]
 mod tests {
     use lsystem_core::{
-        ColorConfig, EditorColorConfig, EditorLineColorConfig, LineColorConfig, Rgb,
+        ColorConfig, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig, Rgb,
     };
 
     use super::{ColorControlMemory, LineColorMode, resolved_line_color_for_controls};
+
+    fn default_gradient() -> LineColorConfig {
+        let defaults = ConfigDefaults::embedded().colors.line.gradient;
+        LineColorConfig::Gradient {
+            start: defaults.start,
+            end: defaults.end,
+            topological_depth: defaults.topological_depth,
+        }
+    }
+
+    fn default_hue_cycle() -> LineColorConfig {
+        LineColorConfig::HueCycle {
+            initial: ConfigDefaults::embedded().colors.line.hue_cycle.initial,
+        }
+    }
 
     #[test]
     fn line_color_mode_key_round_trip() {
@@ -182,19 +203,29 @@ mod tests {
     #[test]
     fn line_color_mode_from_line_color() {
         assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_SOLID),
+            LineColorMode::from_line_color(&LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d))),
             LineColorMode::Solid
         );
         assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_GRADIENT),
+            LineColorMode::from_line_color(&LineColorConfig::Gradient {
+                start: Rgb::new(0x1a, 0x33, 0x4d),
+                end: Rgb::new(0x80, 0x99, 0xb3),
+                topological_depth: false,
+            }),
             LineColorMode::Gradient
         );
         assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_HUE_CYCLE),
+            LineColorMode::from_line_color(&LineColorConfig::HueCycle {
+                initial: Rgb::new(0xe5, 0x1a, 0x33),
+            }),
             LineColorMode::HueCycle
         );
         assert_eq!(
-            LineColorMode::from_line_color(&LineColorConfig::DEFAULT_TOPOLOGICAL_GRADIENT),
+            LineColorMode::from_line_color(&LineColorConfig::Gradient {
+                start: Rgb::new(0x1a, 0x33, 0x4d),
+                end: Rgb::new(0x80, 0x99, 0xb3),
+                topological_depth: true,
+            }),
             LineColorMode::Gradient
         );
     }
@@ -209,7 +240,7 @@ mod tests {
                 line: solid,
             },
         );
-        memory.remember_line(LineColorConfig::DEFAULT_GRADIENT);
+        memory.remember_line(default_gradient());
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
     }
 
@@ -219,16 +250,13 @@ mod tests {
             &EditorColorConfig::default(),
             &ColorConfig {
                 background: Rgb::BLACK,
-                line: LineColorConfig::DEFAULT_SOLID,
+                line: LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d)),
             },
         );
-        assert_eq!(
-            memory.line_for(LineColorMode::Gradient),
-            LineColorConfig::DEFAULT_GRADIENT
-        );
+        assert_eq!(memory.line_for(LineColorMode::Gradient), default_gradient());
         assert_eq!(
             memory.line_for(LineColorMode::HueCycle),
-            LineColorConfig::DEFAULT_HUE_CYCLE
+            default_hue_cycle()
         );
     }
 
@@ -297,10 +325,14 @@ mod tests {
             },
             &ColorConfig {
                 background: Rgb::BLACK,
-                line: LineColorConfig::DEFAULT_SOLID,
+                line: LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99)),
             },
         );
         assert_eq!(memory.background(), bg);
+        assert_eq!(
+            memory.line_for(LineColorMode::Solid),
+            LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99))
+        );
         let new_bg = Rgb::new(0xe5, 0xcc, 0xb3);
         memory.remember_background(new_bg);
         assert_eq!(memory.background(), new_bg);

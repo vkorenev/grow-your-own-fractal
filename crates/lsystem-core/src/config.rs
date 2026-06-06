@@ -70,10 +70,6 @@ pub struct RgbError;
 
 impl Rgb {
     pub const BLACK: Self = Self::new(0x00, 0x00, 0x00);
-    pub const DEFAULT_SOLID_LINE: Self = Self::new(0x00, 0xe6, 0x80);
-    pub const DEFAULT_GRADIENT_START: Self = Self::new(0x0d, 0x59, 0x0d);
-    pub const DEFAULT_GRADIENT_END: Self = Self::new(0x99, 0xe6, 0x1a);
-    pub const DEFAULT_HUE_CYCLE_INITIAL: Self = Self::new(0xe6, 0x00, 0x00);
 
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { bytes: [r, g, b] }
@@ -178,21 +174,6 @@ pub enum LineColorConfig {
 }
 
 impl LineColorConfig {
-    pub const DEFAULT_SOLID: Self = Self::Solid(Rgb::DEFAULT_SOLID_LINE);
-    pub const DEFAULT_GRADIENT: Self = Self::Gradient {
-        start: Rgb::DEFAULT_GRADIENT_START,
-        end: Rgb::DEFAULT_GRADIENT_END,
-        topological_depth: false,
-    };
-    pub const DEFAULT_HUE_CYCLE: Self = Self::HueCycle {
-        initial: Rgb::DEFAULT_HUE_CYCLE_INITIAL,
-    };
-    /// Default gradient colors with topological-depth interpolation enabled.
-    pub const DEFAULT_TOPOLOGICAL_GRADIENT: Self = Self::Gradient {
-        start: Rgb::DEFAULT_GRADIENT_START,
-        end: Rgb::DEFAULT_GRADIENT_END,
-        topological_depth: true,
-    };
     pub fn needs_topological_depth(&self) -> bool {
         matches!(
             self,
@@ -201,12 +182,6 @@ impl LineColorConfig {
                 ..
             }
         )
-    }
-}
-
-impl Default for LineColorConfig {
-    fn default() -> Self {
-        Self::DEFAULT_SOLID
     }
 }
 
@@ -415,6 +390,8 @@ pub struct EditorGenerationConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EditorColorConfig {
     pub background: Option<Rgb>,
+    /// Authored line-color mode, or `None` when `colors.line` is absent and
+    /// resolution should use `defaults.colors.line.default_line_color()`.
     pub line: Option<EditorLineColorConfig>,
 }
 
@@ -422,6 +399,8 @@ pub struct EditorColorConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorLineColorConfig {
     Solid {
+        /// `None` is used by editor/default controls to select solid mode while
+        /// inheriting the solid color from defaults.
         color: Option<Rgb>,
     },
     Gradient {
@@ -1147,21 +1126,21 @@ mod tests {
         assert_eq!(defaults.colors.line.default, DefaultLineColorMode::Solid);
         assert_eq!(
             defaults.colors.line.default_line_color(),
-            LineColorConfig::DEFAULT_SOLID
+            LineColorConfig::Solid(hex("#00e680"))
         );
         assert_eq!(defaults.colors.line.solid, hex("#00e680"));
         assert_eq!(
             defaults.colors.line.gradient,
             GradientDefaults {
-                start: Rgb::DEFAULT_GRADIENT_START,
-                end: Rgb::DEFAULT_GRADIENT_END,
+                start: hex("#0d590d"),
+                end: hex("#99e61a"),
                 topological_depth: false,
             }
         );
         assert_eq!(
             defaults.colors.line.hue_cycle,
             HueCycleDefaults {
-                initial: Rgb::DEFAULT_HUE_CYCLE_INITIAL,
+                initial: hex("#e60000"),
             }
         );
     }
@@ -1483,7 +1462,51 @@ solid = "#00e680"
                 topological_depth: None,
             })
         );
-        assert_eq!(doc.config().colors.line, LineColorConfig::DEFAULT_GRADIENT);
+        let defaults = ConfigDefaults::embedded().colors.line.gradient;
+        assert_eq!(
+            doc.config().colors.line,
+            LineColorConfig::Gradient {
+                start: defaults.start,
+                end: defaults.end,
+                topological_depth: defaults.topological_depth,
+            }
+        );
+    }
+
+    #[test]
+    fn editor_gradient_resolves_from_supplied_defaults_not_rust_constants() {
+        let defaults = custom_defaults();
+
+        let resolved = EditorLineColorConfig::Gradient {
+            start: None,
+            end: None,
+            topological_depth: None,
+        }
+        .resolve(&defaults.colors.line);
+
+        assert_eq!(
+            resolved,
+            LineColorConfig::Gradient {
+                start: hex("#123456"),
+                end: hex("#abcdef"),
+                topological_depth: true,
+            }
+        );
+    }
+
+    #[test]
+    fn editor_hue_cycle_resolves_from_supplied_defaults_not_rust_constants() {
+        let defaults = custom_defaults();
+
+        let resolved =
+            EditorLineColorConfig::HueCycle { initial: None }.resolve(&defaults.colors.line);
+
+        assert_eq!(
+            resolved,
+            LineColorConfig::HueCycle {
+                initial: hex("#fedcba"),
+            }
+        );
     }
 
     #[test]
@@ -1510,6 +1533,20 @@ solid = "#00e680"
         assert_eq!(config.generation.initial_heading, 15.0);
         assert_eq!(config.colors.background, hex("#112233"));
         assert_eq!(config.colors.line, LineColorConfig::Solid(hex("#445566")));
+    }
+
+    #[test]
+    fn editor_config_preserves_present_turtle_defaults_as_some() {
+        let toml = NESTED_KOCH_TOML
+            .replace("step = 1.0", "step = 3.7")
+            .replace("initial_heading = 0.0", "initial_heading = 45.0");
+
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+
+        assert_eq!(doc.editor_config().generation.step, Some(3.7));
+        assert_eq!(doc.editor_config().generation.initial_heading, Some(45.0));
+        assert_eq!(doc.config().generation.step, 3.7);
+        assert_eq!(doc.config().generation.initial_heading, 45.0);
     }
 
     #[test]
@@ -1589,44 +1626,16 @@ solid = "#00e680"
     }
 
     #[test]
-    fn line_color_config_exposes_mode_defaults() {
-        assert_eq!(
-            LineColorConfig::DEFAULT_SOLID,
-            LineColorConfig::Solid(hex("#00e680"))
-        );
-        assert_eq!(LineColorConfig::default(), LineColorConfig::DEFAULT_SOLID);
-        assert_eq!(
-            LineColorConfig::DEFAULT_GRADIENT,
-            LineColorConfig::Gradient {
-                start: hex("#0d590d"),
-                end: hex("#99e61a"),
-                topological_depth: false,
-            }
-        );
-        assert_eq!(
-            LineColorConfig::DEFAULT_HUE_CYCLE,
-            LineColorConfig::HueCycle {
-                initial: hex("#e60000"),
-            }
-        );
-        assert_eq!(
-            LineColorConfig::DEFAULT_TOPOLOGICAL_GRADIENT,
-            LineColorConfig::Gradient {
-                start: hex("#0d590d"),
-                end: hex("#99e61a"),
-                topological_depth: true,
-            }
-        );
-    }
-
-    #[test]
     fn parses_omitted_line_color_as_default_solid() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "")
             .replace("\n[colors.line]\nsolid = \"#00e680\"\n", "");
 
         let cfg = parse_config(&toml).unwrap();
 
-        assert_eq!(cfg.colors.line, LineColorConfig::DEFAULT_SOLID);
+        assert_eq!(
+            cfg.colors.line,
+            ConfigDefaults::embedded().colors.line.default_line_color()
+        );
     }
 
     #[test]
@@ -1673,7 +1682,15 @@ solid = "#00e680"
 
         let cfg = parse_config(&toml).unwrap();
 
-        assert_eq!(cfg.colors.line, LineColorConfig::DEFAULT_GRADIENT);
+        let defaults = ConfigDefaults::embedded().colors.line.gradient;
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::Gradient {
+                start: defaults.start,
+                end: defaults.end,
+                topological_depth: defaults.topological_depth,
+            }
+        );
     }
 
     #[test]
@@ -1739,7 +1756,12 @@ solid = "#00e680"
 
         let cfg = parse_config(&toml).unwrap();
 
-        assert_eq!(cfg.colors.line, LineColorConfig::DEFAULT_HUE_CYCLE);
+        assert_eq!(
+            cfg.colors.line,
+            LineColorConfig::HueCycle {
+                initial: ConfigDefaults::embedded().colors.line.hue_cycle.initial,
+            }
+        );
     }
 
     #[test]
@@ -2728,10 +2750,6 @@ mod hex_color {
     #[test]
     fn constants_have_correct_css_hex() {
         assert_eq!(Rgb::BLACK.to_string(), "#000000");
-        assert_eq!(Rgb::DEFAULT_SOLID_LINE.to_string(), "#00e680");
-        assert_eq!(Rgb::DEFAULT_GRADIENT_START.to_string(), "#0d590d");
-        assert_eq!(Rgb::DEFAULT_GRADIENT_END.to_string(), "#99e61a");
-        assert_eq!(Rgb::DEFAULT_HUE_CYCLE_INITIAL.to_string(), "#e60000");
     }
 
     // --- to_hsv ---
