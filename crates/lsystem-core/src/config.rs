@@ -362,21 +362,7 @@ impl EditorConfig {
     /// disabling topological-depth gradients for grammars with no stack
     /// directives.
     pub fn resolve(&self, defaults: &ConfigDefaults) -> Config {
-        let generation = GenerationConfig {
-            dimensions: self.generation.dimensions,
-            axiom: self.generation.axiom.clone(),
-            iterations: self.generation.iterations,
-            angle: self.generation.angle,
-            step: self
-                .generation
-                .step
-                .unwrap_or_else(|| defaults.turtle.step()),
-            initial_heading: self
-                .generation
-                .initial_heading
-                .unwrap_or_else(|| defaults.turtle.initial_heading()),
-            rules: self.generation.rules.clone(),
-        };
+        let generation = self.generation.resolve_for_render(defaults, u32::MAX);
         Config {
             name: self.name.clone(),
             generation,
@@ -403,6 +389,28 @@ impl EditorGenerationConfig {
     /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
     pub fn has_stack_directives(&self) -> bool {
         has_stack_directives(&self.axiom, &self.rules)
+    }
+
+    /// Resolves authored generation fields with defaults into a runtime `GenerationConfig`.
+    ///
+    /// Fills omitted `step` and `initial_heading` from `defaults`, and clamps
+    /// `iterations` to `max_iterations`. Pass `u32::MAX` to skip clamping.
+    pub fn resolve_for_render(
+        &self,
+        defaults: &ConfigDefaults,
+        max_iterations: u32,
+    ) -> GenerationConfig {
+        GenerationConfig {
+            dimensions: self.dimensions,
+            axiom: self.axiom.clone(),
+            iterations: self.iterations.min(max_iterations),
+            angle: self.angle,
+            step: self.step.unwrap_or_else(|| defaults.turtle.step()),
+            initial_heading: self
+                .initial_heading
+                .unwrap_or_else(|| defaults.turtle.initial_heading()),
+            rules: self.rules.clone(),
+        }
     }
 }
 

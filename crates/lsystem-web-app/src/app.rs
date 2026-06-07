@@ -53,7 +53,8 @@ pub(crate) fn App() -> impl IntoView {
         Memo::new(move |_| editor_generation_config.with(max_iterations_for_editor_config));
     let generation_config = Memo::new(move |_| {
         let max = max_iterations.get();
-        editor_generation_config.with(|generation| generation_config_for_render(generation, max))
+        editor_generation_config
+            .with(|generation| generation.resolve_for_render(ConfigDefaults::embedded(), max))
     });
     let editor_color_config =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().editor_config().colors));
@@ -1526,24 +1527,6 @@ fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect()
-}
-
-fn generation_config_for_render(
-    generation: &EditorGenerationConfig,
-    max_iterations: u32,
-) -> GenerationConfig {
-    let defaults = ConfigDefaults::embedded();
-    GenerationConfig {
-        dimensions: generation.dimensions,
-        axiom: generation.axiom.clone(),
-        iterations: generation.iterations.min(max_iterations),
-        angle: generation.angle,
-        step: generation.step.unwrap_or_else(|| defaults.turtle.step()),
-        initial_heading: generation
-            .initial_heading
-            .unwrap_or_else(|| defaults.turtle.initial_heading()),
-        rules: generation.rules.clone(),
-    }
 }
 
 fn color_config_for_render(
