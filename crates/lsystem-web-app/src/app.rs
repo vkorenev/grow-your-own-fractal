@@ -9,7 +9,7 @@ use lsystem_app_model::{
     selected_line_color_mode,
 };
 use lsystem_core::{
-    ColorConfig, ConfigDefaults, ConfigError, Dimensions, EditorColorConfig,
+    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorColorConfig,
     EditorGenerationConfig, GenerationConfig, LineColorConfig, Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
@@ -110,14 +110,10 @@ pub(crate) fn App() -> impl IntoView {
 
     let canvas_ref = NodeRef::<Canvas>::new();
 
-    let config_for_render = move || {
-        let mut config = config_workspace.with_untracked(|ws| {
-            ws.selected()
-                .editor_config()
-                .resolve(ConfigDefaults::embedded())
-        });
-        config.generation = generation_config.get_untracked();
-        config
+    let config_for_render = move || Config {
+        name: config_workspace.with_untracked(|ws| ws.selected().name().to_string()),
+        generation: generation_config.get_untracked(),
+        colors: color_config.get_untracked(),
     };
 
     let recover_after_render =
