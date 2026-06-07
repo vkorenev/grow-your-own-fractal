@@ -541,11 +541,8 @@ impl FractalApp {
     }
 
     fn effective_render_config(&self) -> Config {
-        let mut config = self
-            .selected_editor_config()
-            .resolve(ConfigDefaults::embedded());
-        config.generation.iterations = self.iterations;
-        config
+        self.selected_editor_config()
+            .resolve(ConfigDefaults::embedded(), self.iterations)
     }
 
     fn render_colors(&self) -> ColorConfig {

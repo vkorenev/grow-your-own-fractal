@@ -488,7 +488,7 @@ solid = "#00e680"
     fn runtime_config(entry: &ConfigEntry) -> lsystem_core::Config {
         entry
             .editor_config()
-            .resolve(lsystem_core::ConfigDefaults::embedded())
+            .resolve(lsystem_core::ConfigDefaults::embedded(), u32::MAX)
     }
 
     #[test]

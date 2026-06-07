@@ -361,8 +361,8 @@ impl EditorConfig {
     /// from `defaults`, and applies render/export normalization such as
     /// disabling topological-depth gradients for grammars with no stack
     /// directives.
-    pub fn resolve(&self, defaults: &ConfigDefaults) -> Config {
-        let generation = self.generation.resolve(defaults, u32::MAX);
+    pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u32) -> Config {
+        let generation = self.generation.resolve(defaults, max_iterations);
         Config {
             name: self.name.clone(),
             generation,
@@ -1081,11 +1081,11 @@ mod tests {
     fn parse_config(toml_str: &str) -> Result<Config, ConfigError> {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?
             .editor_config()
-            .resolve(ConfigDefaults::embedded()))
+            .resolve(ConfigDefaults::embedded(), u32::MAX))
     }
 
     fn resolve_doc(doc: &ConfigDocument) -> Config {
-        doc.editor_config().resolve(ConfigDefaults::embedded())
+        doc.editor_config().resolve(ConfigDefaults::embedded(), u32::MAX)
     }
 
     fn hex(s: &str) -> Rgb {
@@ -1562,7 +1562,7 @@ solid = "#00e680"
         )
         .unwrap();
 
-        let config = editor.resolve(&custom_defaults());
+        let config = editor.resolve(&custom_defaults(), u32::MAX);
 
         assert_eq!(config.generation.step, 2.5);
         assert_eq!(config.generation.initial_heading, 15.0);
@@ -2526,7 +2526,7 @@ solid = "#00e680"
         );
         let mut defaults = custom_defaults();
         defaults.colors.line.default = DefaultLineColorMode::Gradient;
-        let resolved = doc.editor_config().resolve(&defaults);
+        let resolved = doc.editor_config().resolve(&defaults, u32::MAX);
         assert_eq!(
             resolved.colors.line,
             LineColorConfig::Gradient {
