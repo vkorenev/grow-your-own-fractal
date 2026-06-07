@@ -5,9 +5,10 @@ use iced::widget::{
 use iced::{Color, Element, Length, Theme};
 use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
-    HueRotation, HueRotationDirection, LineColorMode,
+    HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
+    selected_line_color_mode,
 };
-use lsystem_core::{LineColorConfig, Rgb};
+use lsystem_core::{ConfigDefaults, EditorColorConfig, LineColorConfig, Rgb};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
@@ -47,7 +48,8 @@ impl FractalApp {
             controls = controls
                 .push(text("Apply or Revert the edited config before using controls.").size(13));
         } else {
-            let config = self.selected_config();
+            let editor_config = self.selected_editor_config();
+            let editor_colors = &selected_entry.editor_config().colors;
             controls = controls
                 .push(text("Overrides").size(13))
                 .push(text(format!("Iterations: {}", self.iterations)))
@@ -56,12 +58,20 @@ impl FractalApp {
                     self.iterations,
                     Message::IterationsChanged,
                 ))
-                .push(text(format!("Angle: {:.1}", config.generation.angle)))
+                .push(text(format!(
+                    "Angle: {:.1}",
+                    editor_config.generation.angle
+                )))
                 .push(
-                    slider(1.0..=180.0, config.generation.angle, Message::AngleChanged).step(0.5),
+                    slider(
+                        1.0..=180.0,
+                        editor_config.generation.angle,
+                        Message::AngleChanged,
+                    )
+                    .step(0.5),
                 );
 
-            controls = push_color_controls(controls, config, &self.hue_rotation);
+            controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
 
             controls = controls.push(text("PNG width").size(13)).push(
                 text_input("2048", &self.png_width_text)
@@ -136,25 +146,32 @@ impl FractalApp {
 
 fn push_color_controls<'a>(
     mut controls: iced::widget::Column<'a, Message>,
-    config: &'a lsystem_core::Config,
+    editor_colors: &'a EditorColorConfig,
     hue_rotation: &HueRotation,
 ) -> iced::widget::Column<'a, Message> {
-    let background = config.colors.background;
+    let color_defaults = ConfigDefaults::embedded().colors;
+    let has_authored_background = editor_colors.background.is_some();
+    let background = editor_colors
+        .background
+        .unwrap_or(color_defaults.background);
     controls = controls.push(
-        checkbox(background.is_some())
+        checkbox(has_authored_background)
             .label("Background")
             .on_toggle(Message::BackgroundOverrideToggled),
     );
-    if let Some(color) = background {
+    if has_authored_background {
         controls = controls.push(rgb_controls(
             "Background RGB",
-            color,
+            background,
             Message::BackgroundColorChanged,
         ));
     }
 
-    let line_color = &config.colors.line;
-    let selected_mode = Some(LineColorMode::from_line_color(line_color));
+    let line_color = line_color_for_controls(editor_colors, &color_defaults.line);
+    let selected_mode = Some(selected_line_color_mode(
+        editor_colors,
+        &color_defaults.line,
+    ));
     controls = controls.push(text("Line color").size(13)).push(
         pick_list(selected_mode, LineColorMode::ALL, |choice| {
             choice.to_string()
@@ -163,7 +180,7 @@ fn push_color_controls<'a>(
         .width(Length::Fill),
     );
 
-    match *line_color {
+    match line_color {
         LineColorConfig::Solid(color) => controls.push(rgb_controls("Line RGB", color, |hex| {
             Message::LineColorChanged(LineColorConfig::Solid(hex))
         })),
@@ -316,7 +333,10 @@ mod tests {
 
     #[test]
     fn rgb_from_f32_array_boundary_values() {
-        assert_eq!(rgb_from_f32_array([0.0, 0.0, 0.0]), Rgb::BLACK);
+        assert_eq!(
+            rgb_from_f32_array([0.0, 0.0, 0.0]),
+            Rgb::new(0x00, 0x00, 0x00)
+        );
         assert_eq!(
             rgb_from_f32_array([1.0, 1.0, 1.0]),
             Rgb::new(0xff, 0xff, 0xff)

@@ -74,23 +74,23 @@ F = "F-F++F-F"          # each F is replaced by this string each iteration
 
 [turtle]
 angle = 60.0            # degrees; used by + - and |
-step = 1.0              # optional; length of each F / f move, defaults to 1.0
-initial_heading = 0.0   # optional; starting direction in degrees, defaults to 0.0
+step = 1.0              # optional; length of each F / f move
+initial_heading = 0.0   # optional; starting direction in degrees
                         # (0 = east, counter-clockwise positive)
 
 [colors]
-background = "#000000"   # optional hex color; omit to use black
+background = "#000000"   # optional hex color
 
 [colors.line]
 solid = "#00e680"  # scalar solid line color
 
-# Omit [colors.line] entirely to use the default solid line color.
+# Omit [colors.line] entirely to use the built-in default line mode.
 
 # gradient example:
 # [colors.line.gradient]
 # start = "#ff6600"
 # end = "#9900ff"
-# topological_depth = false  # optional; defaults to false
+# topological_depth = false  # optional
 
 # hue_cycle example:
 # [colors.line.hue_cycle]
@@ -110,10 +110,11 @@ paths such as `colors.line.solid`, `colors.line.gradient.start`, and
 `colors.line.hue_cycle.initial`. Those paths may be written with explicit
 tables, dotted keys, or implicit parent tables. Older flat TOML with top-level
 `name`, `axiom`, `[rules]`, `background_color`, or `[line_color]` is rejected.
-The old `colors.line.mode` shape is also rejected. `colors.background` is
-optional and falls back to black when omitted; omitted `colors.line` falls back
-to the default solid line color. All present colors are hex color strings in
-`"#rrggbb"` format, including `hue_cycle`'s `initial` color.
+The old `colors.line.mode` shape is also rejected. `colors.background`,
+`turtle.step`, `turtle.initial_heading`, `colors.line`, and mode-specific line
+color fields are optional and resolve through built-in defaults. All present
+colors are hex color strings in `"#rrggbb"` format, including `hue_cycle`'s
+`initial` color.
 
 Built-in defaults use the same property paths as config TOML for
 `turtle.step`, `turtle.initial_heading`, `colors.background`,

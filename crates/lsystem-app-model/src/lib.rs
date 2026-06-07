@@ -8,7 +8,9 @@ pub use animation::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, advance_hue_rotation_phase_degrees,
 };
-pub use color::{ColorControlMemory, LineColorMode};
+pub use color::{
+    ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
+};
 pub use config_workspace::{
     CleanMut, ConfigEntry, ConfigWorkspace, ConfigWorkspaceError, DirtyMut, EntryViewMut,
 };

@@ -104,7 +104,7 @@ mod tests {
         HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
         HueRotation, HueRotationDirection, advance_hue_rotation_phase_degrees,
     };
-    use lsystem_core::LineColorConfig;
+    use lsystem_core::{LineColorConfig, Rgb};
 
     #[test]
     fn set_speed_clamps_to_valid_range() {
@@ -126,10 +126,15 @@ mod tests {
     #[test]
     fn is_active_requires_enabled_and_hue_cycle_mode() {
         let mut m = HueRotation::default();
-        assert!(!m.is_active(&LineColorConfig::DEFAULT_HUE_CYCLE));
+        let hue_cycle = LineColorConfig::HueCycle {
+            initial: Rgb::new(0xe5, 0x1a, 0x33),
+        };
+        let solid = LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d));
+
+        assert!(!m.is_active(&hue_cycle));
         m.start();
-        assert!(m.is_active(&LineColorConfig::DEFAULT_HUE_CYCLE));
-        assert!(!m.is_active(&LineColorConfig::DEFAULT_SOLID));
+        assert!(m.is_active(&hue_cycle));
+        assert!(!m.is_active(&solid));
     }
 
     #[test]

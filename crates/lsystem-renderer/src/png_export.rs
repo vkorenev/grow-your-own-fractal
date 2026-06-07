@@ -100,7 +100,7 @@ pub async fn render_png(
 ) -> Result<PngExport, PngExportError> {
     validate_width(width)?;
 
-    let colors = config.effective_colors();
+    let colors = config.colors;
     match config.generation.dimensions {
         Dimensions::ThreeD => {
             let height = width; // square viewport for perspective
@@ -132,7 +132,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                colors.effective_background().to_array(),
+                colors.background.to_array(),
                 |pass| {
                     pipeline.draw(pass);
                 },
@@ -169,7 +169,7 @@ pub async fn render_png(
                 queue,
                 width,
                 height,
-                colors.effective_background().to_array(),
+                colors.background.to_array(),
                 |pass| {
                     pipeline.draw(pass);
                 },

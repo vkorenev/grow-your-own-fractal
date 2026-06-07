@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn solid_maps_to_mode_solid_with_color() {
-        let color = Rgb::DEFAULT_SOLID_LINE;
+        let color = Rgb::new(0x1a, 0x33, 0x4d);
         let params = color_params_from_config(&LineColorConfig::Solid(color), 10, 0);
 
         assert_eq!(params.total_segments, 10);
