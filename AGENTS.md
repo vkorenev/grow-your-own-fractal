@@ -51,7 +51,7 @@ Five-crate workspace under `crates/`:
 
 | Module | Role |
 |--------|------|
-| `config.rs` | TOML config pipeline: `ConfigSource` wraps a `toml_edit::DocumentMut` (format-preserving, parse-only); strict `RawConfig` validates into `EditorConfig` that preserves defaultable authored fields as `Option`s; `EditorConfig::resolve(ConfigDefaults::embedded())` produces the fully resolved runtime `Config`; `ConfigDocument` stores the source and validated editor config, but no cached runtime `Config`. Validates symbols, rules, step/angle finiteness, bracket balance, optional authored background color, externally tagged line colors (`solid`, `gradient`, `hue_cycle`) including optional `gradient.topological_depth`, and hex color strings. Also embeds `defaults.toml` and validates strict `RawDefaults -> ConfigDefaults` with `#[serde(deny_unknown_fields)]`; render/export callers build or receive resolved `Config` values at render/export boundaries. |
+| `config.rs` | TOML config pipeline: `ConfigSource` wraps a `toml_edit::DocumentMut` (format-preserving, parse-only); strict `RawConfig` validates into `EditorConfig` that preserves defaultable authored fields as `Option`s; `EditorConfig::resolve(ConfigDefaults::embedded(), max_iterations)` produces the fully resolved runtime `Config`; `ConfigDocument` stores the source and validated editor config, but no cached runtime `Config`. Validates symbols, rules, step/angle finiteness, bracket balance, optional authored background color, externally tagged line colors (`solid`, `gradient`, `hue_cycle`) including optional `gradient.topological_depth`, and hex color strings. Also embeds `defaults.toml` and validates strict `RawDefaults -> ConfigDefaults` with `#[serde(deny_unknown_fields)]`; render/export callers build or receive resolved `Config` values at render/export boundaries. |
 | `alphabet.rs` | Reserved symbols (`F f + - \| [ ]` for 2D; additionally `& ^ / \` for 3D), character set validation per `dimensions`; `contains_3d_symbols(s: &str) -> bool` re-exported from `lsystem-core` |
 | `grammar.rs` | `expand(axiom, rules, iterations)` → lazy `ExpandIter` char iterator; `expand_owned` → `OwnedExpandIter` (same logic, owns its data via `Vec<char>` so callers need no lifetime) |
 | `turtle/mod.rs` | Declares `turtle2d` and `turtle3d` submodules |
@@ -111,7 +111,7 @@ Depends on `lsystem-core`, `lsystem-app-model`, `lsystem-renderer`, `leptos`, an
 |------|------|
 | `lib.rs` | Leptos CSR entry point |
 | `app.rs` | DOM controls for presets, TOML, overrides, viewport input, export buttons, and GPU rendering error display |
-| `presets.rs` | Effective-config helpers (`max_iterations_for_config`); preset loading delegated to `lsystem_app_model::load_presets` |
+| `presets.rs` | Effective-config helpers (`max_iterations_for_editor_config`); preset loading delegated to `lsystem_app_model::load_presets` |
 | `export.rs` | Browser SVG/PNG download helpers |
 | `renderer.rs` | `CanvasRenderer` — owns `GpuContext`, `LinePipeline2D`, `LinePipeline3D`, `Camera`, and an `ActiveScene` enum (2D or 3D); dispatches drag to pan (2D) or orbit (3D); handles canvas resize, zoom, orbit, roll, auto-rotate, reset, and surface-loss recovery |
 | `index.html` | Trunk entry that mounts the Leptos app |
