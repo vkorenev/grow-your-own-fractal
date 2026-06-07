@@ -9,8 +9,8 @@ use lsystem_app_model::{
     selected_line_color_mode,
 };
 use lsystem_core::{
-    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorGenerationConfig,
-    GenerationConfig, LineColorConfig, Rgb, contains_3d_symbols,
+    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, GenerationConfig, LineColorConfig,
+    Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
@@ -1588,10 +1588,7 @@ fn gradient_fields_for_mode(
     line_color: Memo<LineColorConfig>,
     memory: RwSignal<ColorControlMemory>,
 ) -> (Rgb, Rgb, bool) {
-    gradient_fields_from(
-        line_color.get(),
-        memory.with(|m| m.gradient_fields()),
-    )
+    gradient_fields_from(line_color.get(), memory.with(|m| m.gradient_fields()))
 }
 
 fn gradient_fields_for_mode_untracked(

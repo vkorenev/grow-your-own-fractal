@@ -1085,7 +1085,8 @@ mod tests {
     }
 
     fn resolve_doc(doc: &ConfigDocument) -> Config {
-        doc.editor_config().resolve(ConfigDefaults::embedded(), u32::MAX)
+        doc.editor_config()
+            .resolve(ConfigDefaults::embedded(), u32::MAX)
     }
 
     fn hex(s: &str) -> Rgb {
