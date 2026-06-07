@@ -862,7 +862,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn clean_entry_set_iterations_updates_toml_and_runtime_config() {
+    fn clean_entry_set_iterations_updates_toml_and_editor_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -875,7 +875,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn clean_entry_set_angle_updates_toml_and_runtime_config() {
+    fn clean_entry_set_angle_updates_toml_and_editor_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -888,7 +888,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn clean_entry_set_initial_heading_updates_toml_and_runtime_config() {
+    fn clean_entry_set_initial_heading_updates_toml_and_editor_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -901,7 +901,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn clean_entry_set_dimensions_updates_toml_and_runtime_config() {
+    fn clean_entry_set_dimensions_updates_toml_and_editor_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         assert_eq!(

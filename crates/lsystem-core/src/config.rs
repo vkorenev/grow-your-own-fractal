@@ -183,6 +183,32 @@ impl LineColorConfig {
     }
 }
 
+/// Applies runtime line-color normalization after defaults have been resolved.
+///
+/// Topological-depth gradients are equivalent to traversal gradients when the
+/// grammar has no stack directives, so render/export paths can avoid allocating
+/// depth-aware geometry in that case.
+pub fn normalize_line_color_for_render(
+    line: LineColorConfig,
+    has_stack_directives: bool,
+) -> LineColorConfig {
+    if !has_stack_directives
+        && let LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth: true,
+        } = line
+    {
+        return LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth: false,
+        };
+    }
+
+    line
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfigDefaults {
     pub turtle: TurtleDefaults,
@@ -312,8 +338,12 @@ impl GenerationConfig {
     ///
     /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
     pub fn has_stack_directives(&self) -> bool {
-        self.axiom.contains('[') || self.rules.values().any(|rhs| rhs.contains('['))
+        has_stack_directives(&self.axiom, &self.rules)
     }
+}
+
+fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) -> bool {
+    axiom.contains('[') || rules.values().any(|rhs| rhs.contains('['))
 }
 
 /// Validated L-system configuration exactly as authored, before defaults are applied.
@@ -325,6 +355,12 @@ pub struct EditorConfig {
 }
 
 impl EditorConfig {
+    /// Resolves authored config fields with defaults into the runtime config.
+    ///
+    /// This leaves `EditorConfig` unchanged, fills omitted defaultable fields
+    /// from `defaults`, and applies render/export normalization such as
+    /// disabling topological-depth gradients for grammars with no stack
+    /// directives.
     pub fn resolve(&self, defaults: &ConfigDefaults) -> Config {
         let generation = GenerationConfig {
             dimensions: self.generation.dimensions,
@@ -341,25 +377,12 @@ impl EditorConfig {
                 .unwrap_or_else(|| defaults.turtle.initial_heading()),
             rules: self.generation.rules.clone(),
         };
-        let mut line = self
+        let line = self
             .colors
             .line
             .map(|line| line.resolve(&defaults.colors.line))
             .unwrap_or_else(|| defaults.colors.line.default_line_color());
-
-        if !generation.has_stack_directives()
-            && let LineColorConfig::Gradient {
-                start,
-                end,
-                topological_depth: true,
-            } = line
-        {
-            line = LineColorConfig::Gradient {
-                start,
-                end,
-                topological_depth: false,
-            };
-        }
+        let line = normalize_line_color_for_render(line, self.generation.has_stack_directives());
 
         Config {
             name: self.name.clone(),
@@ -384,6 +407,15 @@ pub struct EditorGenerationConfig {
     pub rules: BTreeMap<char, String>,
 }
 
+impl EditorGenerationConfig {
+    /// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
+    ///
+    /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
+    pub fn has_stack_directives(&self) -> bool {
+        has_stack_directives(&self.axiom, &self.rules)
+    }
+}
+
 /// Validated color fields as authored, before defaults are applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EditorColorConfig {
@@ -402,11 +434,15 @@ pub enum EditorLineColorConfig {
         color: Option<Rgb>,
     },
     Gradient {
+        /// `None` inherits the gradient start color from defaults.
         start: Option<Rgb>,
+        /// `None` inherits the gradient end color from defaults.
         end: Option<Rgb>,
+        /// `None` inherits the topological-depth setting from defaults.
         topological_depth: Option<bool>,
     },
     HueCycle {
+        /// `None` inherits the initial hue-cycle color from defaults.
         initial: Option<Rgb>,
     },
 }

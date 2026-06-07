@@ -11,6 +11,7 @@ pub use config::{
     ColorConfig, ColorDefaults, Config, ConfigDefaults, ConfigDocument, ConfigError, ConfigSource,
     Dimensions, EditorColorConfig, EditorConfig, EditorGenerationConfig, EditorLineColorConfig,
     GenerationConfig, LineColorConfig, LineColorDefaults, Rgb, RgbError,
+    normalize_line_color_for_render,
 };
 pub use grammar::max_safe_iterations;
 

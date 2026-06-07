@@ -3,7 +3,8 @@ use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls,
+    line_color_for_render, load_presets,
 };
 use lsystem_core::{
     ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorConfig, LineColorConfig,
@@ -542,8 +543,7 @@ impl FractalApp {
         let generation = &self.config_workspace.selected().editor_config().generation;
         let max_seg = lsystem_renderer::line_renderer::max_segments_for_line_color(
             generation.dimensions,
-            generation.axiom.contains('[')
-                || generation.rules.values().any(|rhs| rhs.contains('[')),
+            generation.has_stack_directives(),
         );
         self.max_iterations =
             lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
@@ -564,30 +564,17 @@ impl FractalApp {
     fn render_colors(&self) -> ColorConfig {
         let defaults = ConfigDefaults::embedded();
         let editor_config = self.selected_editor_config();
-        let generation = &editor_config.generation;
-        let mut line = line_color_for_controls(&editor_config.colors, &defaults.colors.line);
-        let has_stack_directives = generation.axiom.contains('[')
-            || generation.rules.values().any(|rhs| rhs.contains('['));
-        if !has_stack_directives
-            && let LineColorConfig::Gradient {
-                start,
-                end,
-                topological_depth: true,
-            } = line
-        {
-            line = LineColorConfig::Gradient {
-                start,
-                end,
-                topological_depth: false,
-            };
-        }
 
         ColorConfig {
             background: editor_config
                 .colors
                 .background
                 .unwrap_or(defaults.colors.background),
-            line,
+            line: line_color_for_render(
+                &editor_config.colors,
+                &editor_config.generation,
+                &defaults.colors.line,
+            ),
         }
     }
 
@@ -755,6 +742,40 @@ mod tests {
         let _ = app.update(Message::ApplyConfig);
 
         assert_eq!(app.color_memory.line_for(LineColorMode::Gradient), gradient);
+    }
+
+    #[test]
+    fn render_colors_normalizes_bracketless_topological_gradient() {
+        let (mut app, _) = FractalApp::new();
+        let EntryViewMut::Clean(mut clean) = app.config_workspace.selected_mut().view_mut() else {
+            panic!("initial config entry should be clean");
+        };
+        clean.set_grammar("F", &[]).unwrap();
+
+        let start = Rgb::new(0x33, 0x4d, 0x66);
+        let end = Rgb::new(0x80, 0x99, 0xb3);
+        let _ = app.update(Message::LineColorChanged(LineColorConfig::Gradient {
+            start,
+            end,
+            topological_depth: true,
+        }));
+
+        assert_eq!(
+            app.control_line_color(),
+            LineColorConfig::Gradient {
+                start,
+                end,
+                topological_depth: true,
+            }
+        );
+        assert_eq!(
+            app.render_colors().line,
+            LineColorConfig::Gradient {
+                start,
+                end,
+                topological_depth: false,
+            }
+        );
     }
 
     #[test]
