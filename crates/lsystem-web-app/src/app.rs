@@ -81,7 +81,6 @@ pub(crate) fn App() -> impl IntoView {
             Dimensions::ThreeD
         )
     };
-    let render_is_3d = move || matches!(generation_config.get().dimensions, Dimensions::ThreeD);
     let is_dirty = move || config_workspace.with(|workspace| workspace.selected().is_dirty());
     let dirty_tooltip = move || {
         if is_dirty() {
@@ -169,7 +168,7 @@ pub(crate) fn App() -> impl IntoView {
         };
 
     let animation_active = Memo::new(move |_| {
-        (auto_rotate.get() && render_is_3d())
+        (auto_rotate.get() && is_3d())
             || hue_rotation.with(|m| m.is_active(&color_config.with(|c| c.line)))
     });
 

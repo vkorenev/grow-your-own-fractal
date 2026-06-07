@@ -185,20 +185,8 @@ impl FractalApp {
                 self.update_clean_config("angle slider", |clean| clean.set_angle(angle))
             }
             Message::BackgroundOverrideToggled(enabled) => {
-                if self
-                    .config_workspace
-                    .selected()
-                    .editor_config()
-                    .colors
-                    .background
-                    .is_some()
-                {
-                    let background = self
-                        .selected_editor_config()
-                        .colors
-                        .background
-                        .unwrap_or(ConfigDefaults::embedded().colors.background);
-                    self.color_memory.remember_background(background);
+                if let Some(bg) = self.selected_editor_config().colors.background {
+                    self.color_memory.remember_background(bg);
                 }
                 let background = if enabled {
                     Some(self.color_memory.background())

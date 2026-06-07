@@ -182,9 +182,7 @@ pub fn selected_line_color_mode(
         .line
         .as_ref()
         .map(LineColorMode::from_editor_line_color)
-        .unwrap_or_else(|| {
-            LineColorMode::from_line_color(&line_color_for_controls(editor, defaults))
-        })
+        .unwrap_or_else(|| LineColorMode::from_line_color(&defaults.default_line_color()))
 }
 
 #[cfg(test)]
