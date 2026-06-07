@@ -550,7 +550,7 @@ impl FractalApp {
 
     fn render_colors(&self) -> ColorConfig {
         let editor_config = self.selected_editor_config();
-        editor_config.colors.resolve_for_render(
+        editor_config.colors.resolve(
             &editor_config.generation,
             &ConfigDefaults::embedded().colors,
         )

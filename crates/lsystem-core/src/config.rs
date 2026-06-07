@@ -362,13 +362,11 @@ impl EditorConfig {
     /// disabling topological-depth gradients for grammars with no stack
     /// directives.
     pub fn resolve(&self, defaults: &ConfigDefaults) -> Config {
-        let generation = self.generation.resolve_for_render(defaults, u32::MAX);
+        let generation = self.generation.resolve(defaults, u32::MAX);
         Config {
             name: self.name.clone(),
             generation,
-            colors: self
-                .colors
-                .resolve_for_render(&self.generation, &defaults.colors),
+            colors: self.colors.resolve(&self.generation, &defaults.colors),
         }
     }
 }
@@ -397,11 +395,7 @@ impl EditorGenerationConfig {
     ///
     /// Fills omitted `step` and `initial_heading` from `defaults`, and clamps
     /// `iterations` to `max_iterations`. Pass `u32::MAX` to skip clamping.
-    pub fn resolve_for_render(
-        &self,
-        defaults: &ConfigDefaults,
-        max_iterations: u32,
-    ) -> GenerationConfig {
+    pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u32) -> GenerationConfig {
         GenerationConfig {
             dimensions: self.dimensions,
             axiom: self.axiom.clone(),
@@ -426,7 +420,7 @@ pub struct EditorColorConfig {
 }
 
 impl EditorColorConfig {
-    pub fn resolve_for_render(
+    pub fn resolve(
         &self,
         generation: &EditorGenerationConfig,
         defaults: &ColorDefaults,

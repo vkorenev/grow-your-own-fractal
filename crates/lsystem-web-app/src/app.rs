@@ -54,7 +54,7 @@ pub(crate) fn App() -> impl IntoView {
     let generation_config = Memo::new(move |_| {
         let max = max_iterations.get();
         editor_generation_config
-            .with(|generation| generation.resolve_for_render(ConfigDefaults::embedded(), max))
+            .with(|generation| generation.resolve(ConfigDefaults::embedded(), max))
     });
     let editor_color_config =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().editor_config().colors));
@@ -64,7 +64,8 @@ pub(crate) fn App() -> impl IntoView {
     });
     let color_config = Memo::new(move |_| {
         editor_color_config.with(|colors| {
-            editor_generation_config.with(|generation| color_config_for_render(colors, generation))
+            editor_generation_config
+                .with(|generation| colors.resolve(generation, &ConfigDefaults::embedded().colors))
         })
     });
     let iterations = Memo::new(move |_| {
@@ -1527,13 +1528,6 @@ fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect()
-}
-
-fn color_config_for_render(
-    colors: &EditorColorConfig,
-    generation: &EditorGenerationConfig,
-) -> ColorConfig {
-    colors.resolve_for_render(generation, &ConfigDefaults::embedded().colors)
 }
 
 fn update_clean_config(
