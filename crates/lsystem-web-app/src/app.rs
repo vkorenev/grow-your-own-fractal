@@ -75,7 +75,7 @@ pub(crate) fn App() -> impl IntoView {
     let angle = Memo::new(move |_| editor_generation_config.with(|generation| generation.angle));
 
     let renderer: RendererState = StoredValue::new_local(None::<CanvasRenderer>);
-    let last_pointer = StoredValue::new(None::<(i32, f64, f64)>);
+    let active_pointers = StoredValue::new(std::collections::HashMap::<i32, (f64, f64)>::new());
 
     let is_3d = move || {
         matches!(
@@ -1382,44 +1382,61 @@ pub(crate) fn App() -> impl IntoView {
                     on:pointerdown=move |ev: web_sys::PointerEvent| {
                         if let Some(canvas) = canvas_ref.get_untracked() {
                             let _ = canvas.focus();
-                            let _ = canvas.set_pointer_capture(ev.pointer_id());
                         }
-                        last_pointer.update_value(|p| {
-                            *p = Some((
-                                ev.pointer_id(),
-                                ev.client_x() as f64,
-                                ev.client_y() as f64,
-                            ));
+                        let id = ev.pointer_id();
+                        active_pointers.update_value(|map| {
+                            if map.len() >= 2 && !map.contains_key(&id) {
+                                map.clear();
+                            }
+                            map.insert(id, (ev.client_x() as f64, ev.client_y() as f64));
                         });
+                        if let Some(canvas) = canvas_ref.get_untracked() {
+                            let _ = canvas.set_pointer_capture(id);
+                        }
                     }
                     on:pointermove=move |ev: web_sys::PointerEvent| {
-                        let Some((id, last_x, last_y)) = last_pointer.with_value(|p| *p) else {
-                            return;
-                        };
-                        if id != ev.pointer_id() {
-                            return;
-                        }
                         let x = ev.client_x() as f64;
                         let y = ev.client_y() as f64;
-                        let dx = x - last_x;
-                        let dy = y - last_y;
-                        last_pointer.update_value(|p| *p = Some((id, x, y)));
-                        if let Some(canvas) = canvas_ref.get_untracked() {
-                            with_renderer(
-                                canvas,
-                                renderer,
-                                recover_after_render,
-                                |r, c| r.drag_and_render(c, dx as f32, dy as f32),
-                            );
+                        let id = ev.pointer_id();
+
+                        let (prev, other, len) = active_pointers.with_value(|map| {
+                            let prev = map.get(&id).copied();
+                            let other = map.iter().find(|&(&k, _)| k != id).map(|(_, &v)| v);
+                            (prev, other, map.len())
+                        });
+
+                        let Some((prev_x, prev_y)) = prev else { return; };
+
+                        active_pointers.update_value(|map| { map.insert(id, (x, y)); });
+
+                        let Some(canvas) = canvas_ref.get_untracked() else { return; };
+
+                        if len == 1 {
+                            let dx = x - prev_x;
+                            let dy = y - prev_y;
+                            with_renderer(canvas, renderer, recover_after_render,
+                                |r, c| r.drag_and_render(c, dx as f32, dy as f32));
+                        } else if let Some((ox, oy)) = other {
+                            let prev_dist = ((prev_x - ox).powi(2) + (prev_y - oy).powi(2)).sqrt();
+                            if prev_dist >= 1.0 {
+                                let new_dist = ((x - ox).powi(2) + (y - oy).powi(2)).sqrt();
+                                let factor = (new_dist / prev_dist) as f32;
+                                let mid_x = ((x + ox) / 2.0) as f32;
+                                let mid_y = ((y + oy) / 2.0) as f32;
+                                with_renderer(canvas, renderer, recover_after_render,
+                                    |r, c| r.zoom_by_factor_and_render(c, factor, mid_x, mid_y));
+                            }
                         }
                     }
                     on:pointerup=move |ev: web_sys::PointerEvent| {
                         if let Some(canvas) = canvas_ref.get_untracked() {
                             let _ = canvas.release_pointer_capture(ev.pointer_id());
                         }
-                        last_pointer.update_value(|p| *p = None);
+                        active_pointers.update_value(|map| { map.remove(&ev.pointer_id()); });
                     }
-                    on:pointercancel=move |_| last_pointer.update_value(|p| *p = None)
+                    on:pointercancel=move |ev: web_sys::PointerEvent| {
+                        active_pointers.update_value(|map| { map.remove(&ev.pointer_id()); });
+                    }
                     on:wheel=move |ev: web_sys::WheelEvent| {
                         ev.prevent_default();
                         if let Some(canvas) = canvas_ref.get_untracked() {
