@@ -927,16 +927,15 @@ impl std::fmt::Display for ConfigSource {
     }
 }
 
-/// A [`ConfigSource`] paired with the validated editor and runtime configs it produces.
+/// A [`ConfigSource`] paired with the validated editor config it produces.
 ///
 /// The only constructor is `TryFrom<ConfigSource>`, which validates the document and rejects
 /// invalid ones. Holding a `ConfigDocument` is a runtime invariant: the document was validated
-/// at construction time, so `editor_config()` and `config()` always return values derived then.
+/// at construction time, so `editor_config()` always returns the value derived then.
 #[derive(Debug, Clone)]
 pub struct ConfigDocument {
     source: ConfigSource,
     editor_config: EditorConfig,
-    config: Config,
 }
 
 impl TryFrom<ConfigSource> for ConfigDocument {
@@ -945,28 +944,16 @@ impl TryFrom<ConfigSource> for ConfigDocument {
     fn try_from(source: ConfigSource) -> Result<Self, ConfigError> {
         let raw = toml_edit::de::from_document::<RawConfig>(source.document.clone())?;
         let editor_config = EditorConfig::try_from(raw)?;
-        let config = editor_config.resolve(ConfigDefaults::embedded());
         Ok(Self {
             source,
             editor_config,
-            config,
         })
-    }
-}
-
-impl From<ConfigDocument> for Config {
-    fn from(doc: ConfigDocument) -> Self {
-        doc.config
     }
 }
 
 impl ConfigDocument {
     pub fn editor_config(&self) -> &EditorConfig {
         &self.editor_config
-    }
-
-    pub fn config(&self) -> &Config {
-        &self.config
     }
 
     pub fn source(&self) -> &ConfigSource {
@@ -1048,7 +1035,13 @@ mod tests {
     use std::path::Path;
 
     fn parse_config(toml_str: &str) -> Result<Config, ConfigError> {
-        Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?.into())
+        Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?
+            .editor_config()
+            .resolve(ConfigDefaults::embedded()))
+    }
+
+    fn resolve_doc(doc: &ConfigDocument) -> Config {
+        doc.editor_config().resolve(ConfigDefaults::embedded())
     }
 
     fn hex(s: &str) -> Rgb {
@@ -1381,17 +1374,17 @@ solid = "#00e680"
                 .to_toml_string()
                 .contains(r#"name = "New" # keep name comment"#)
         );
-        let config: Config = ConfigDocument::try_from(source).unwrap().into();
+        let doc = ConfigDocument::try_from(source).unwrap();
+        let config = resolve_doc(&doc);
         assert_eq!(config.name, "New");
     }
 
     #[test]
     fn config_document_name_comes_from_editor_config() {
-        let mut doc =
-            ConfigDocument::try_from(ConfigSource::parse(NESTED_KOCH_TOML).unwrap()).unwrap();
-        doc.config.name = "Runtime name".to_string();
+        let doc = ConfigDocument::try_from(ConfigSource::parse(NESTED_KOCH_TOML).unwrap()).unwrap();
 
         assert_eq!(doc.name(), doc.editor_config().name);
+        assert_eq!(doc.name(), "Koch Snowflake");
     }
 
     #[test]
@@ -1426,19 +1419,19 @@ solid = "#00e680"
         assert_eq!(doc.editor_config().colors.background, None);
         assert_eq!(doc.editor_config().colors.line, None);
         assert_eq!(
-            doc.config().generation.step,
+            resolve_doc(&doc).generation.step,
             ConfigDefaults::embedded().turtle.step()
         );
         assert_eq!(
-            doc.config().generation.initial_heading,
+            resolve_doc(&doc).generation.initial_heading,
             ConfigDefaults::embedded().turtle.initial_heading()
         );
         assert_eq!(
-            doc.config().colors.background,
+            resolve_doc(&doc).colors.background,
             ConfigDefaults::embedded().colors.background
         );
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             ConfigDefaults::embedded().colors.line.default_line_color()
         );
     }
@@ -1462,7 +1455,7 @@ solid = "#00e680"
         );
         let defaults = ConfigDefaults::embedded().colors.line.gradient;
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             LineColorConfig::Gradient {
                 start: defaults.start,
                 end: defaults.end,
@@ -1543,8 +1536,8 @@ solid = "#00e680"
 
         assert_eq!(doc.editor_config().generation.step, Some(3.7));
         assert_eq!(doc.editor_config().generation.initial_heading, Some(45.0));
-        assert_eq!(doc.config().generation.step, 3.7);
-        assert_eq!(doc.config().generation.initial_heading, 45.0);
+        assert_eq!(resolve_doc(&doc).generation.step, 3.7);
+        assert_eq!(resolve_doc(&doc).generation.initial_heading, 45.0);
     }
 
     #[test]
@@ -1572,7 +1565,7 @@ solid = "#00e680"
 
         assert_eq!(doc.editor_config().colors.background, None);
         assert_eq!(
-            doc.config().colors.background,
+            resolve_doc(&doc).colors.background,
             ConfigDefaults::embedded().colors.background
         );
     }
@@ -1583,7 +1576,7 @@ solid = "#00e680"
         let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
 
         assert_eq!(doc.editor_config().colors.background, Some(hex("#334d66")));
-        assert_eq!(doc.config().colors.background, hex("#334d66"));
+        assert_eq!(resolve_doc(&doc).colors.background, hex("#334d66"));
     }
 
     #[test]
@@ -1719,7 +1712,7 @@ solid = "#00e680"
             })
         );
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             LineColorConfig::Gradient {
                 start: hex("#1a334d"),
                 end: hex("#b3cce6"),
@@ -1893,7 +1886,8 @@ solid = "#1a334d"
         let source = ConfigSource::parse(toml).unwrap();
 
         assert_eq!(source.to_toml_string(), toml);
-        let cfg: Config = ConfigDocument::try_from(source).unwrap().into();
+        let doc = ConfigDocument::try_from(source).unwrap();
+        let cfg = resolve_doc(&doc);
         assert_eq!(cfg.generation.axiom, "F\\F");
         assert_eq!(cfg.generation.rules[&'F'], "F\\F");
     }
@@ -2395,7 +2389,7 @@ solid = "#00e680"
             "authored topological-gradient choice must be preserved in editor config"
         );
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             LineColorConfig::Gradient {
                 start,
                 end,
@@ -2486,7 +2480,10 @@ solid = "#00e680"
         );
         // Verify it round-trips: re-parsing produces the same Rgb
         let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
-        assert_eq!(doc.config().colors.background, Rgb::new(0xff, 0x80, 0x00));
+        assert_eq!(
+            resolve_doc(&doc).colors.background,
+            Rgb::new(0xff, 0x80, 0x00)
+        );
     }
 
     #[test]
@@ -2510,7 +2507,7 @@ solid = "#00e680"
         // Round-trip
         let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x00, 0x11, 0x22),
                 end: Rgb::new(0xaa, 0xbb, 0xcc),
@@ -2568,7 +2565,7 @@ end = "#aabbcc" # keep end comment
             })
         );
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x00, 0x11, 0x22),
                 end: Rgb::new(0xaa, 0xbb, 0xcc),
@@ -2619,7 +2616,7 @@ topological_depth = true # keep flag comment
         assert!(!result.contains("topological_depth = true"));
         let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
         assert_eq!(
-            doc.config().colors.line,
+            resolve_doc(&doc).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x00, 0x11, 0x22),
                 end: Rgb::new(0xaa, 0xbb, 0xcc),

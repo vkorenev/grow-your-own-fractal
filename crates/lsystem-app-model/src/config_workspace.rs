@@ -4,8 +4,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 use lsystem_core::{
-    Config, ConfigDocument, ConfigError, ConfigSource, Dimensions, EditorConfig, LineColorConfig,
-    Rgb,
+    ConfigDocument, ConfigError, ConfigSource, Dimensions, EditorConfig, LineColorConfig, Rgb,
 };
 
 #[derive(Debug, Error)]
@@ -238,10 +237,6 @@ impl ConfigEntry {
 
     fn applied_text(&self) -> String {
         self.last_applied.to_toml_string()
-    }
-
-    pub fn applied_config(&self) -> &Config {
-        self.last_applied.config()
     }
 
     pub fn editor_config(&self) -> &EditorConfig {
@@ -490,6 +485,12 @@ solid = "#00e680"
         }
     }
 
+    fn runtime_config(entry: &ConfigEntry) -> lsystem_core::Config {
+        entry
+            .editor_config()
+            .resolve(lsystem_core::ConfigDefaults::embedded())
+    }
+
     #[test]
     fn switching_entries_preserves_each_draft() {
         let first = config_text("First", "F", 60.0);
@@ -515,10 +516,10 @@ solid = "#00e680"
     }
 
     #[test]
-    fn failed_apply_preserves_last_applied_config() {
+    fn failed_apply_preserves_last_runtime_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        let previous_config = workspace.selected().applied_config().clone();
+        let previous_config = runtime_config(workspace.selected()).clone();
 
         workspace
             .selected_mut()
@@ -529,7 +530,7 @@ solid = "#00e680"
             ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
         ));
 
-        assert_eq!(workspace.selected().applied_config(), &previous_config);
+        assert_eq!(runtime_config(workspace.selected()), previous_config);
         assert!(workspace.selected().is_dirty());
     }
 
@@ -547,7 +548,7 @@ solid = "#00e680"
             error,
             ConfigWorkspaceError::Config(ConfigError::UnmatchedOpen { .. })
         ));
-        assert_eq!(workspace.selected().applied_config().generation.angle, 60.0);
+        assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(workspace.selected().is_dirty());
     }
 
@@ -640,7 +641,7 @@ solid = "#00e680"
             .selected_mut()
             .set_draft_text(first.replace("angle = 60", "angle = 45"));
         workspace.apply().unwrap();
-        assert_eq!(workspace.selected().applied_config().generation.angle, 45.0);
+        assert_eq!(workspace.selected().editor_config().generation.angle, 45.0);
         assert!(workspace.can_reset());
 
         let reset_entry = workspace
@@ -648,7 +649,7 @@ solid = "#00e680"
             .unwrap()
             .expect("expected reset to apply default");
         assert!(!reset_entry.is_dirty());
-        assert_eq!(reset_entry.applied_config().generation.angle, 60.0);
+        assert_eq!(reset_entry.editor_config().generation.angle, 60.0);
         assert_eq!(reset_entry.draft_text(), first);
         assert_eq!(reset_entry.applied_text(), first);
         let reset_entry_ptr = reset_entry as *const _;
@@ -671,7 +672,7 @@ solid = "#00e680"
         workspace.apply().unwrap();
 
         assert!(workspace.reset().unwrap().is_none());
-        assert_eq!(workspace.selected().applied_config().generation.angle, 45.0);
+        assert_eq!(workspace.selected().editor_config().generation.angle, 45.0);
     }
 
     #[test]
@@ -727,8 +728,8 @@ solid = "#00e680"
         assert_eq!(workspace.selected().name(), "Plant copy 2");
         assert_eq!(workspace.selected().draft_text(), expected_text);
         assert_eq!(workspace.selected().applied_text(), expected_applied);
-        assert_eq!(workspace.selected().applied_config().name, "Plant copy 2");
-        assert_eq!(workspace.selected().applied_config().generation.angle, 60.0);
+        assert_eq!(workspace.selected().editor_config().name, "Plant copy 2");
+        assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(workspace.selected().is_dirty());
         assert!(!workspace.can_reset());
     }
@@ -750,8 +751,8 @@ solid = "#00e680"
 
         assert_eq!(workspace.selected_index(), 1);
         assert_eq!(workspace.selected().applied_text(), expected_applied);
-        assert_eq!(workspace.selected().applied_config().name, "Plant copy");
-        assert_eq!(workspace.selected().applied_config().generation.angle, 60.0);
+        assert_eq!(workspace.selected().editor_config().name, "Plant copy");
+        assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_ok());
         assert!(matches!(
             workspace.apply(),
@@ -780,8 +781,8 @@ solid = "#00e680"
 
         assert_eq!(workspace.selected_index(), 1);
         assert_eq!(workspace.selected().applied_text(), expected_applied);
-        assert_eq!(workspace.selected().applied_config().name, "Plant copy");
-        assert_eq!(workspace.selected().applied_config().generation.angle, 60.0);
+        assert_eq!(workspace.selected().editor_config().name, "Plant copy");
+        assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_err());
         assert!(workspace.selected().is_dirty());
         assert!(!workspace.can_reset());
@@ -846,7 +847,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn draft_text_matching_applied_config_is_clean() {
+    fn draft_text_matching_runtime_config_is_clean() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
 
@@ -861,7 +862,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn clean_entry_set_iterations_updates_toml_and_applied_config() {
+    fn clean_entry_set_iterations_updates_toml_and_runtime_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -869,12 +870,12 @@ solid = "#00e680"
 
         let entry = workspace.selected();
         assert!(entry.draft_text().contains("iterations = 5"));
-        assert_eq!(entry.applied_config().generation.iterations, 5);
+        assert_eq!(entry.editor_config().generation.iterations, 5);
         assert!(!entry.is_dirty());
     }
 
     #[test]
-    fn clean_entry_set_angle_updates_toml_and_applied_config() {
+    fn clean_entry_set_angle_updates_toml_and_runtime_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -882,12 +883,12 @@ solid = "#00e680"
 
         let entry = workspace.selected();
         assert!(entry.draft_text().contains("angle = 45.5"));
-        assert_eq!(entry.applied_config().generation.angle, 45.5);
+        assert_eq!(entry.editor_config().generation.angle, 45.5);
         assert!(!entry.is_dirty());
     }
 
     #[test]
-    fn clean_entry_set_initial_heading_updates_toml_and_applied_config() {
+    fn clean_entry_set_initial_heading_updates_toml_and_runtime_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -895,23 +896,23 @@ solid = "#00e680"
 
         let entry = workspace.selected();
         assert!(entry.draft_text().contains("initial_heading = 45"));
-        assert_eq!(entry.applied_config().generation.initial_heading, 45.0);
+        assert_eq!(entry.editor_config().generation.initial_heading, Some(45.0));
         assert!(!entry.is_dirty());
     }
 
     #[test]
-    fn clean_entry_set_dimensions_updates_toml_and_applied_config() {
+    fn clean_entry_set_dimensions_updates_toml_and_runtime_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         assert_eq!(
-            workspace.selected().applied_config().generation.dimensions,
+            workspace.selected().editor_config().generation.dimensions,
             Dimensions::TwoD
         );
         clean_mut(&mut workspace)
             .set_dimensions(Dimensions::ThreeD)
             .unwrap();
         assert_eq!(
-            workspace.selected().applied_config().generation.dimensions,
+            workspace.selected().editor_config().generation.dimensions,
             Dimensions::ThreeD
         );
         assert!(
@@ -928,7 +929,7 @@ solid = "#00e680"
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         let rules = vec![('F', "FF".to_string()), ('X', "F+X".to_string())];
         clean_mut(&mut workspace).set_grammar("XF", &rules).unwrap();
-        let generation = &workspace.selected().applied_config().generation;
+        let generation = &workspace.selected().editor_config().generation;
         assert_eq!(generation.axiom, "XF");
         assert_eq!(generation.rules[&'F'], "FF");
         assert_eq!(generation.rules[&'X'], "F+X");
@@ -942,11 +943,11 @@ solid = "#00e680"
         let result = clean_mut(&mut workspace).set_grammar("F@", &[]);
         assert!(result.is_err());
         // Entry left unchanged
-        assert_eq!(workspace.selected().applied_config().generation.axiom, "F");
+        assert_eq!(workspace.selected().editor_config().generation.axiom, "F");
     }
 
     #[test]
-    fn clean_entry_set_background_some_updates_toml_and_applied_config() {
+    fn clean_entry_set_background_some_updates_toml_and_runtime_config() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
@@ -961,7 +962,7 @@ solid = "#00e680"
             Some(Rgb::new(0x1a, 0x33, 0x4d))
         );
         assert_eq!(
-            entry.applied_config().colors.background,
+            runtime_config(entry).colors.background,
             Rgb::new(0x1a, 0x33, 0x4d)
         );
         assert!(!entry.is_dirty());
@@ -978,7 +979,7 @@ solid = "#00e680"
         assert!(!entry.draft_text().contains("background ="));
         assert_eq!(entry.editor_config().colors.background, None);
         assert_eq!(
-            entry.applied_config().colors.background,
+            runtime_config(entry).colors.background,
             lsystem_core::ConfigDefaults::embedded().colors.background
         );
         assert!(!entry.is_dirty());
@@ -993,7 +994,7 @@ solid = "#00e680"
             .set_line_color(LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66)))
             .unwrap();
         assert_eq!(
-            workspace.selected().applied_config().colors.line,
+            runtime_config(workspace.selected()).colors.line,
             LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66))
         );
 
@@ -1005,7 +1006,7 @@ solid = "#00e680"
             })
             .unwrap();
         assert_eq!(
-            workspace.selected().applied_config().colors.line,
+            runtime_config(workspace.selected()).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x1a, 0x33, 0x4d),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
@@ -1019,7 +1020,7 @@ solid = "#00e680"
             })
             .unwrap();
         assert_eq!(
-            workspace.selected().applied_config().colors.line,
+            runtime_config(workspace.selected()).colors.line,
             LineColorConfig::HueCycle {
                 initial: Rgb::new(0x40, 0x80, 0xbf),
             }
@@ -1033,7 +1034,7 @@ solid = "#00e680"
             })
             .unwrap();
         assert_eq!(
-            workspace.selected().applied_config().colors.line,
+            runtime_config(workspace.selected()).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x33, 0x4d, 0x66),
                 end: Rgb::new(0x80, 0x99, 0xb3),
@@ -1221,8 +1222,8 @@ end = "#ffffff"
         assert!(text.contains("turtle.angle = 45.5"));
         assert!(!text.contains("[l-system]"));
         assert!(!text.contains("[turtle]"));
-        assert_eq!(entry.applied_config().generation.iterations, 5);
-        assert_eq!(entry.applied_config().generation.angle, 45.5);
+        assert_eq!(entry.editor_config().generation.iterations, 5);
+        assert_eq!(entry.editor_config().generation.angle, 45.5);
         assert!(!entry.is_dirty());
     }
 
@@ -1259,11 +1260,11 @@ end = "#ffffff"
             Some(Rgb::new(0x1a, 0x33, 0x4d))
         );
         assert_eq!(
-            entry.applied_config().colors.background,
+            runtime_config(entry).colors.background,
             Rgb::new(0x1a, 0x33, 0x4d)
         );
         assert_eq!(
-            entry.applied_config().colors.line,
+            runtime_config(entry).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x66, 0x80, 0x99),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
@@ -1277,7 +1278,7 @@ end = "#ffffff"
         assert!(!entry.draft_text().contains("colors.background"));
         assert_eq!(entry.editor_config().colors.background, None);
         assert_eq!(
-            entry.applied_config().colors.background,
+            runtime_config(entry).colors.background,
             lsystem_core::ConfigDefaults::embedded().colors.background
         );
     }
@@ -1337,7 +1338,7 @@ end = "#ffffff"
             EntryViewMut::Dirty(_) => panic!("entry should be clean after revert"),
         }
         assert_eq!(
-            workspace.selected().applied_config().generation.iterations,
+            workspace.selected().editor_config().generation.iterations,
             3
         );
         assert!(!workspace.selected().is_dirty());
@@ -1348,14 +1349,14 @@ end = "#ffffff"
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
         let previous_text = workspace.selected().draft_text().into_owned();
-        let previous_config = workspace.selected().applied_config().clone();
+        let previous_config = runtime_config(workspace.selected()).clone();
 
         let error = clean_mut(&mut workspace).set_angle(f32::NAN).unwrap_err();
 
         assert!(matches!(error, ConfigError::InvalidAngle(_)));
         let entry = workspace.selected();
         assert_eq!(entry.draft_text(), previous_text);
-        assert_eq!(entry.applied_config(), &previous_config);
+        assert_eq!(runtime_config(entry), previous_config);
         assert!(!entry.is_dirty());
     }
 

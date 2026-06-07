@@ -1,6 +1,6 @@
 use lsystem_core::{
-    ColorConfig, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig,
-    LineColorDefaults, Rgb,
+    ColorDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig, LineColorDefaults,
+    Rgb,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +60,7 @@ impl std::fmt::Display for LineColorMode {
 #[derive(Clone, Copy, Debug)]
 pub struct ColorControlMemory {
     background: Rgb,
+    line_defaults: LineColorDefaults,
     solid: Option<Rgb>,
     gradient: Option<RememberedGradient>,
     hue_cycle: Option<Rgb>,
@@ -73,18 +74,15 @@ struct RememberedGradient {
 }
 
 impl ColorControlMemory {
-    pub fn from_configs(editor: &EditorColorConfig, resolved: &ColorConfig) -> Self {
+    pub fn from_editor_config(editor: &EditorColorConfig, defaults: &ColorDefaults) -> Self {
         let mut memory = Self {
-            background: editor.background.unwrap_or(resolved.background),
+            background: editor.background.unwrap_or(defaults.background),
+            line_defaults: defaults.line,
             solid: None,
             gradient: None,
             hue_cycle: None,
         };
-        memory.remember_line(resolved_line_color_for_controls(
-            editor,
-            resolved,
-            &ConfigDefaults::embedded().colors.line,
-        ));
+        memory.remember_line(line_color_for_controls(editor, &defaults.line));
         memory
     }
 
@@ -97,12 +95,11 @@ impl ColorControlMemory {
     }
 
     pub fn solid_color(&self) -> Rgb {
-        self.solid
-            .unwrap_or(ConfigDefaults::embedded().colors.line.solid)
+        self.solid.unwrap_or(self.line_defaults.solid)
     }
 
     pub fn gradient_fields(&self) -> (Rgb, Rgb, bool) {
-        let defaults = ConfigDefaults::embedded().colors.line.gradient;
+        let defaults = self.line_defaults.gradient;
         let gradient = self.gradient.unwrap_or(RememberedGradient {
             start: defaults.start,
             end: defaults.end,
@@ -113,7 +110,7 @@ impl ColorControlMemory {
 
     pub fn hue_cycle_initial(&self) -> Rgb {
         self.hue_cycle
-            .unwrap_or(ConfigDefaults::embedded().colors.line.hue_cycle.initial)
+            .unwrap_or(self.line_defaults.hue_cycle.initial)
     }
 
     pub fn remember_line(&mut self, line_color: LineColorConfig) {
@@ -158,41 +155,37 @@ impl ColorControlMemory {
 /// not apply runtime-only normalization such as disabling topological-depth
 /// gradients for bracketless grammars. That keeps authored editor state intact
 /// while the runtime `Config` remains optimized for rendering/export.
-pub fn resolved_line_color_for_controls(
+pub fn line_color_for_controls(
     editor: &EditorColorConfig,
-    resolved: &ColorConfig,
     defaults: &LineColorDefaults,
 ) -> LineColorConfig {
     editor
         .line
         .map(|line| line.resolve(defaults))
-        .unwrap_or(resolved.line)
+        .unwrap_or_else(|| defaults.default_line_color())
 }
 
 pub fn selected_line_color_mode(
     editor: &EditorColorConfig,
-    resolved: &ColorConfig,
+    defaults: &LineColorDefaults,
 ) -> LineColorMode {
     editor
         .line
         .as_ref()
         .map(LineColorMode::from_editor_line_color)
         .unwrap_or_else(|| {
-            LineColorMode::from_line_color(&resolved_line_color_for_controls(
-                editor,
-                resolved,
-                &ConfigDefaults::embedded().colors.line,
-            ))
+            LineColorMode::from_line_color(&line_color_for_controls(editor, defaults))
         })
 }
 
 #[cfg(test)]
 mod tests {
     use lsystem_core::{
-        ColorConfig, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig, Rgb,
+        ColorDefaults, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig,
+        Rgb,
     };
 
-    use super::{ColorControlMemory, LineColorMode, resolved_line_color_for_controls};
+    use super::{ColorControlMemory, LineColorMode, line_color_for_controls};
 
     fn default_gradient() -> LineColorConfig {
         let defaults = ConfigDefaults::embedded().colors.line.gradient;
@@ -207,6 +200,135 @@ mod tests {
         LineColorConfig::HueCycle {
             initial: ConfigDefaults::embedded().colors.line.hue_cycle.initial,
         }
+    }
+
+    fn custom_color_defaults() -> ColorDefaults {
+        let mut defaults = ConfigDefaults::embedded().colors;
+        defaults.background = Rgb::new(0x08, 0x10, 0x18);
+        defaults.line.default = lsystem_core::config::DefaultLineColorMode::Gradient;
+        defaults.line.solid = Rgb::new(0x10, 0x20, 0x30);
+        defaults.line.gradient.start = Rgb::new(0x40, 0x50, 0x60);
+        defaults.line.gradient.end = Rgb::new(0x70, 0x80, 0x90);
+        defaults.line.gradient.topological_depth = true;
+        defaults.line.hue_cycle.initial = Rgb::new(0xa0, 0xb0, 0xc0);
+        defaults
+    }
+
+    #[test]
+    fn missing_editor_line_uses_default_line_color_for_controls() {
+        let defaults = custom_color_defaults();
+        assert_eq!(
+            line_color_for_controls(&EditorColorConfig::default(), &defaults.line),
+            defaults.line.default_line_color()
+        );
+    }
+
+    #[test]
+    fn empty_authored_line_modes_resolve_parameters_from_defaults() {
+        let defaults = custom_color_defaults();
+
+        assert_eq!(
+            line_color_for_controls(
+                &EditorColorConfig {
+                    background: None,
+                    line: Some(EditorLineColorConfig::Solid { color: None }),
+                },
+                &defaults.line,
+            ),
+            LineColorConfig::Solid(defaults.line.solid)
+        );
+        assert_eq!(
+            line_color_for_controls(
+                &EditorColorConfig {
+                    background: None,
+                    line: Some(EditorLineColorConfig::Gradient {
+                        start: None,
+                        end: None,
+                        topological_depth: None,
+                    }),
+                },
+                &defaults.line,
+            ),
+            LineColorConfig::Gradient {
+                start: defaults.line.gradient.start,
+                end: defaults.line.gradient.end,
+                topological_depth: defaults.line.gradient.topological_depth,
+            }
+        );
+        assert_eq!(
+            line_color_for_controls(
+                &EditorColorConfig {
+                    background: None,
+                    line: Some(EditorLineColorConfig::HueCycle { initial: None }),
+                },
+                &defaults.line,
+            ),
+            LineColorConfig::HueCycle {
+                initial: defaults.line.hue_cycle.initial,
+            }
+        );
+    }
+
+    #[test]
+    fn color_memory_from_editor_config_initializes_background_from_editor_or_defaults() {
+        let defaults = custom_color_defaults();
+        let default_memory =
+            ColorControlMemory::from_editor_config(&EditorColorConfig::default(), &defaults);
+        assert_eq!(default_memory.background(), defaults.background);
+
+        let override_background = Rgb::new(0xf0, 0xe0, 0xd0);
+        let override_memory = ColorControlMemory::from_editor_config(
+            &EditorColorConfig {
+                background: Some(override_background),
+                line: None,
+            },
+            &defaults,
+        );
+        assert_eq!(override_memory.background(), override_background);
+    }
+
+    #[test]
+    fn color_memory_inactive_line_slots_use_supplied_defaults() {
+        let defaults = custom_color_defaults();
+        let hue_active_memory = ColorControlMemory::from_editor_config(
+            &EditorColorConfig {
+                background: None,
+                line: Some(EditorLineColorConfig::HueCycle {
+                    initial: Some(Rgb::new(0xf0, 0xe0, 0xd0)),
+                }),
+            },
+            &defaults,
+        );
+
+        assert_eq!(
+            hue_active_memory.line_for(LineColorMode::Solid),
+            LineColorConfig::Solid(defaults.line.solid)
+        );
+        assert_eq!(
+            hue_active_memory.line_for(LineColorMode::Gradient),
+            LineColorConfig::Gradient {
+                start: defaults.line.gradient.start,
+                end: defaults.line.gradient.end,
+                topological_depth: defaults.line.gradient.topological_depth,
+            }
+        );
+
+        let solid_active_memory = ColorControlMemory::from_editor_config(
+            &EditorColorConfig {
+                background: None,
+                line: Some(EditorLineColorConfig::Solid {
+                    color: Some(Rgb::new(0xd0, 0xe0, 0xf0)),
+                }),
+            },
+            &defaults,
+        );
+
+        assert_eq!(
+            solid_active_memory.line_for(LineColorMode::HueCycle),
+            LineColorConfig::HueCycle {
+                initial: defaults.line.hue_cycle.initial,
+            }
+        );
     }
 
     #[test]
@@ -256,12 +378,14 @@ mod tests {
     #[test]
     fn color_memory_remembers_solid_across_mode_switch() {
         let solid = LineColorConfig::Solid(Rgb::new(0xff, 0x00, 0x00));
-        let mut memory = ColorControlMemory::from_configs(
-            &EditorColorConfig::default(),
-            &ColorConfig {
-                background: ConfigDefaults::embedded().colors.background,
-                line: solid,
+        let mut memory = ColorControlMemory::from_editor_config(
+            &EditorColorConfig {
+                background: None,
+                line: Some(EditorLineColorConfig::Solid {
+                    color: Some(Rgb::new(0xff, 0x00, 0x00)),
+                }),
             },
+            &ConfigDefaults::embedded().colors,
         );
         memory.remember_line(default_gradient());
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
@@ -269,12 +393,9 @@ mod tests {
 
     #[test]
     fn color_memory_falls_back_to_default_when_slot_unset() {
-        let memory = ColorControlMemory::from_configs(
+        let memory = ColorControlMemory::from_editor_config(
             &EditorColorConfig::default(),
-            &ColorConfig {
-                background: ConfigDefaults::embedded().colors.background,
-                line: LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d)),
-            },
+            &ConfigDefaults::embedded().colors,
         );
         assert_eq!(memory.line_for(LineColorMode::Gradient), default_gradient());
         assert_eq!(
@@ -293,14 +414,6 @@ mod tests {
                 topological_depth: Some(true),
             }),
         };
-        let resolved = ColorConfig {
-            background: ConfigDefaults::embedded().colors.background,
-            line: LineColorConfig::Gradient {
-                start: Rgb::new(0x1a, 0x33, 0x4d),
-                end: Rgb::new(0x80, 0x99, 0xb3),
-                topological_depth: false,
-            },
-        };
 
         let expected = LineColorConfig::Gradient {
             start: Rgb::new(0x1a, 0x33, 0x4d),
@@ -308,15 +421,12 @@ mod tests {
             topological_depth: true,
         };
         assert_eq!(
-            resolved_line_color_for_controls(
-                &editor,
-                &resolved,
-                &ConfigDefaults::embedded().colors.line,
-            ),
+            line_color_for_controls(&editor, &ConfigDefaults::embedded().colors.line),
             expected
         );
         assert_eq!(
-            ColorControlMemory::from_configs(&editor, &resolved).line_for(LineColorMode::Gradient),
+            ColorControlMemory::from_editor_config(&editor, &ConfigDefaults::embedded().colors)
+                .line_for(LineColorMode::Gradient),
             expected
         );
     }
@@ -328,12 +438,16 @@ mod tests {
             end: Rgb::new(0xb3, 0xcc, 0xe6),
             topological_depth: true,
         };
-        let mut memory = ColorControlMemory::from_configs(
-            &EditorColorConfig::default(),
-            &ColorConfig {
-                background: ConfigDefaults::embedded().colors.background,
-                line: topological,
+        let mut memory = ColorControlMemory::from_editor_config(
+            &EditorColorConfig {
+                background: None,
+                line: Some(EditorLineColorConfig::Gradient {
+                    start: Some(Rgb::new(0x1a, 0x33, 0x4d)),
+                    end: Some(Rgb::new(0xb3, 0xcc, 0xe6)),
+                    topological_depth: Some(true),
+                }),
             },
+            &ConfigDefaults::embedded().colors,
         );
         memory.remember_line(LineColorConfig::HueCycle {
             initial: Rgb::new(0xff, 0x00, 0x00),
@@ -345,20 +459,17 @@ mod tests {
     #[test]
     fn color_memory_background_remembered() {
         let bg = Rgb::new(0x1a, 0x33, 0x4d);
-        let mut memory = ColorControlMemory::from_configs(
+        let mut memory = ColorControlMemory::from_editor_config(
             &EditorColorConfig {
                 background: Some(bg),
                 line: None,
             },
-            &ColorConfig {
-                background: ConfigDefaults::embedded().colors.background,
-                line: LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99)),
-            },
+            &ConfigDefaults::embedded().colors,
         );
         assert_eq!(memory.background(), bg);
         assert_eq!(
             memory.line_for(LineColorMode::Solid),
-            LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99))
+            LineColorConfig::Solid(ConfigDefaults::embedded().colors.line.solid)
         );
         let new_bg = Rgb::new(0xe5, 0xcc, 0xb3);
         memory.remember_background(new_bg);

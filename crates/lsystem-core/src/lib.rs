@@ -8,8 +8,8 @@ pub(crate) mod turtle;
 
 pub use alphabet::contains_3d_symbols;
 pub use config::{
-    ColorConfig, Config, ConfigDefaults, ConfigDocument, ConfigError, ConfigSource, Dimensions,
-    EditorColorConfig, EditorConfig, EditorGenerationConfig, EditorLineColorConfig,
+    ColorConfig, ColorDefaults, Config, ConfigDefaults, ConfigDocument, ConfigError, ConfigSource,
+    Dimensions, EditorColorConfig, EditorConfig, EditorGenerationConfig, EditorLineColorConfig,
     GenerationConfig, LineColorConfig, LineColorDefaults, Rgb, RgbError,
 };
 pub use grammar::max_safe_iterations;

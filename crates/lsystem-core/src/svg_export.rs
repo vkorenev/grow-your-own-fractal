@@ -255,7 +255,8 @@ background = "#000000"
         );
         ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap())
             .unwrap()
-            .into()
+            .editor_config()
+            .resolve(crate::ConfigDefaults::embedded())
     }
 
     fn make_empty_config() -> Config {
@@ -282,7 +283,8 @@ solid = "#00e680"
 "##;
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
-            .into()
+            .editor_config()
+            .resolve(crate::ConfigDefaults::embedded())
     }
 
     fn make_config_without_background() -> Config {
@@ -308,7 +310,8 @@ solid = "#ff0000"
 "##;
         ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
             .unwrap()
-            .into()
+            .editor_config()
+            .resolve(crate::ConfigDefaults::embedded())
     }
 
     #[test]

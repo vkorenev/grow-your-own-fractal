@@ -5,7 +5,7 @@ use iced::widget::{
 use iced::{Color, Element, Length, Theme};
 use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
-    HueRotation, HueRotationDirection, LineColorMode, resolved_line_color_for_controls,
+    HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
     selected_line_color_mode,
 };
 use lsystem_core::{ConfigDefaults, EditorColorConfig, LineColorConfig, Rgb};
@@ -48,7 +48,7 @@ impl FractalApp {
             controls = controls
                 .push(text("Apply or Revert the edited config before using controls.").size(13));
         } else {
-            let config = self.selected_config();
+            let editor_config = self.selected_editor_config();
             let editor_colors = &selected_entry.editor_config().colors;
             controls = controls
                 .push(text("Overrides").size(13))
@@ -58,12 +58,20 @@ impl FractalApp {
                     self.iterations,
                     Message::IterationsChanged,
                 ))
-                .push(text(format!("Angle: {:.1}", config.generation.angle)))
+                .push(text(format!(
+                    "Angle: {:.1}",
+                    editor_config.generation.angle
+                )))
                 .push(
-                    slider(1.0..=180.0, config.generation.angle, Message::AngleChanged).step(0.5),
+                    slider(
+                        1.0..=180.0,
+                        editor_config.generation.angle,
+                        Message::AngleChanged,
+                    )
+                    .step(0.5),
                 );
 
-            controls = push_color_controls(controls, editor_colors, config, &self.hue_rotation);
+            controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
 
             controls = controls.push(text("PNG width").size(13)).push(
                 text_input("2048", &self.png_width_text)
@@ -139,11 +147,13 @@ impl FractalApp {
 fn push_color_controls<'a>(
     mut controls: iced::widget::Column<'a, Message>,
     editor_colors: &'a EditorColorConfig,
-    config: &'a lsystem_core::Config,
     hue_rotation: &HueRotation,
 ) -> iced::widget::Column<'a, Message> {
+    let color_defaults = ConfigDefaults::embedded().colors;
     let has_authored_background = editor_colors.background.is_some();
-    let background = config.colors.background;
+    let background = editor_colors
+        .background
+        .unwrap_or(color_defaults.background);
     controls = controls.push(
         checkbox(has_authored_background)
             .label("Background")
@@ -157,12 +167,11 @@ fn push_color_controls<'a>(
         ));
     }
 
-    let line_color = resolved_line_color_for_controls(
+    let line_color = line_color_for_controls(editor_colors, &color_defaults.line);
+    let selected_mode = Some(selected_line_color_mode(
         editor_colors,
-        &config.colors,
-        &ConfigDefaults::embedded().colors.line,
-    );
-    let selected_mode = Some(selected_line_color_mode(editor_colors, &config.colors));
+        &color_defaults.line,
+    ));
     controls = controls.push(text("Line color").size(13)).push(
         pick_list(selected_mode, LineColorMode::ALL, |choice| {
             choice.to_string()

@@ -3,10 +3,12 @@ use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, load_presets,
-    resolved_line_color_for_controls,
+    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
-use lsystem_core::{Config, ConfigDefaults, ConfigError, Dimensions, LineColorConfig, Rgb};
+use lsystem_core::{
+    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorConfig, LineColorConfig,
+    Rgb,
+};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -94,9 +96,9 @@ impl FractalApp {
             .expect("at least one bundled preset should parse");
         let selected_entry = config_workspace.selected();
         let toml_text = selected_entry.draft_text().into_owned();
-        let color_memory = ColorControlMemory::from_configs(
+        let color_memory = ColorControlMemory::from_editor_config(
             &selected_entry.editor_config().colors,
-            &selected_entry.applied_config().colors,
+            &ConfigDefaults::embedded().colors,
         );
 
         let mut app = Self {
@@ -191,8 +193,12 @@ impl FractalApp {
                     .background
                     .is_some()
                 {
-                    self.color_memory
-                        .remember_background(self.selected_config().colors.background);
+                    let background = self
+                        .selected_editor_config()
+                        .colors
+                        .background
+                        .unwrap_or(ConfigDefaults::embedded().colors.background);
+                    self.color_memory.remember_background(background);
                 }
                 let background = if enabled {
                     Some(self.color_memory.background())
@@ -212,9 +218,8 @@ impl FractalApp {
             Message::LineColorModeSelected(mode) => {
                 let current = {
                     let entry = self.config_workspace.selected();
-                    resolved_line_color_for_controls(
+                    line_color_for_controls(
                         &entry.editor_config().colors,
-                        &entry.applied_config().colors,
                         &ConfigDefaults::embedded().colors.line,
                     )
                 };
@@ -258,7 +263,7 @@ impl FractalApp {
                 } = result
                     && self.is_current_generation(generation)
                 {
-                    scene.update_colors(&self.selected_config().colors);
+                    scene.update_colors(&self.render_colors());
                     self.scene = scene;
                     self.scene_pending = false;
                 }
@@ -307,10 +312,7 @@ impl FractalApp {
             Message::ToggleHueRotation => {
                 if self.hue_rotation.is_enabled() {
                     self.reset_hue_rotation();
-                } else if matches!(
-                    self.selected_config().colors.line,
-                    LineColorConfig::HueCycle { .. }
-                ) {
+                } else if matches!(self.control_line_color(), LineColorConfig::HueCycle { .. }) {
                     self.hue_rotation.start();
                 }
                 Task::none()
@@ -328,10 +330,7 @@ impl FractalApp {
                     self.scene
                         .auto_rotate_by(self.auto_rotate_speed * AUTO_ROTATE_DT_SECS);
                 }
-                if self
-                    .hue_rotation
-                    .is_active(&self.selected_config().colors.line)
-                {
+                if self.hue_rotation.is_active(&self.control_line_color()) {
                     self.hue_rotation_phase_degrees = advance_hue_rotation_phase_degrees(
                         self.hue_rotation_phase_degrees,
                         self.hue_rotation.speed_degrees_per_second(),
@@ -355,9 +354,7 @@ impl FractalApp {
     pub(super) fn subscription(&self) -> Subscription<Message> {
         let is_3d = self.scene.is_3d();
         let auto_rotate = self.auto_rotate;
-        let hue_rotation = self
-            .hue_rotation
-            .is_active(&self.selected_config().colors.line);
+        let hue_rotation = self.hue_rotation.is_active(&self.control_line_color());
 
         let key_sub = event::listen_with(|event, status, _window| {
             if status == event::Status::Captured {
@@ -510,8 +507,7 @@ impl FractalApp {
         self.recompute_max_iterations();
         self.iterations = current_iterations.min(self.max_iterations);
 
-        self.scene
-            .update_colors(&self.config_workspace.selected().applied_config().colors);
+        self.scene.update_colors(&self.render_colors());
         self.error = None;
         self.export_status = None;
         Task::none()
@@ -519,9 +515,9 @@ impl FractalApp {
 
     fn reset_color_memory_from_workspace(&mut self) {
         let entry = self.config_workspace.selected();
-        self.color_memory = ColorControlMemory::from_configs(
+        self.color_memory = ColorControlMemory::from_editor_config(
             &entry.editor_config().colors,
-            &entry.applied_config().colors,
+            &ConfigDefaults::embedded().colors,
         );
     }
 
@@ -535,7 +531,7 @@ impl FractalApp {
         let iterations = self
             .config_workspace
             .selected()
-            .applied_config()
+            .editor_config()
             .generation
             .iterations;
         self.recompute_max_iterations();
@@ -543,35 +539,74 @@ impl FractalApp {
     }
 
     fn recompute_max_iterations(&mut self) {
-        let config = self.config_workspace.selected().applied_config();
-        let generation = &config.generation;
+        let generation = &self.config_workspace.selected().editor_config().generation;
         let max_seg = lsystem_renderer::line_renderer::max_segments_for_line_color(
             generation.dimensions,
-            generation.has_stack_directives(),
+            generation.axiom.contains('[')
+                || generation.rules.values().any(|rhs| rhs.contains('[')),
         );
         self.max_iterations =
             lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
     }
 
-    pub(super) fn selected_config(&self) -> &Config {
-        self.config_workspace.selected().applied_config()
+    pub(super) fn selected_editor_config(&self) -> &EditorConfig {
+        self.config_workspace.selected().editor_config()
     }
 
-    fn effective_config(&self) -> Config {
-        let mut config = self.selected_config().clone();
+    fn effective_render_config(&self) -> Config {
+        let mut config = self
+            .selected_editor_config()
+            .resolve(ConfigDefaults::embedded());
         config.generation.iterations = self.iterations;
         config
     }
 
+    fn render_colors(&self) -> ColorConfig {
+        let defaults = ConfigDefaults::embedded();
+        let editor_config = self.selected_editor_config();
+        let generation = &editor_config.generation;
+        let mut line = line_color_for_controls(&editor_config.colors, &defaults.colors.line);
+        let has_stack_directives = generation.axiom.contains('[')
+            || generation.rules.values().any(|rhs| rhs.contains('['));
+        if !has_stack_directives
+            && let LineColorConfig::Gradient {
+                start,
+                end,
+                topological_depth: true,
+            } = line
+        {
+            line = LineColorConfig::Gradient {
+                start,
+                end,
+                topological_depth: false,
+            };
+        }
+
+        ColorConfig {
+            background: editor_config
+                .colors
+                .background
+                .unwrap_or(defaults.colors.background),
+            line,
+        }
+    }
+
+    fn control_line_color(&self) -> LineColorConfig {
+        line_color_for_controls(
+            &self.selected_editor_config().colors,
+            &ConfigDefaults::embedded().colors.line,
+        )
+    }
+
     pub(super) fn effective_is_3d(&self) -> bool {
         matches!(
-            self.selected_config().generation.dimensions,
+            self.selected_editor_config().generation.dimensions,
             Dimensions::ThreeD
         )
     }
 
     fn schedule_scene_generation(&mut self) -> Task<Message> {
-        let config = self.effective_config();
+        let config = self.effective_render_config();
 
         let generation = self
             .scene_generation
@@ -593,7 +628,7 @@ impl FractalApp {
     }
 
     fn export(&mut self, kind: ExportKind) -> Task<Message> {
-        let config = self.effective_config();
+        let config = self.effective_render_config();
         let png_width = if matches!(kind, ExportKind::Png) {
             match self.normalized_png_width() {
                 Ok(width) => width,
@@ -667,15 +702,14 @@ mod tests {
             topological_depth: true,
         };
 
-        let mut memory = ColorControlMemory::from_configs(
+        let mut memory = ColorControlMemory::from_editor_config(
             &lsystem_core::EditorColorConfig {
                 background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
-                line: None,
+                line: Some(lsystem_core::EditorLineColorConfig::Solid {
+                    color: Some(Rgb::new(0x1a, 0x33, 0x4d)),
+                }),
             },
-            &lsystem_core::ColorConfig {
-                background: lsystem_core::ConfigDefaults::embedded().colors.background,
-                line: solid,
-            },
+            &lsystem_core::ConfigDefaults::embedded().colors,
         );
 
         assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
@@ -781,24 +815,26 @@ mod tests {
     }
 
     #[test]
-    fn angle_change_updates_effective_config_from_workspace() {
+    fn angle_change_updates_editor_config_from_workspace() {
         let (mut app, _) = FractalApp::new();
         let _ = app.update(Message::AngleChanged(45.0));
 
-        assert_eq!(app.effective_config().generation.angle, 45.0);
-        assert_eq!(app.selected_config().generation.angle, 45.0);
+        assert_eq!(app.selected_editor_config().generation.angle, 45.0);
     }
 
     #[test]
     fn angle_changed_while_dirty_is_ignored() {
         let (mut app, _) = FractalApp::new();
-        let original_angle = app.selected_config().generation.angle;
+        let original_angle = app.selected_editor_config().generation.angle;
         let modified = format!("{} ", app.config_workspace.selected().draft_text());
         app.config_workspace.selected_mut().set_draft_text(modified);
 
         let _ = app.update(Message::AngleChanged(original_angle + 10.0));
 
-        assert_eq!(app.selected_config().generation.angle, original_angle);
+        assert_eq!(
+            app.selected_editor_config().generation.angle,
+            original_angle
+        );
     }
 
     #[test]
@@ -826,7 +862,7 @@ mod tests {
 
         let _ = app.update(Message::LineColorModeSelected(LineColorMode::Solid));
         assert!(!matches!(
-            app.selected_config().colors.line,
+            app.render_colors().line,
             LineColorConfig::HueCycle { .. }
         ));
 
