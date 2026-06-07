@@ -9,8 +9,8 @@ use lsystem_app_model::{
     selected_line_color_mode,
 };
 use lsystem_core::{
-    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, GenerationConfig, LineColorConfig,
-    Rgb, contains_3d_symbols,
+    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, GenerationConfig,
+    LineColorConfig, Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
