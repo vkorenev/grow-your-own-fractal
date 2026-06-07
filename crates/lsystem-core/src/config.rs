@@ -366,7 +366,9 @@ impl EditorConfig {
         Config {
             name: self.name.clone(),
             generation,
-            colors: self.colors.resolve(&self.generation, &defaults.colors),
+            colors: self
+                .colors
+                .resolve_for_render(&self.generation, &defaults.colors),
         }
     }
 }
@@ -424,7 +426,7 @@ pub struct EditorColorConfig {
 }
 
 impl EditorColorConfig {
-    pub fn resolve(
+    pub fn resolve_for_render(
         &self,
         generation: &EditorGenerationConfig,
         defaults: &ColorDefaults,
@@ -440,13 +442,13 @@ impl EditorColorConfig {
 }
 
 /// Validated line-color fields as authored, before mode defaults are applied.
+///
+/// `Solid` always carries the authored color, matching TOML which always provides
+/// a hex string. `Gradient` and `HueCycle` fields are `Option` because those
+/// parameters may be omitted in TOML, inheriting from defaults at resolve time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorLineColorConfig {
-    Solid {
-        /// `None` is used by editor/default controls to select solid mode while
-        /// inheriting the solid color from defaults.
-        color: Option<Rgb>,
-    },
+    Solid(Rgb),
     Gradient {
         /// `None` inherits the gradient start color from defaults.
         start: Option<Rgb>,
@@ -464,7 +466,7 @@ pub enum EditorLineColorConfig {
 impl EditorLineColorConfig {
     pub fn resolve(self, defaults: &LineColorDefaults) -> LineColorConfig {
         match self {
-            Self::Solid { color } => LineColorConfig::Solid(color.unwrap_or(defaults.solid)),
+            Self::Solid(color) => LineColorConfig::Solid(color),
             Self::Gradient {
                 start,
                 end,
@@ -733,9 +735,7 @@ impl TryFrom<RawLineColor> for EditorLineColorConfig {
 
     fn try_from(raw: RawLineColor) -> Result<Self, Self::Error> {
         Ok(match raw {
-            RawLineColor::Solid(raw) => Self::Solid {
-                color: Some(parse_rgb(raw, "colors.line.solid")?),
-            },
+            RawLineColor::Solid(raw) => Self::Solid(parse_rgb(raw, "colors.line.solid")?),
             RawLineColor::Gradient {
                 start,
                 end,

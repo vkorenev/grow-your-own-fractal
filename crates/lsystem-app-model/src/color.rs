@@ -23,7 +23,7 @@ impl LineColorMode {
 
     pub fn from_editor_line_color(line_color: &EditorLineColorConfig) -> Self {
         match line_color {
-            EditorLineColorConfig::Solid { .. } => Self::Solid,
+            EditorLineColorConfig::Solid(_) => Self::Solid,
             EditorLineColorConfig::Gradient { .. } => Self::Gradient,
             EditorLineColorConfig::HueCycle { .. } => Self::HueCycle,
         }
@@ -264,16 +264,6 @@ mod tests {
             line_color_for_controls(
                 &EditorColorConfig {
                     background: None,
-                    line: Some(EditorLineColorConfig::Solid { color: None }),
-                },
-                &defaults.line,
-            ),
-            LineColorConfig::Solid(defaults.line.solid)
-        );
-        assert_eq!(
-            line_color_for_controls(
-                &EditorColorConfig {
-                    background: None,
                     line: Some(EditorLineColorConfig::Gradient {
                         start: None,
                         end: None,
@@ -349,9 +339,7 @@ mod tests {
         let solid_active_memory = ColorControlMemory::from_editor_config(
             &EditorColorConfig {
                 background: None,
-                line: Some(EditorLineColorConfig::Solid {
-                    color: Some(Rgb::new(0xd0, 0xe0, 0xf0)),
-                }),
+                line: Some(EditorLineColorConfig::Solid(Rgb::new(0xd0, 0xe0, 0xf0))),
             },
             &defaults,
         );
@@ -414,9 +402,7 @@ mod tests {
         let mut memory = ColorControlMemory::from_editor_config(
             &EditorColorConfig {
                 background: None,
-                line: Some(EditorLineColorConfig::Solid {
-                    color: Some(Rgb::new(0xff, 0x00, 0x00)),
-                }),
+                line: Some(EditorLineColorConfig::Solid(Rgb::new(0xff, 0x00, 0x00))),
             },
             &ConfigDefaults::embedded().colors,
         );

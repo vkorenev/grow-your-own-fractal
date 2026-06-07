@@ -1533,7 +1533,7 @@ fn color_config_for_render(
     colors: &EditorColorConfig,
     generation: &EditorGenerationConfig,
 ) -> ColorConfig {
-    colors.resolve(generation, &ConfigDefaults::embedded().colors)
+    colors.resolve_for_render(generation, &ConfigDefaults::embedded().colors)
 }
 
 fn update_clean_config(

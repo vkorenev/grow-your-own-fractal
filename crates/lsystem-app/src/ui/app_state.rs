@@ -550,7 +550,7 @@ impl FractalApp {
 
     fn render_colors(&self) -> ColorConfig {
         let editor_config = self.selected_editor_config();
-        editor_config.colors.resolve(
+        editor_config.colors.resolve_for_render(
             &editor_config.generation,
             &ConfigDefaults::embedded().colors,
         )
@@ -670,9 +670,9 @@ mod tests {
         let mut memory = ColorControlMemory::from_editor_config(
             &lsystem_core::EditorColorConfig {
                 background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
-                line: Some(lsystem_core::EditorLineColorConfig::Solid {
-                    color: Some(Rgb::new(0x1a, 0x33, 0x4d)),
-                }),
+                line: Some(lsystem_core::EditorLineColorConfig::Solid(Rgb::new(
+                    0x1a, 0x33, 0x4d,
+                ))),
             },
             &lsystem_core::ConfigDefaults::embedded().colors,
         );
