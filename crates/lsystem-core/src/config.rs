@@ -188,7 +188,7 @@ impl LineColorConfig {
 /// Topological-depth gradients are equivalent to traversal gradients when the
 /// grammar has no stack directives, so render/export paths can avoid allocating
 /// depth-aware geometry in that case.
-pub fn normalize_line_color_for_render(
+fn normalize_line_color_for_render(
     line: LineColorConfig,
     has_stack_directives: bool,
 ) -> LineColorConfig {
@@ -2515,6 +2515,32 @@ solid = "#00e680"
             LineColorConfig::HueCycle {
                 initial: hex("#ff0000"),
             }
+        );
+    }
+
+    #[test]
+    fn editor_resolve_normalizes_default_topological_gradient_for_bracketless() {
+        // When colors.line is absent and the default line color is a topological
+        // gradient, bracketless grammars should still get traversal-gradient rendering.
+        let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "")
+            .replace("[colors.line]\nsolid = \"#00e680\"", "");
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        assert_eq!(
+            doc.editor_config().colors.line,
+            None,
+            "absent colors.line must be preserved in editor config"
+        );
+        let mut defaults = custom_defaults();
+        defaults.colors.line.default = DefaultLineColorMode::Gradient;
+        let resolved = doc.editor_config().resolve(&defaults);
+        assert_eq!(
+            resolved.colors.line,
+            LineColorConfig::Gradient {
+                start: defaults.colors.line.gradient.start,
+                end: defaults.colors.line.gradient.end,
+                topological_depth: false,
+            },
+            "default topological gradient must be normalized for bracketless grammar"
         );
     }
 
