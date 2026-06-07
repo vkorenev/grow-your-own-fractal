@@ -3,8 +3,7 @@ use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls,
-    line_color_for_render, load_presets,
+    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{
     ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorConfig, LineColorConfig,
@@ -562,20 +561,11 @@ impl FractalApp {
     }
 
     fn render_colors(&self) -> ColorConfig {
-        let defaults = ConfigDefaults::embedded();
         let editor_config = self.selected_editor_config();
-
-        ColorConfig {
-            background: editor_config
-                .colors
-                .background
-                .unwrap_or(defaults.colors.background),
-            line: line_color_for_render(
-                &editor_config.colors,
-                &editor_config.generation,
-                &defaults.colors.line,
-            ),
-        }
+        editor_config.colors.resolve(
+            &editor_config.generation,
+            &ConfigDefaults::embedded().colors,
+        )
     }
 
     fn control_line_color(&self) -> LineColorConfig {

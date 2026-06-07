@@ -377,20 +377,10 @@ impl EditorConfig {
                 .unwrap_or_else(|| defaults.turtle.initial_heading()),
             rules: self.generation.rules.clone(),
         };
-        let line = self
-            .colors
-            .line
-            .map(|line| line.resolve(&defaults.colors.line))
-            .unwrap_or_else(|| defaults.colors.line.default_line_color());
-        let line = normalize_line_color_for_render(line, self.generation.has_stack_directives());
-
         Config {
             name: self.name.clone(),
             generation,
-            colors: ColorConfig {
-                background: self.colors.background.unwrap_or(defaults.colors.background),
-                line,
-            },
+            colors: self.colors.resolve(&self.generation, &defaults.colors),
         }
     }
 }
@@ -423,6 +413,22 @@ pub struct EditorColorConfig {
     /// Authored line-color mode, or `None` when `colors.line` is absent and
     /// resolution should use `defaults.colors.line.default_line_color()`.
     pub line: Option<EditorLineColorConfig>,
+}
+
+impl EditorColorConfig {
+    pub fn resolve(
+        &self,
+        generation: &EditorGenerationConfig,
+        defaults: &ColorDefaults,
+    ) -> ColorConfig {
+        let background = self.background.unwrap_or(defaults.background);
+        let line = self
+            .line
+            .map(|line| line.resolve(&defaults.line))
+            .unwrap_or_else(|| defaults.line.default_line_color());
+        let line = normalize_line_color_for_render(line, generation.has_stack_directives());
+        ColorConfig { background, line }
+    }
 }
 
 /// Validated line-color fields as authored, before mode defaults are applied.

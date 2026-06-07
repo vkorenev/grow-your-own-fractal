@@ -9,8 +9,7 @@ pub use animation::{
     HueRotation, HueRotationDirection, advance_hue_rotation_phase_degrees,
 };
 pub use color::{
-    ColorControlMemory, LineColorMode, line_color_for_controls, line_color_for_render,
-    selected_line_color_mode,
+    ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
 };
 pub use config_workspace::{
     CleanMut, ConfigEntry, ConfigWorkspace, ConfigWorkspaceError, DirtyMut, EntryViewMut,

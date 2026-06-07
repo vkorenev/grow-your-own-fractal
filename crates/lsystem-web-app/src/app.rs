@@ -5,8 +5,8 @@ use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls,
-    line_color_for_render, load_presets, selected_line_color_mode,
+    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    selected_line_color_mode,
 };
 use lsystem_core::{
     ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorColorConfig,
@@ -1551,12 +1551,7 @@ fn color_config_for_render(
     colors: &EditorColorConfig,
     generation: &EditorGenerationConfig,
 ) -> ColorConfig {
-    let defaults = ConfigDefaults::embedded();
-
-    ColorConfig {
-        background: colors.background.unwrap_or(defaults.colors.background),
-        line: line_color_for_render(colors, generation, &defaults.colors.line),
-    }
+    colors.resolve(generation, &ConfigDefaults::embedded().colors)
 }
 
 fn update_clean_config(

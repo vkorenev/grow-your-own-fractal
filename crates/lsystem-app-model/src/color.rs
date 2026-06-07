@@ -1,6 +1,6 @@
 use lsystem_core::{
-    ColorDefaults, EditorColorConfig, EditorGenerationConfig, EditorLineColorConfig,
-    LineColorConfig, LineColorDefaults, Rgb, normalize_line_color_for_render,
+    ColorDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig, LineColorDefaults,
+    Rgb,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,22 +170,6 @@ pub fn line_color_for_controls(
         .unwrap_or_else(|| defaults.default_line_color())
 }
 
-/// Returns the normalized line color for render/export paths.
-///
-/// This starts from the same default-resolved line color that controls display,
-/// then applies runtime-only normalization such as disabling topological-depth
-/// gradients for bracketless grammars.
-pub fn line_color_for_render(
-    editor: &EditorColorConfig,
-    generation: &EditorGenerationConfig,
-    defaults: &LineColorDefaults,
-) -> LineColorConfig {
-    normalize_line_color_for_render(
-        line_color_for_controls(editor, defaults),
-        generation.has_stack_directives(),
-    )
-}
-
 /// Returns the line-color picker mode represented by authored color state.
 ///
 /// When the config omits `colors.line`, the selected mode follows the default
@@ -205,16 +189,13 @@ pub fn selected_line_color_mode(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use lsystem_core::{
-        ColorDefaults, ConfigDefaults, Dimensions, EditorColorConfig, EditorGenerationConfig,
-        EditorLineColorConfig, LineColorConfig, Rgb,
+        ColorDefaults, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig,
+        Rgb,
     };
 
     use super::{
-        ColorControlMemory, LineColorMode, line_color_for_controls, line_color_for_render,
-        selected_line_color_mode,
+        ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
     };
 
     fn default_gradient() -> LineColorConfig {
@@ -242,21 +223,6 @@ mod tests {
         defaults.line.gradient.topological_depth = true;
         defaults.line.hue_cycle.initial = Rgb::new(0xa0, 0xb0, 0xc0);
         defaults
-    }
-
-    fn editor_generation(axiom: &str, rules: Vec<(char, &str)>) -> EditorGenerationConfig {
-        EditorGenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: axiom.to_string(),
-            iterations: 1,
-            angle: 90.0,
-            step: None,
-            initial_heading: None,
-            rules: rules
-                .into_iter()
-                .map(|(symbol, rhs)| (symbol, rhs.to_string()))
-                .collect::<BTreeMap<_, _>>(),
-        }
     }
 
     #[test]
@@ -289,62 +255,6 @@ mod tests {
         assert_eq!(
             selected_line_color_mode(&editor, &defaults.line),
             LineColorMode::HueCycle
-        );
-    }
-
-    #[test]
-    fn line_color_for_render_normalizes_bracketless_topological_gradient() {
-        let defaults = custom_color_defaults();
-        let editor = EditorColorConfig {
-            background: None,
-            line: Some(EditorLineColorConfig::Gradient {
-                start: Some(Rgb::new(0x01, 0x02, 0x03)),
-                end: Some(Rgb::new(0x04, 0x05, 0x06)),
-                topological_depth: Some(true),
-            }),
-        };
-
-        assert_eq!(
-            line_color_for_controls(&editor, &defaults.line),
-            LineColorConfig::Gradient {
-                start: Rgb::new(0x01, 0x02, 0x03),
-                end: Rgb::new(0x04, 0x05, 0x06),
-                topological_depth: true,
-            }
-        );
-        assert_eq!(
-            line_color_for_render(&editor, &editor_generation("F", vec![]), &defaults.line),
-            LineColorConfig::Gradient {
-                start: Rgb::new(0x01, 0x02, 0x03),
-                end: Rgb::new(0x04, 0x05, 0x06),
-                topological_depth: false,
-            }
-        );
-    }
-
-    #[test]
-    fn line_color_for_render_preserves_topological_gradient_for_bracketed_grammar() {
-        let defaults = custom_color_defaults();
-        let editor = EditorColorConfig {
-            background: None,
-            line: Some(EditorLineColorConfig::Gradient {
-                start: Some(Rgb::new(0x01, 0x02, 0x03)),
-                end: Some(Rgb::new(0x04, 0x05, 0x06)),
-                topological_depth: Some(true),
-            }),
-        };
-
-        assert_eq!(
-            line_color_for_render(
-                &editor,
-                &editor_generation("F", vec![('F', "F[+F]F")]),
-                &defaults.line
-            ),
-            LineColorConfig::Gradient {
-                start: Rgb::new(0x01, 0x02, 0x03),
-                end: Rgb::new(0x04, 0x05, 0x06),
-                topological_depth: true,
-            }
         );
     }
 
