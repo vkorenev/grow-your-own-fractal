@@ -7,5 +7,7 @@ license.workspace = true
 [dependencies]
 lsystem-core = { workspace = true }
 log.workspace = true
+serde.workspace = true
 thiserror.workspace = true
+toml_edit.workspace = true
 include_dir.workspace = true

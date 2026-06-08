@@ -4,13 +4,12 @@ use crate::renderer::{CanvasRenderer, RenderStatus};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
-    selected_line_color_mode,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EntryViewMut, HueRotation,
+    HueRotationDirection, LineColorMode, ParseConfigError, advance_hue_rotation_phase_degrees,
+    line_color_for_controls, load_presets, selected_line_color_mode,
 };
 use lsystem_core::{
-    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, GenerationConfig,
-    LineColorConfig, Rgb, contains_3d_symbols,
+    ColorConfig, Config, Dimensions, GenerationConfig, LineColorConfig, Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
@@ -63,10 +62,7 @@ pub(crate) fn App() -> impl IntoView {
             .with(|editor| line_color_for_controls(editor, &ConfigDefaults::embedded().colors.line))
     });
     let color_config = Memo::new(move |_| {
-        editor_color_config.with(|colors| {
-            editor_generation_config
-                .with(|generation| colors.resolve(generation, &ConfigDefaults::embedded().colors))
-        })
+        editor_color_config.with(|colors| colors.resolve(&ConfigDefaults::embedded().colors))
     });
     let iterations = Memo::new(move |_| {
         let max = max_iterations.get();
@@ -1547,7 +1543,7 @@ fn update_clean_config(
     config_workspace: RwSignal<ConfigWorkspace>,
     error: RwSignal<Option<String>>,
     event: &'static str,
-    update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+    update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
 ) -> bool {
     let result = config_workspace.try_update(|workspace| {
         let entry = workspace.selected_mut();

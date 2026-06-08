@@ -2360,7 +2360,9 @@ dependencies = [
  "include_dir",
  "log",
  "lsystem-core",
+ "serde",
  "thiserror 2.0.18",
+ "toml_edit",
 ]
 
 [[package]]
@@ -2368,9 +2370,7 @@ name = "lsystem-core"
 version = "0.1.0"
 dependencies = [
  "glam 0.33.0",
- "serde",
  "thiserror 2.0.18",
- "toml_edit",
 ]
 
 [[package]]

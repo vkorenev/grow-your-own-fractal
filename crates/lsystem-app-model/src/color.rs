@@ -1,7 +1,7 @@
-use lsystem_core::{
-    ColorDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig, LineColorDefaults,
-    Rgb,
-};
+use lsystem_core::{LineColorConfig, Rgb};
+
+use crate::config_defaults::{ColorDefaults, LineColorDefaults};
+use crate::editor_config::{EditorColorConfig, EditorLineColorConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineColorMode {
@@ -187,10 +187,10 @@ pub fn selected_line_color_mode(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{
-        ColorDefaults, ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorConfig,
-        Rgb,
-    };
+    use lsystem_core::{LineColorConfig, Rgb};
+
+    use crate::config_defaults::{ColorDefaults, ConfigDefaults, DefaultLineColorMode};
+    use crate::editor_config::{EditorColorConfig, EditorLineColorConfig};
 
     use super::{
         ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
@@ -214,7 +214,7 @@ mod tests {
     fn custom_color_defaults() -> ColorDefaults {
         let mut defaults = ConfigDefaults::embedded().colors;
         defaults.background = Rgb::new(0x08, 0x10, 0x18);
-        defaults.line.default = lsystem_core::config::DefaultLineColorMode::Gradient;
+        defaults.line.default = DefaultLineColorMode::Gradient;
         defaults.line.solid = Rgb::new(0x10, 0x20, 0x30);
         defaults.line.gradient.start = Rgb::new(0x40, 0x50, 0x60);
         defaults.line.gradient.end = Rgb::new(0x70, 0x80, 0x90);

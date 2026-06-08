@@ -3,12 +3,13 @@ use iced::widget::{
     text_input,
 };
 use iced::{Color, Element, Length, Theme};
+use lsystem_app_model::{ConfigDefaults, EditorColorConfig};
 use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
     selected_line_color_mode,
 };
-use lsystem_core::{ConfigDefaults, EditorColorConfig, LineColorConfig, Rgb};
+use lsystem_core::{LineColorConfig, Rgb};
 
 use super::app_state::{FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};

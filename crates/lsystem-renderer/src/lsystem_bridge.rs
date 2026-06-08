@@ -316,38 +316,41 @@ pub fn geometry_to_depth_segments_3d(
 
 /// Builds the GPU color uniform for the selected line color mode.
 ///
-/// Gradients with `topological_depth` enabled use `max_topological_depth` for
-/// interpolation; traversal gradients use `total_segments`.
+/// Pass `max_topological_depth` as `Some(n)` when the caller uploaded
+/// topological-depth segment instances; only then is the `DepthGradient` mode
+/// valid. `None` forces a plain traversal gradient even when `topological_depth`
+/// is authored in the config, keeping the vertex shader mode consistent with the
+/// uploaded geometry.
 pub fn color_params_from_config(
     line: &LineColorConfig,
     total_segments: u32,
-    max_topological_depth: u32,
+    max_topological_depth: Option<u32>,
 ) -> ColorParams {
     match *line {
         LineColorConfig::Solid(c) => ColorParams::solid(total_segments, rgb_to_rgba(c.to_array())),
         LineColorConfig::Gradient {
             start,
             end,
-            topological_depth: false,
-        } => ColorParams::gradient(
-            total_segments,
-            rgb_to_rgba(start.to_array()),
-            rgb_to_rgba(end.to_array()),
-        ),
+            topological_depth,
+        } => {
+            if topological_depth && let Some(max_depth) = max_topological_depth {
+                return ColorParams::depth_gradient(
+                    total_segments,
+                    max_depth,
+                    rgb_to_rgba(start.to_array()),
+                    rgb_to_rgba(end.to_array()),
+                );
+            }
+            ColorParams::gradient(
+                total_segments,
+                rgb_to_rgba(start.to_array()),
+                rgb_to_rgba(end.to_array()),
+            )
+        }
         LineColorConfig::HueCycle { initial } => {
             let (hue_start, saturation, value) = initial.to_hsv();
             ColorParams::hue_cycle(total_segments, hue_start, saturation, value)
         }
-        LineColorConfig::Gradient {
-            start,
-            end,
-            topological_depth: true,
-        } => ColorParams::depth_gradient(
-            total_segments,
-            max_topological_depth,
-            rgb_to_rgba(start.to_array()),
-            rgb_to_rgba(end.to_array()),
-        ),
     }
 }
 
@@ -406,7 +409,7 @@ mod tests {
     #[test]
     fn solid_maps_to_mode_solid_with_color() {
         let color = Rgb::new(0x1a, 0x33, 0x4d);
-        let params = color_params_from_config(&LineColorConfig::Solid(color), 10, 0);
+        let params = color_params_from_config(&LineColorConfig::Solid(color), 10, None);
 
         assert_eq!(params.total_segments, 10);
         assert_eq!(params.color_start, hex_rgba(color));
@@ -424,7 +427,7 @@ mod tests {
                 topological_depth: false,
             },
             7,
-            0,
+            None,
         );
 
         assert_eq!(params.total_segments, 7);
@@ -437,7 +440,7 @@ mod tests {
     fn hue_cycle_initial_rgb_maps_to_hsv_uniforms() {
         // Rgb::new(0x40, 0x80, 0x80) ≈ (0.251, 0.502, 0.502) → hue≈180°, sat≈0.5, val≈0.502
         let initial = Rgb::new(0x40, 0x80, 0x80);
-        let params = color_params_from_config(&LineColorConfig::HueCycle { initial }, 9, 0);
+        let params = color_params_from_config(&LineColorConfig::HueCycle { initial }, 9, None);
 
         assert_eq!(params.total_segments, 9);
         let (hue, sat, val) = initial.to_hsv();
@@ -457,7 +460,7 @@ mod tests {
                 topological_depth: true,
             },
             5,
-            3,
+            Some(3),
         );
 
         assert_eq!(params.total_segments, 5);
@@ -477,10 +480,41 @@ mod tests {
                 topological_depth: true,
             },
             1,
-            0,
+            Some(0),
         );
 
         assert_eq!(params.max_topological_depth, 0);
+    }
+
+    #[test]
+    fn depth_gradient_without_depth_geometry_falls_back_to_traversal() {
+        let start = Rgb::new(0x1a, 0x33, 0x4d);
+        let end = Rgb::new(0xb3, 0xcc, 0xe5);
+        let traversal_params = color_params_from_config(
+            &LineColorConfig::Gradient {
+                start,
+                end,
+                topological_depth: true,
+            },
+            5,
+            None,
+        );
+        let expected = color_params_from_config(
+            &LineColorConfig::Gradient {
+                start,
+                end,
+                topological_depth: false,
+            },
+            5,
+            None,
+        );
+        assert_eq!(traversal_params.color_start, expected.color_start);
+        assert_eq!(traversal_params.color_end, expected.color_end);
+        assert_eq!(traversal_params.total_segments, expected.total_segments);
+        assert_eq!(
+            traversal_params.max_topological_depth,
+            expected.max_topological_depth
+        );
     }
 
     fn cfg(axiom: &str) -> GenerationConfig {

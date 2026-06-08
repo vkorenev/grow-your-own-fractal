@@ -1,7 +1,8 @@
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
-use lsystem_core::{ColorConfig, Config, ConfigDefaults, Dimensions};
+use lsystem_app_model::ConfigDefaults;
+use lsystem_core::{ColorConfig, Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -59,10 +60,9 @@ impl SceneGeometry {
         segment_count as u32
     }
 
-    fn max_topological_depth(&self) -> u32 {
+    fn max_topological_depth(&self) -> Option<u32> {
         match self {
-            Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
-            Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::TwoD { .. } | Self::ThreeD { .. } => None,
             Self::TwoDWithTopologicalDepth {
                 max_topological_depth,
                 ..
@@ -70,7 +70,7 @@ impl SceneGeometry {
             | Self::ThreeDWithTopologicalDepth {
                 max_topological_depth,
                 ..
-            } => *max_topological_depth,
+            } => Some(*max_topological_depth),
         }
     }
 }
@@ -99,11 +99,7 @@ impl Scene {
             bounds_max: data.bounds_max,
         };
         Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-            ),
+            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
             geometry,
             hue_offset_degrees: 0.0,
             background: colors.background.to_array(),
@@ -125,11 +121,7 @@ impl Scene {
             bounds_max: data.bounds_max,
         };
         Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-            ),
+            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
             geometry,
             hue_offset_degrees: 0.0,
             background: colors.background.to_array(),

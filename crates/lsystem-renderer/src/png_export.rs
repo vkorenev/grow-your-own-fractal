@@ -105,21 +105,23 @@ pub async fn render_png(
         Dimensions::ThreeD => {
             let height = width; // square viewport for perspective
             let mut pipeline = LinePipeline3D::new(device, FORMAT);
-            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth() {
+            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth()
+                && config.generation.has_stack_directives()
+            {
                 let data = geometry_to_depth_segments_3d(
                     lsystem_core::generate_3d_with_topological_depth(&config.generation),
                 );
                 let color_params = color_params_from_config(
                     &colors.line,
                     data.segments.len() as u32,
-                    data.max_topological_depth(),
+                    Some(data.max_topological_depth()),
                 );
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             } else {
                 let data = geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
                 let color_params =
-                    color_params_from_config(&colors.line, data.segments.len() as u32, 0);
+                    color_params_from_config(&colors.line, data.segments.len() as u32, None);
                 pipeline.upload(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             };
@@ -141,21 +143,23 @@ pub async fn render_png(
         }
         Dimensions::TwoD => {
             let mut pipeline = LinePipeline2D::new(device, FORMAT);
-            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth() {
+            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth()
+                && config.generation.has_stack_directives()
+            {
                 let data = geometry_to_depth_segments(
                     lsystem_core::generate_with_topological_depth(&config.generation),
                 );
                 let color_params = color_params_from_config(
                     &colors.line,
                     data.segments.len() as u32,
-                    data.max_topological_depth(),
+                    Some(data.max_topological_depth()),
                 );
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             } else {
                 let data = geometry_to_segments(lsystem_core::generate(&config.generation));
                 let color_params =
-                    color_params_from_config(&colors.line, data.segments.len() as u32, 0);
+                    color_params_from_config(&colors.line, data.segments.len() as u32, None);
                 pipeline.upload(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             };

@@ -9,6 +9,4 @@ svg = []
 
 [dependencies]
 glam = { workspace = true, features = ["bytemuck"] }
-serde = { version = "1", features = ["derive"] }
 thiserror.workspace = true
-toml_edit = { version = "0.25.11", features = ["serde"] }

@@ -97,9 +97,9 @@ mise.toml                   pins trunk version (read by CI and local dev)
 .github/workflows/deploy.yml deploys the Leptos web app to GitHub Pages
 
 crates/
-  lsystem-core/             L-system config parsing, validation, expansion, turtle geometry, SVG export
+  lsystem-core/             L-system grammar expansion, turtle geometry, SVG export; runtime config types (no TOML/serde deps)
   lsystem-renderer/         toolkit-independent wgpu camera, line rendering, and PNG export
-  lsystem-app-model/        toolkit-free shared app model (config workspace, presets, color, animation, utilities)
+  lsystem-app-model/        toolkit-free shared app model (TOML config parsing/validation/defaults, config workspace, presets, color, animation, utilities)
   lsystem-app/              Iced native app and retained Iced web app
   lsystem-web-app/          browser-first Leptos app with DOM controls and GPU canvas
 

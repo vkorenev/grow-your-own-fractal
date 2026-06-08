@@ -48,10 +48,9 @@ impl ActiveScene {
         segment_count as u32
     }
 
-    fn max_topological_depth(&self) -> u32 {
+    fn max_topological_depth(&self) -> Option<u32> {
         match self {
-            Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
-            Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::TwoD { .. } | Self::ThreeD { .. } => None,
             Self::TwoDWithTopologicalDepth {
                 max_topological_depth,
                 ..
@@ -59,7 +58,7 @@ impl ActiveScene {
             | Self::ThreeDWithTopologicalDepth {
                 max_topological_depth,
                 ..
-            } => *max_topological_depth,
+            } => Some(*max_topological_depth),
         }
     }
 }

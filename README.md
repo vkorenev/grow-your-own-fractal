@@ -121,7 +121,7 @@ Built-in defaults use the same property paths as config TOML for
 `colors.line.solid`, `colors.line.gradient.*`, and
 `colors.line.hue_cycle.initial`. Regular L-System configs still select exactly
 one `colors.line` mode. Omitting `colors.line` selects the built-in default
-mode. See `crates/lsystem-core/src/defaults.toml` for the default values.
+mode. See `crates/lsystem-app-model/src/defaults.toml` for the default values.
 Unknown keys are rejected.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so
