@@ -37,7 +37,7 @@ impl ConfigDefaults {
         })
     }
 
-    pub(crate) fn parse(toml_str: &str) -> Result<Self, ParseConfigError> {
+    fn parse(toml_str: &str) -> Result<Self, ParseConfigError> {
         let raw = toml_edit::de::from_str::<RawDefaults>(toml_str)?;
         Ok(raw.try_into()?)
     }

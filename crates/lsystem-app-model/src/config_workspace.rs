@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use lsystem_core::{ConfigError, Dimensions, LineColorConfig, Rgb};
+use lsystem_core::{Dimensions, LineColorConfig, Rgb};
 
 use crate::config_defaults::ParseConfigError;
 use crate::editor_config::{ConfigDocument, ConfigSource, EditorConfig};
@@ -18,9 +18,6 @@ pub enum ConfigWorkspaceError {
 
     #[error("duplicate config entry name `{0}`")]
     DuplicateName(String),
-
-    #[error(transparent)]
-    Config(#[from] ConfigError),
 
     #[error(transparent)]
     ParseConfig(#[from] ParseConfigError),
@@ -167,7 +164,7 @@ impl ConfigWorkspace {
     /// document. Returns a borrow of the selected entry on success; the returned entry
     /// is always clean (`is_dirty() == false`). If the entry has no pending draft, this
     /// is a no-op and returns the unchanged entry. Returns
-    /// [`ConfigWorkspaceError::Config`] on parse or validation failure and
+    /// [`ConfigWorkspaceError::ParseConfig`] on parse or validation failure and
     /// [`ConfigWorkspaceError::DuplicateName`] if the draft renames the entry to a name
     /// already used elsewhere in the workspace. Failure leaves workspace state untouched.
     pub fn apply(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
@@ -400,6 +397,8 @@ impl DirtyMut<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use lsystem_core::ConfigError;
 
     use crate::config_defaults::ConfigDefaults;
 

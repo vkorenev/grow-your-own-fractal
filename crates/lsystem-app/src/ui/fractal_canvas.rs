@@ -74,6 +74,13 @@ impl SceneGeometry {
             } => *max_topological_depth,
         }
     }
+
+    fn has_depth_geometry(&self) -> bool {
+        matches!(
+            self,
+            Self::TwoDWithTopologicalDepth { .. } | Self::ThreeDWithTopologicalDepth { .. }
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -104,6 +111,7 @@ impl Scene {
                 &colors.line,
                 geometry.total_segments(),
                 geometry.max_topological_depth(),
+                false,
             ),
             geometry,
             hue_offset_degrees: 0.0,
@@ -130,6 +138,7 @@ impl Scene {
                 &colors.line,
                 geometry.total_segments(),
                 geometry.max_topological_depth(),
+                false,
             ),
             geometry,
             hue_offset_degrees: 0.0,
@@ -158,6 +167,7 @@ impl Scene {
                 &colors.line,
                 geometry.total_segments(),
                 geometry.max_topological_depth(),
+                true,
             ),
             geometry,
             hue_offset_degrees: 0.0,
@@ -186,6 +196,7 @@ impl Scene {
                 &colors.line,
                 geometry.total_segments(),
                 geometry.max_topological_depth(),
+                true,
             ),
             geometry,
             hue_offset_degrees: 0.0,
@@ -280,6 +291,7 @@ impl Scene {
             &colors.line,
             total_segments,
             self.geometry.max_topological_depth(),
+            self.geometry.has_depth_geometry(),
         );
         self.hue_offset_degrees = 0.0;
         self.background = colors.background.to_array();

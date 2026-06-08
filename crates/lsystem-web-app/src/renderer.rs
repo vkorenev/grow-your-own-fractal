@@ -62,6 +62,13 @@ impl ActiveScene {
             } => *max_topological_depth,
         }
     }
+
+    fn has_depth_geometry(&self) -> bool {
+        matches!(
+            self,
+            Self::TwoDWithTopologicalDepth { .. } | Self::ThreeDWithTopologicalDepth { .. }
+        )
+    }
 }
 
 pub struct CanvasRenderer {
@@ -184,6 +191,7 @@ impl CanvasRenderer {
             &colors.line,
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
+            self.scene.has_depth_geometry(),
         );
         self.hue_offset_degrees = 0.0;
         let [r, g, b] = colors.background.to_array();
@@ -206,6 +214,7 @@ impl CanvasRenderer {
             &colors.line,
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
+            self.scene.has_depth_geometry(),
         );
         let [r, g, b] = colors.background.to_array();
         self.background = wgpu::Color {
