@@ -278,10 +278,21 @@ impl CanvasRenderer {
         client_x: f32,
         client_y: f32,
     ) -> RenderStatus {
-        let (_, _, dpr) = sync_canvas_size(canvas);
         let rect = canvas.get_bounding_client_rect();
         let pixel_delta_y = normalize_wheel_delta_y(delta_y, delta_mode, rect.height() as f32);
         let factor = 1.1_f32.powf(-pixel_delta_y / 100.0);
+        self.zoom_by_factor_and_render(canvas, factor, client_x, client_y)
+    }
+
+    pub fn zoom_by_factor_and_render(
+        &mut self,
+        canvas: &web_sys::HtmlCanvasElement,
+        factor: f32,
+        client_x: f32,
+        client_y: f32,
+    ) -> RenderStatus {
+        let (_, _, dpr) = sync_canvas_size(canvas);
+        let rect = canvas.get_bounding_client_rect();
         match &self.scene {
             ActiveScene::TwoD {
                 bounds_min,
