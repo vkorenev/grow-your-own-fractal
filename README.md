@@ -84,7 +84,7 @@ background = "#000000"   # optional hex color
 [colors.line]
 solid = "#00e680"  # scalar solid line color
 
-# Omit [colors.line] entirely to use the built-in default line mode.
+# Omit [colors.line] entirely to use the built-in solid line color.
 
 # gradient example:
 # [colors.line.gradient]
@@ -120,8 +120,9 @@ Built-in defaults use the same property paths as config TOML for
 `turtle.step`, `turtle.initial_heading`, `colors.background`,
 `colors.line.solid`, `colors.line.gradient.*`, and
 `colors.line.hue_cycle.initial`. Regular L-System configs still select exactly
-one `colors.line` mode. Omitting `colors.line` selects the built-in default
-mode. See `crates/lsystem-app-model/src/defaults.toml` for the default values.
+one `colors.line` mode. Omitting `colors.line` always uses the built-in solid
+line color. See `crates/lsystem-app-model/src/defaults.toml` for the default
+values.
 Unknown keys are rejected.
 
 Whitespace inside `axiom` and rule strings is stripped before processing, so

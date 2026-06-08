@@ -6,7 +6,6 @@ initial_heading = 0.0
 background = "#000000"
 
 [colors.line]
-default = "solid"
 solid = "#00e680"
 
 [colors.line.gradient]

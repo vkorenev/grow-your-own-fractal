@@ -2,7 +2,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
-use lsystem_core::{ConfigError, LineColorConfig, Rgb};
+use lsystem_core::{ConfigError, Rgb};
 
 /// Error type for TOML parse and validation failures.
 ///
@@ -74,34 +74,9 @@ pub struct ColorDefaults {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineColorDefaults {
-    pub default: DefaultLineColorMode,
     pub solid: Rgb,
     pub gradient: GradientDefaults,
     pub hue_cycle: HueCycleDefaults,
-}
-
-impl LineColorDefaults {
-    pub fn default_line_color(self) -> LineColorConfig {
-        match self.default {
-            DefaultLineColorMode::Solid => LineColorConfig::Solid(self.solid),
-            DefaultLineColorMode::Gradient => LineColorConfig::Gradient {
-                start: self.gradient.start,
-                end: self.gradient.end,
-                topological_depth: self.gradient.topological_depth,
-            },
-            DefaultLineColorMode::HueCycle => LineColorConfig::HueCycle {
-                initial: self.hue_cycle.initial,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DefaultLineColorMode {
-    Solid,
-    Gradient,
-    HueCycle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,8 +119,6 @@ struct RawColorDefaults {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawLineColorDefaults {
-    #[serde(rename = "default")]
-    default_mode: DefaultLineColorMode,
     solid: String,
     gradient: RawGradientDefaults,
     hue_cycle: RawHueCycleDefaults,
@@ -179,7 +152,6 @@ impl TryFrom<RawDefaults> for ConfigDefaults {
             colors: ColorDefaults {
                 background: parse_rgb(raw.colors.background, "colors.background")?,
                 line: LineColorDefaults {
-                    default: raw.colors.line.default_mode,
                     solid: parse_rgb(raw.colors.line.solid, "colors.line.solid")?,
                     gradient: GradientDefaults {
                         start: parse_rgb(
@@ -281,6 +253,7 @@ impl Visitor<'_> for NumberVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lsystem_core::LineColorConfig;
 
     fn hex(s: &str) -> Rgb {
         Rgb::try_from(s).unwrap()
@@ -292,7 +265,6 @@ mod tests {
             colors: ColorDefaults {
                 background: hex("#112233"),
                 line: LineColorDefaults {
-                    default: DefaultLineColorMode::Solid,
                     solid: hex("#445566"),
                     gradient: GradientDefaults {
                         start: hex("#123456"),
@@ -314,11 +286,6 @@ mod tests {
         assert_eq!(defaults.turtle.step(), 1.0);
         assert_eq!(defaults.turtle.initial_heading(), 0.0);
         assert_eq!(defaults.colors.background, hex("#000000"));
-        assert_eq!(defaults.colors.line.default, DefaultLineColorMode::Solid);
-        assert_eq!(
-            defaults.colors.line.default_line_color(),
-            LineColorConfig::Solid(hex("#00e680"))
-        );
         assert_eq!(defaults.colors.line.solid, hex("#00e680"));
         assert_eq!(
             defaults.colors.line.gradient,
@@ -332,35 +299,6 @@ mod tests {
             defaults.colors.line.hue_cycle,
             HueCycleDefaults {
                 initial: hex("#e60000"),
-            }
-        );
-    }
-
-    #[test]
-    fn parses_custom_default_line_color_modes_from_toml() {
-        let gradient_toml = DEFAULTS_TOML
-            .replace("default = \"solid\"", "default = \"gradient\"")
-            .replace("start = \"#0d590d\"", "start = \"#112233\"")
-            .replace("end = \"#99e61a\"", "end = \"#445566\"")
-            .replace("topological_depth = false", "topological_depth = true");
-        let defaults = ConfigDefaults::parse(&gradient_toml).unwrap();
-        assert_eq!(
-            defaults.colors.line.default_line_color(),
-            LineColorConfig::Gradient {
-                start: hex("#112233"),
-                end: hex("#445566"),
-                topological_depth: true,
-            }
-        );
-
-        let hue_cycle_toml = DEFAULTS_TOML
-            .replace("default = \"solid\"", "default = \"hue_cycle\"")
-            .replace("initial = \"#e60000\"", "initial = \"#abcdef\"");
-        let defaults = ConfigDefaults::parse(&hue_cycle_toml).unwrap();
-        assert_eq!(
-            defaults.colors.line.default_line_color(),
-            LineColorConfig::HueCycle {
-                initial: hex("#abcdef"),
             }
         );
     }

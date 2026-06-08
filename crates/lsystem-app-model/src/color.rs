@@ -167,29 +167,25 @@ pub fn line_color_for_controls(
     editor
         .line
         .map(|line| line.resolve(defaults))
-        .unwrap_or_else(|| defaults.default_line_color())
+        .unwrap_or(LineColorConfig::Solid(defaults.solid))
 }
 
 /// Returns the line-color picker mode represented by authored color state.
 ///
-/// When the config omits `colors.line`, the selected mode follows the default
-/// line-color mode rather than assuming solid.
-pub fn selected_line_color_mode(
-    editor: &EditorColorConfig,
-    defaults: &LineColorDefaults,
-) -> LineColorMode {
+/// When the config omits `colors.line`, the selected mode defaults to `Solid`.
+pub fn selected_line_color_mode(editor: &EditorColorConfig) -> LineColorMode {
     editor
         .line
         .as_ref()
         .map(LineColorMode::from_editor_line_color)
-        .unwrap_or_else(|| LineColorMode::from_line_color(&defaults.default_line_color()))
+        .unwrap_or(LineColorMode::Solid)
 }
 
 #[cfg(test)]
 mod tests {
     use lsystem_core::{LineColorConfig, Rgb};
 
-    use crate::config_defaults::{ColorDefaults, ConfigDefaults, DefaultLineColorMode};
+    use crate::config_defaults::{ColorDefaults, ConfigDefaults};
     use crate::editor_config::{EditorColorConfig, EditorLineColorConfig};
 
     use super::{
@@ -214,7 +210,6 @@ mod tests {
     fn custom_color_defaults() -> ColorDefaults {
         let mut defaults = ConfigDefaults::embedded().colors;
         defaults.background = Rgb::new(0x08, 0x10, 0x18);
-        defaults.line.default = DefaultLineColorMode::Gradient;
         defaults.line.solid = Rgb::new(0x10, 0x20, 0x30);
         defaults.line.gradient.start = Rgb::new(0x40, 0x50, 0x60);
         defaults.line.gradient.end = Rgb::new(0x70, 0x80, 0x90);
@@ -224,36 +219,30 @@ mod tests {
     }
 
     #[test]
-    fn missing_editor_line_uses_default_line_color_for_controls() {
+    fn missing_editor_line_uses_solid_color_for_controls() {
         let defaults = custom_color_defaults();
         assert_eq!(
             line_color_for_controls(&EditorColorConfig::default(), &defaults.line),
-            defaults.line.default_line_color()
+            LineColorConfig::Solid(defaults.line.solid)
         );
     }
 
     #[test]
-    fn selected_line_color_mode_uses_default_mode_when_line_is_absent() {
-        let defaults = custom_color_defaults();
-
+    fn selected_line_color_mode_uses_solid_when_line_is_absent() {
         assert_eq!(
-            selected_line_color_mode(&EditorColorConfig::default(), &defaults.line),
-            LineColorMode::Gradient
+            selected_line_color_mode(&EditorColorConfig::default()),
+            LineColorMode::Solid
         );
     }
 
     #[test]
     fn selected_line_color_mode_uses_authored_mode_when_present() {
-        let defaults = custom_color_defaults();
         let editor = EditorColorConfig {
             background: None,
             line: Some(EditorLineColorConfig::HueCycle { initial: None }),
         };
 
-        assert_eq!(
-            selected_line_color_mode(&editor, &defaults.line),
-            LineColorMode::HueCycle
-        );
+        assert_eq!(selected_line_color_mode(&editor), LineColorMode::HueCycle);
     }
 
     #[test]
