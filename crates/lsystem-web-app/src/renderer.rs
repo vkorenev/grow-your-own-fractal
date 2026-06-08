@@ -48,10 +48,9 @@ impl ActiveScene {
         segment_count as u32
     }
 
-    fn max_topological_depth(&self) -> u32 {
+    fn max_topological_depth(&self) -> Option<u32> {
         match self {
-            Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
-            Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::TwoD { .. } | Self::ThreeD { .. } => None,
             Self::TwoDWithTopologicalDepth {
                 max_topological_depth,
                 ..
@@ -59,15 +58,8 @@ impl ActiveScene {
             | Self::ThreeDWithTopologicalDepth {
                 max_topological_depth,
                 ..
-            } => *max_topological_depth,
+            } => Some(*max_topological_depth),
         }
-    }
-
-    fn has_depth_geometry(&self) -> bool {
-        matches!(
-            self,
-            Self::TwoDWithTopologicalDepth { .. } | Self::ThreeDWithTopologicalDepth { .. }
-        )
     }
 }
 
@@ -191,7 +183,6 @@ impl CanvasRenderer {
             &colors.line,
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
-            self.scene.has_depth_geometry(),
         );
         self.hue_offset_degrees = 0.0;
         let [r, g, b] = colors.background.to_array();
@@ -214,7 +205,6 @@ impl CanvasRenderer {
             &colors.line,
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
-            self.scene.has_depth_geometry(),
         );
         let [r, g, b] = colors.background.to_array();
         self.background = wgpu::Color {

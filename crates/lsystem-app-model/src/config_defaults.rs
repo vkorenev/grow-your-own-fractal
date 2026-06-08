@@ -96,7 +96,8 @@ impl LineColorDefaults {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DefaultLineColorMode {
     Solid,
     Gradient,
@@ -144,18 +145,10 @@ struct RawColorDefaults {
 #[serde(deny_unknown_fields)]
 struct RawLineColorDefaults {
     #[serde(rename = "default")]
-    default_mode: RawDefaultLineColorMode,
+    default_mode: DefaultLineColorMode,
     solid: String,
     gradient: RawGradientDefaults,
     hue_cycle: RawHueCycleDefaults,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RawDefaultLineColorMode {
-    Solid,
-    Gradient,
-    HueCycle,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,7 +179,7 @@ impl TryFrom<RawDefaults> for ConfigDefaults {
             colors: ColorDefaults {
                 background: parse_rgb(raw.colors.background, "colors.background")?,
                 line: LineColorDefaults {
-                    default: raw.colors.line.default_mode.into(),
+                    default: raw.colors.line.default_mode,
                     solid: parse_rgb(raw.colors.line.solid, "colors.line.solid")?,
                     gradient: GradientDefaults {
                         start: parse_rgb(
@@ -208,16 +201,6 @@ impl TryFrom<RawDefaults> for ConfigDefaults {
     }
 }
 
-impl From<RawDefaultLineColorMode> for DefaultLineColorMode {
-    fn from(mode: RawDefaultLineColorMode) -> Self {
-        match mode {
-            RawDefaultLineColorMode::Solid => Self::Solid,
-            RawDefaultLineColorMode::Gradient => Self::Gradient,
-            RawDefaultLineColorMode::HueCycle => Self::HueCycle,
-        }
-    }
-}
-
 // --- Shared validation helpers (used by editor_config.rs as well) ---
 
 pub(crate) fn validate_step(step: f32) -> Result<f32, ConfigError> {
@@ -234,9 +217,9 @@ pub(crate) fn validate_initial_heading(initial_heading: f32) -> Result<f32, Conf
     Ok(initial_heading)
 }
 
-// --- Shared helper ---
+// --- Shared helpers (also used by editor_config.rs) ---
 
-fn parse_rgb(s: String, field: &str) -> Result<Rgb, ConfigError> {
+pub(crate) fn parse_rgb(s: String, field: &str) -> Result<Rgb, ConfigError> {
     s.parse::<Rgb>().map_err(|_| ConfigError::InvalidRgb {
         field: field.into(),
         value: s,
@@ -245,7 +228,7 @@ fn parse_rgb(s: String, field: &str) -> Result<Rgb, ConfigError> {
 
 // --- Custom number deserializer (needed for f64/integer support in TOML) ---
 
-fn deserialize_number<'de, D>(deserializer: D) -> Result<f64, D::Error>
+pub(crate) fn deserialize_number<'de, D>(deserializer: D) -> Result<f64, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -253,7 +236,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TomlNumber(f64);
+pub(crate) struct TomlNumber(pub(crate) f64);
 
 impl<'de> Deserialize<'de> for TomlNumber {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

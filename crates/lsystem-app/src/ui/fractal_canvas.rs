@@ -60,10 +60,9 @@ impl SceneGeometry {
         segment_count as u32
     }
 
-    fn max_topological_depth(&self) -> u32 {
+    fn max_topological_depth(&self) -> Option<u32> {
         match self {
-            Self::TwoD { segments, .. } => segments.len().saturating_sub(1) as u32,
-            Self::ThreeD { segments, .. } => segments.len().saturating_sub(1) as u32,
+            Self::TwoD { .. } | Self::ThreeD { .. } => None,
             Self::TwoDWithTopologicalDepth {
                 max_topological_depth,
                 ..
@@ -71,15 +70,8 @@ impl SceneGeometry {
             | Self::ThreeDWithTopologicalDepth {
                 max_topological_depth,
                 ..
-            } => *max_topological_depth,
+            } => Some(*max_topological_depth),
         }
-    }
-
-    fn has_depth_geometry(&self) -> bool {
-        matches!(
-            self,
-            Self::TwoDWithTopologicalDepth { .. } | Self::ThreeDWithTopologicalDepth { .. }
-        )
     }
 }
 
@@ -107,12 +99,7 @@ impl Scene {
             bounds_max: data.bounds_max,
         };
         Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-                false,
-            ),
+            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
             geometry,
             hue_offset_degrees: 0.0,
             background: colors.background.to_array(),
@@ -134,12 +121,7 @@ impl Scene {
             bounds_max: data.bounds_max,
         };
         Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-                false,
-            ),
+            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
             geometry,
             hue_offset_degrees: 0.0,
             background: colors.background.to_array(),
@@ -167,7 +149,6 @@ impl Scene {
                 &colors.line,
                 geometry.total_segments(),
                 geometry.max_topological_depth(),
-                true,
             ),
             geometry,
             hue_offset_degrees: 0.0,
@@ -196,7 +177,6 @@ impl Scene {
                 &colors.line,
                 geometry.total_segments(),
                 geometry.max_topological_depth(),
-                true,
             ),
             geometry,
             hue_offset_degrees: 0.0,
@@ -291,7 +271,6 @@ impl Scene {
             &colors.line,
             total_segments,
             self.geometry.max_topological_depth(),
-            self.geometry.has_depth_geometry(),
         );
         self.hue_offset_degrees = 0.0;
         self.background = colors.background.to_array();

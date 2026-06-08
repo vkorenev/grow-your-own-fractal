@@ -114,15 +114,14 @@ pub async fn render_png(
                 let color_params = color_params_from_config(
                     &colors.line,
                     data.segments.len() as u32,
-                    data.max_topological_depth(),
-                    true,
+                    Some(data.max_topological_depth()),
                 );
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             } else {
                 let data = geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
                 let color_params =
-                    color_params_from_config(&colors.line, data.segments.len() as u32, 0, false);
+                    color_params_from_config(&colors.line, data.segments.len() as u32, None);
                 pipeline.upload(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             };
@@ -153,15 +152,14 @@ pub async fn render_png(
                 let color_params = color_params_from_config(
                     &colors.line,
                     data.segments.len() as u32,
-                    data.max_topological_depth(),
-                    true,
+                    Some(data.max_topological_depth()),
                 );
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             } else {
                 let data = geometry_to_segments(lsystem_core::generate(&config.generation));
                 let color_params =
-                    color_params_from_config(&colors.line, data.segments.len() as u32, 0, false);
+                    color_params_from_config(&colors.line, data.segments.len() as u32, None);
                 pipeline.upload(device, queue, &data.segments, color_params);
                 (data.bounds_min, data.bounds_max)
             };

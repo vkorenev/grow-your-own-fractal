@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer};
 use toml_edit::{DocumentMut, Item, Table, Value, value};
 
@@ -10,8 +9,8 @@ use lsystem_core::{
 };
 
 use crate::config_defaults::{
-    ColorDefaults, ConfigDefaults, LineColorDefaults, ParseConfigError, validate_initial_heading,
-    validate_step,
+    ColorDefaults, ConfigDefaults, LineColorDefaults, ParseConfigError, TomlNumber,
+    deserialize_number, parse_rgb, validate_initial_heading, validate_step,
 };
 
 /// Validated L-system configuration exactly as authored, before defaults are applied.
@@ -327,74 +326,17 @@ pub(crate) fn validate_angle(angle: f32) -> Result<f32, ConfigError> {
     Ok(angle)
 }
 
-fn parse_rgb(s: String, field: &str) -> Result<Rgb, ConfigError> {
-    s.parse::<Rgb>().map_err(|_| ConfigError::InvalidRgb {
-        field: field.into(),
-        value: s,
-    })
-}
-
 fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) -> bool {
     axiom.contains('[') || rules.values().any(|rhs| rhs.contains('['))
 }
 
 // --- Custom number deserializers ---
 
-fn deserialize_number<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(TomlNumber::deserialize(deserializer)?.0)
-}
-
 fn deserialize_optional_number<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Option::<TomlNumber>::deserialize(deserializer).map(|number| number.map(|number| number.0))
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TomlNumber(f64);
-
-impl<'de> Deserialize<'de> for TomlNumber {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(NumberVisitor)
-    }
-}
-
-struct NumberVisitor;
-
-impl Visitor<'_> for NumberVisitor {
-    type Value = TomlNumber;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a TOML integer or float")
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(TomlNumber(value))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(TomlNumber(value as f64))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(TomlNumber(value as f64))
-    }
+    Option::<TomlNumber>::deserialize(deserializer).map(|n| n.map(|n| n.0))
 }
 
 // --- Format-preserving TOML source ---
@@ -1619,7 +1561,7 @@ solid = "#00e680"
             ),
         ];
 
-        for (_mode, replacement, expected_field) in cases {
+        for (_, replacement, expected_field) in cases {
             let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
             let toml = toml.replace("[colors.line]\nsolid = \"#00e680\"", replacement);
             let err = parse_config(&toml).unwrap_err();
