@@ -987,10 +987,7 @@ pub(crate) fn App() -> impl IntoView {
                         prop:value=move || {
                             editor_color_config
                                 .with(|editor| {
-                                    selected_line_color_mode(
-                                        editor,
-                                        &ConfigDefaults::embedded().colors.line,
-                                    )
+                                    selected_line_color_mode(editor)
                                 })
                                 .key()
                                 .to_string()

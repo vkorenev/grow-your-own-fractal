@@ -169,10 +169,7 @@ fn push_color_controls<'a>(
     }
 
     let line_color = line_color_for_controls(editor_colors, &color_defaults.line);
-    let selected_mode = Some(selected_line_color_mode(
-        editor_colors,
-        &color_defaults.line,
-    ));
+    let selected_mode = Some(selected_line_color_mode(editor_colors));
     controls = controls.push(text("Line color").size(13)).push(
         pick_list(selected_mode, LineColorMode::ALL, |choice| {
             choice.to_string()

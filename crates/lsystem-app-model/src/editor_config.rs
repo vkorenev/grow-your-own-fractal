@@ -80,7 +80,7 @@ impl EditorGenerationConfig {
 pub struct EditorColorConfig {
     pub background: Option<Rgb>,
     /// Authored line-color mode, or `None` when `colors.line` is absent and
-    /// resolution should use `defaults.colors.line.default_line_color()`.
+    /// resolution should use `LineColorConfig::Solid(defaults.colors.line.solid)`.
     pub line: Option<EditorLineColorConfig>,
 }
 
@@ -90,7 +90,7 @@ impl EditorColorConfig {
         let line = self
             .line
             .map(|line| line.resolve(&defaults.line))
-            .unwrap_or_else(|| defaults.line.default_line_color());
+            .unwrap_or_else(|| LineColorConfig::Solid(defaults.line.solid));
         ColorConfig { background, line }
     }
 }
@@ -606,7 +606,6 @@ mod tests {
             colors: crate::config_defaults::ColorDefaults {
                 background: hex("#112233"),
                 line: LineColorDefaults {
-                    default: crate::config_defaults::DefaultLineColorMode::Solid,
                     solid: hex("#445566"),
                     gradient: GradientDefaults {
                         start: hex("#123456"),
@@ -864,7 +863,7 @@ solid = "#00e680"
         );
         assert_eq!(
             resolve_doc(&doc).colors.line,
-            ConfigDefaults::embedded().colors.line.default_line_color()
+            LineColorConfig::Solid(ConfigDefaults::embedded().colors.line.solid)
         );
     }
 
@@ -1057,7 +1056,7 @@ solid = "#00e680"
 
         assert_eq!(
             cfg.colors.line,
-            ConfigDefaults::embedded().colors.line.default_line_color()
+            LineColorConfig::Solid(ConfigDefaults::embedded().colors.line.solid)
         );
     }
 
@@ -1947,32 +1946,6 @@ solid = "#00e680"
             LineColorConfig::HueCycle {
                 initial: hex("#ff0000"),
             }
-        );
-    }
-
-    #[test]
-    fn editor_resolve_preserves_default_topological_gradient_for_bracketless() {
-        // When colors.line is absent and the default line color is a topological
-        // gradient, bracketless grammars faithfully preserve it (no normalization).
-        let toml = test_toml(Dimensions::TwoD, "F-F++F-F", 1, "60.0", "1.0", "0.0", "")
-            .replace("[colors.line]\nsolid = \"#00e680\"", "");
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
-        assert_eq!(
-            doc.editor_config().colors.line,
-            None,
-            "absent colors.line must be preserved in editor config"
-        );
-        let mut defaults = custom_defaults();
-        defaults.colors.line.default = crate::config_defaults::DefaultLineColorMode::Gradient;
-        let resolved = doc.editor_config().resolve(&defaults, u32::MAX);
-        assert_eq!(
-            resolved.colors.line,
-            LineColorConfig::Gradient {
-                start: defaults.colors.line.gradient.start,
-                end: defaults.colors.line.gradient.end,
-                topological_depth: true,
-            },
-            "faithful resolve must preserve default topological_depth = true"
         );
     }
 
