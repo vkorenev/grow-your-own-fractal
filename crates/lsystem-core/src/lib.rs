@@ -6,11 +6,9 @@ pub mod config;
 pub mod grammar;
 pub(crate) mod turtle;
 
-pub use alphabet::contains_3d_symbols;
+pub use alphabet::{contains_3d_symbols, validate_bracket_balance, validate_symbols};
 pub use config::{
-    ColorConfig, ColorDefaults, Config, ConfigDefaults, ConfigDocument, ConfigError, ConfigSource,
-    Dimensions, EditorColorConfig, EditorConfig, EditorGenerationConfig, EditorLineColorConfig,
-    GenerationConfig, LineColorConfig, LineColorDefaults, Rgb, RgbError,
+    ColorConfig, Config, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb, RgbError,
 };
 pub use grammar::max_safe_iterations;
 

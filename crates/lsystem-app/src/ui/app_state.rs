@@ -2,13 +2,11 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigWorkspace, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorConfig, EntryViewMut,
+    HueRotation, HueRotationDirection, LineColorMode, ParseConfigError,
+    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
-use lsystem_core::{
-    ColorConfig, Config, ConfigDefaults, ConfigError, Dimensions, EditorConfig, LineColorConfig,
-    Rgb,
-};
+use lsystem_core::{ColorConfig, Config, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -445,7 +443,7 @@ impl FractalApp {
     fn update_clean_config(
         &mut self,
         event: &'static str,
-        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
     ) -> Task<Message> {
         self.update_clean_entry(
             event,
@@ -459,7 +457,7 @@ impl FractalApp {
     fn update_clean_color_config(
         &mut self,
         event: &'static str,
-        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
     ) -> Task<Message> {
         self.update_clean_entry(event, update, Self::refresh_after_clean_color_update)
     }
@@ -469,7 +467,7 @@ impl FractalApp {
     fn update_clean_entry(
         &mut self,
         event: &'static str,
-        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ConfigError>,
+        update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
         on_success: impl FnOnce(&mut Self) -> Task<Message>,
     ) -> Task<Message> {
         match self.config_workspace.selected_mut().view_mut() {
@@ -547,10 +545,9 @@ impl FractalApp {
 
     fn render_colors(&self) -> ColorConfig {
         let editor_config = self.selected_editor_config();
-        editor_config.colors.resolve(
-            &editor_config.generation,
-            &ConfigDefaults::embedded().colors,
-        )
+        editor_config
+            .colors
+            .resolve(&ConfigDefaults::embedded().colors)
     }
 
     fn control_line_color(&self) -> LineColorConfig {
@@ -665,18 +662,18 @@ mod tests {
         };
 
         let mut memory = ColorControlMemory::from_editor_config(
-            &lsystem_core::EditorColorConfig {
+            &lsystem_app_model::EditorColorConfig {
                 background: Some(Rgb::new(0xcc, 0xcc, 0xcc)),
-                line: Some(lsystem_core::EditorLineColorConfig::Solid(Rgb::new(
+                line: Some(lsystem_app_model::EditorLineColorConfig::Solid(Rgb::new(
                     0x1a, 0x33, 0x4d,
                 ))),
             },
-            &lsystem_core::ConfigDefaults::embedded().colors,
+            &lsystem_app_model::ConfigDefaults::embedded().colors,
         );
 
         assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
-        let defaults = lsystem_core::ConfigDefaults::embedded().colors.line;
+        let defaults = lsystem_app_model::ConfigDefaults::embedded().colors.line;
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
             LineColorConfig::Gradient {
@@ -720,7 +717,11 @@ mod tests {
     }
 
     #[test]
-    fn render_colors_normalizes_bracketless_topological_gradient() {
+    fn render_colors_preserves_topological_depth_for_bracketless_grammar() {
+        // After removing the normalize_line_color_for_render boundary leak, render_colors()
+        // faithfully returns the authored color — topological_depth: true is preserved even
+        // for bracketless grammars. Callers that allocate geometry decide independently via
+        // `config.colors.line.needs_topological_depth() && config.generation.has_stack_directives()`.
         let (mut app, _) = FractalApp::new();
         let EntryViewMut::Clean(mut clean) = app.config_workspace.selected_mut().view_mut() else {
             panic!("initial config entry should be clean");
@@ -743,12 +744,13 @@ mod tests {
                 topological_depth: true,
             }
         );
+        // render_colors() is now a faithful resolve — no normalization.
         assert_eq!(
             app.render_colors().line,
             LineColorConfig::Gradient {
                 start,
                 end,
-                topological_depth: false,
+                topological_depth: true,
             }
         );
     }

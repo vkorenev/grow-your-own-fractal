@@ -3,9 +3,10 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use lsystem_core::{
-    ConfigDocument, ConfigError, ConfigSource, Dimensions, EditorConfig, LineColorConfig, Rgb,
-};
+use lsystem_core::{ConfigError, Dimensions, LineColorConfig, Rgb};
+
+use crate::config_defaults::ParseConfigError;
+use crate::editor_config::{ConfigDocument, ConfigSource, EditorConfig};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -20,6 +21,9 @@ pub enum ConfigWorkspaceError {
 
     #[error(transparent)]
     Config(#[from] ConfigError),
+
+    #[error(transparent)]
+    ParseConfig(#[from] ParseConfigError),
 }
 
 #[derive(Debug, Clone)]
@@ -309,7 +313,7 @@ impl ConfigEntry {
     fn update_last_applied_source(
         &mut self,
         update: impl FnOnce(&mut ConfigSource),
-    ) -> Result<(), ConfigError> {
+    ) -> Result<(), ParseConfigError> {
         debug_assert!(self.draft.is_none(), "clean view should imply no draft");
         let mut source = self.last_applied.source().clone();
         update(&mut source);
@@ -317,7 +321,7 @@ impl ConfigEntry {
         Ok(())
     }
 
-    fn rename_in_place(&mut self, new_name: &str) -> Result<(), ConfigError> {
+    fn rename_in_place(&mut self, new_name: &str) -> Result<(), ParseConfigError> {
         let mut source = self.last_applied.source().clone();
         source.set_name(new_name);
         self.last_applied = ConfigDocument::try_from(source)?;
@@ -345,22 +349,22 @@ impl ConfigEntry {
 }
 
 impl CleanMut<'_> {
-    pub fn set_iterations(&mut self, iterations: u32) -> Result<(), ConfigError> {
+    pub fn set_iterations(&mut self, iterations: u32) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_iterations(iterations))
     }
 
-    pub fn set_angle(&mut self, angle: f32) -> Result<(), ConfigError> {
+    pub fn set_angle(&mut self, angle: f32) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_angle(angle))
     }
 
-    pub fn set_initial_heading(&mut self, initial_heading: f32) -> Result<(), ConfigError> {
+    pub fn set_initial_heading(&mut self, initial_heading: f32) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_initial_heading(initial_heading))
     }
 
-    pub fn set_dimensions(&mut self, dimensions: Dimensions) -> Result<(), ConfigError> {
+    pub fn set_dimensions(&mut self, dimensions: Dimensions) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_dimensions(dimensions))
     }
@@ -369,17 +373,17 @@ impl CleanMut<'_> {
         &mut self,
         axiom: &str,
         rules: &[(char, String)],
-    ) -> Result<(), ConfigError> {
+    ) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_grammar(axiom, rules))
     }
 
-    pub fn set_background(&mut self, background: Option<Rgb>) -> Result<(), ConfigError> {
+    pub fn set_background(&mut self, background: Option<Rgb>) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_background(background))
     }
 
-    pub fn set_line_color(&mut self, line_color: LineColorConfig) -> Result<(), ConfigError> {
+    pub fn set_line_color(&mut self, line_color: LineColorConfig) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_line_color(&line_color))
     }
@@ -396,6 +400,8 @@ impl DirtyMut<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::config_defaults::ConfigDefaults;
 
     fn config_text(name: &str, axiom: &str, angle: f32) -> String {
         format!(
@@ -488,7 +494,7 @@ solid = "#00e680"
     fn runtime_config(entry: &ConfigEntry) -> lsystem_core::Config {
         entry
             .editor_config()
-            .resolve(lsystem_core::ConfigDefaults::embedded(), u32::MAX)
+            .resolve(ConfigDefaults::embedded(), u32::MAX)
     }
 
     #[test]
@@ -527,7 +533,7 @@ solid = "#00e680"
         let error = workspace.apply().unwrap_err();
         assert!(matches!(
             error,
-            ConfigWorkspaceError::Config(ConfigError::TomlParse(_))
+            ConfigWorkspaceError::ParseConfig(ParseConfigError::TomlParse(_))
         ));
 
         assert_eq!(runtime_config(workspace.selected()), previous_config);
@@ -546,7 +552,9 @@ solid = "#00e680"
 
         assert!(matches!(
             error,
-            ConfigWorkspaceError::Config(ConfigError::UnmatchedOpen { .. })
+            ConfigWorkspaceError::ParseConfig(ParseConfigError::Validation(
+                ConfigError::UnmatchedOpen { .. }
+            ))
         ));
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(workspace.selected().is_dirty());
@@ -756,8 +764,8 @@ solid = "#00e680"
         assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_ok());
         assert!(matches!(
             workspace.apply(),
-            Err(ConfigWorkspaceError::Config(
-                ConfigError::UnmatchedOpen { .. }
+            Err(ConfigWorkspaceError::ParseConfig(
+                ParseConfigError::Validation(ConfigError::UnmatchedOpen { .. })
             ))
         ));
         assert!(workspace.selected().is_dirty());
@@ -980,7 +988,7 @@ solid = "#00e680"
         assert_eq!(entry.editor_config().colors.background, None);
         assert_eq!(
             runtime_config(entry).colors.background,
-            lsystem_core::ConfigDefaults::embedded().colors.background
+            ConfigDefaults::embedded().colors.background
         );
         assert!(!entry.is_dirty());
     }
@@ -1026,6 +1034,8 @@ solid = "#00e680"
             }
         );
 
+        // topological_depth: true is preserved faithfully even for bracketless grammars —
+        // normalization happens at the geometry-allocation boundary, not in resolved Config.
         clean_mut(&mut workspace)
             .set_line_color(LineColorConfig::Gradient {
                 start: Rgb::new(0x33, 0x4d, 0x66),
@@ -1038,7 +1048,7 @@ solid = "#00e680"
             LineColorConfig::Gradient {
                 start: Rgb::new(0x33, 0x4d, 0x66),
                 end: Rgb::new(0x80, 0x99, 0xb3),
-                topological_depth: false,
+                topological_depth: true,
             }
         );
     }
@@ -1263,12 +1273,14 @@ end = "#ffffff"
             runtime_config(entry).colors.background,
             Rgb::new(0x1a, 0x33, 0x4d)
         );
+        // topological_depth: true is preserved faithfully — normalization happens at the
+        // geometry-allocation boundary, not in resolved Config.
         assert_eq!(
             runtime_config(entry).colors.line,
             LineColorConfig::Gradient {
                 start: Rgb::new(0x66, 0x80, 0x99),
                 end: Rgb::new(0xb3, 0xcc, 0xe6),
-                topological_depth: false,
+                topological_depth: true,
             }
         );
         assert!(!entry.is_dirty());
@@ -1279,7 +1291,7 @@ end = "#ffffff"
         assert_eq!(entry.editor_config().colors.background, None);
         assert_eq!(
             runtime_config(entry).colors.background,
-            lsystem_core::ConfigDefaults::embedded().colors.background
+            ConfigDefaults::embedded().colors.background
         );
     }
 
@@ -1353,7 +1365,10 @@ end = "#ffffff"
 
         let error = clean_mut(&mut workspace).set_angle(f32::NAN).unwrap_err();
 
-        assert!(matches!(error, ConfigError::InvalidAngle(_)));
+        assert!(matches!(
+            error,
+            ParseConfigError::Validation(ConfigError::InvalidAngle(_))
+        ));
         let entry = workspace.selected();
         assert_eq!(entry.draft_text(), previous_text);
         assert_eq!(runtime_config(entry), previous_config);

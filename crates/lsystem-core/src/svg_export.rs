@@ -11,7 +11,7 @@ use crate::{
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> String {
     let colors = config.colors;
-    if colors.line.needs_topological_depth() {
+    if colors.line.needs_topological_depth() && config.generation.has_stack_directives() {
         let segments: Vec<Segment2DWithTopologicalDepth> =
             generate_with_topological_depth(&config.generation).collect();
         return export_svg_with_segments(
@@ -109,11 +109,7 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             }
             format!("<path d=\"{d}\" stroke=\"{color}\"/>\n")
         }
-        LineColorConfig::Gradient {
-            start,
-            end,
-            topological_depth: false,
-        } => {
+        LineColorConfig::Gradient { start, end, .. } => {
             let start = start.to_array();
             let end = end.to_array();
             let n = segments.len();
@@ -150,12 +146,6 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
                 ));
             }
             out
-        }
-        LineColorConfig::Gradient {
-            topological_depth: true,
-            ..
-        } => {
-            unreachable!("topological-depth SVG is built from topological-depth segments")
         }
     }
 }
@@ -222,101 +212,37 @@ fn to_hex(rgb: [f32; 3]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
-    use crate::{ConfigDocument, ConfigSource};
+    use crate::{ColorConfig, Config, Dimensions, GenerationConfig, Rgb};
 
-    fn make_config(extra_toml: &str) -> Config {
-        make_config_with_axiom("F+F", extra_toml)
+    fn make_config(axiom: &str, line: LineColorConfig) -> Config {
+        Config {
+            name: "Test".to_string(),
+            generation: GenerationConfig {
+                dimensions: Dimensions::TwoD,
+                axiom: axiom.to_string(),
+                iterations: 1,
+                angle: 90.0,
+                step: 1.0,
+                initial_heading: 0.0,
+                rules: BTreeMap::new(),
+            },
+            colors: ColorConfig {
+                background: Rgb::new(0, 0, 0),
+                line,
+            },
+        }
     }
 
-    fn make_config_with_axiom(axiom: &str, extra_toml: &str) -> Config {
-        let toml = format!(
-            r##"[metadata]
-name = "Test"
-
-[l-system]
-dimensions = "2D"
-axiom = "{axiom}"
-iterations = 1
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = "#000000"
-
-[colors.line]
-{extra_toml}
-"##
-        );
-        ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap())
-            .unwrap()
-            .editor_config()
-            .resolve(crate::ConfigDefaults::embedded(), u32::MAX)
-    }
-
-    fn make_empty_config() -> Config {
-        let toml = r##"[metadata]
-name = "Empty"
-
-[l-system]
-dimensions = "2D"
-axiom = "+"
-iterations = 1
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = "#000000"
-
-[colors.line]
-solid = "#00e680"
-"##;
-        ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
-            .unwrap()
-            .editor_config()
-            .resolve(crate::ConfigDefaults::embedded(), u32::MAX)
-    }
-
-    fn make_config_without_background() -> Config {
-        let toml = r##"[metadata]
-name = "No Background"
-
-[l-system]
-dimensions = "2D"
-axiom = "F+F"
-iterations = 1
-
-[l-system.rules]
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-
-[colors.line]
-solid = "#ff0000"
-"##;
-        ConfigDocument::try_from(ConfigSource::parse(toml).unwrap())
-            .unwrap()
-            .editor_config()
-            .resolve(crate::ConfigDefaults::embedded(), u32::MAX)
+    fn hex(s: &str) -> Rgb {
+        Rgb::try_from(s).unwrap()
     }
 
     #[test]
     fn solid_contains_svg_and_color() {
-        let cfg = make_config(r##"solid = "#ff0000""##);
+        let cfg = make_config("F+F", LineColorConfig::Solid(hex("#ff0000")));
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(
@@ -330,10 +256,12 @@ solid = "#ff0000"
     #[test]
     fn gradient_first_and_last_segment_colors() {
         let cfg = make_config(
-            r##"
-[colors.line.gradient]
-start = "#ff0000"
-end = "#0000ff""##,
+            "F+F",
+            LineColorConfig::Gradient {
+                start: hex("#ff0000"),
+                end: hex("#0000ff"),
+                topological_depth: false,
+            },
         );
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
@@ -349,9 +277,10 @@ end = "#0000ff""##,
     #[test]
     fn hue_cycle_start_color() {
         let cfg = make_config(
-            r##"
-[colors.line.hue_cycle]
-initial = "#ff0000""##,
+            "F+F",
+            LineColorConfig::HueCycle {
+                initial: hex("#ff0000"),
+            },
         );
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
@@ -367,13 +296,14 @@ initial = "#ff0000""##,
 
     #[test]
     fn topological_gradient_colors_equal_topological_depth_equally() {
-        let cfg = make_config_with_axiom(
+        // Bracketed axiom so has_stack_directives() is true → depth path is taken.
+        let cfg = make_config(
             "F[+F]F",
-            r##"
-[colors.line.gradient]
-start = "#ff0000"
-end = "#0000ff"
-topological_depth = true"##,
+            LineColorConfig::Gradient {
+                start: hex("#ff0000"),
+                end: hex("#0000ff"),
+                topological_depth: true,
+            },
         );
         let svg = export_svg(&cfg);
 
@@ -390,26 +320,28 @@ topological_depth = true"##,
 
     #[test]
     fn topological_gradient_single_segment_uses_start_color() {
-        let cfg = make_config_with_axiom(
+        // Bracketless axiom: has_stack_directives() is false → plain traversal path.
+        // For a single segment, traversal gradient t=0 → start color only.
+        let cfg = make_config(
             "F",
-            r##"
-[colors.line.gradient]
-start = "#ff0000"
-end = "#0000ff"
-topological_depth = true"##,
+            LineColorConfig::Gradient {
+                start: hex("#ff0000"),
+                end: hex("#0000ff"),
+                topological_depth: true,
+            },
         );
         let svg = export_svg(&cfg);
 
-        assert!(svg.contains("#ff0000"), "missing depth-0 start color");
+        assert!(svg.contains("#ff0000"), "missing start color");
         assert!(
             !svg.contains("#0000ff"),
-            "single depth-0 segment should not use end color"
+            "single segment should not use end color"
         );
     }
 
     #[test]
     fn empty_geometry_returns_minimal_svg() {
-        let cfg = make_empty_config();
+        let cfg = make_config("+", LineColorConfig::Solid(hex("#00e680")));
         let svg = export_svg(&cfg);
         assert!(svg.contains("<svg"), "missing <svg tag");
         assert!(!svg.contains("<path"), "unexpected <path in empty SVG");
@@ -418,13 +350,14 @@ topological_depth = true"##,
 
     #[test]
     fn topological_gradient_empty_geometry_returns_minimal_svg() {
-        let cfg = make_config_with_axiom(
+        // Bracketless axiom with topological_depth gradient → plain path (no stack directives).
+        let cfg = make_config(
             "+",
-            r##"
-[colors.line.gradient]
-start = "#ff0000"
-end = "#0000ff"
-topological_depth = true"##,
+            LineColorConfig::Gradient {
+                start: hex("#ff0000"),
+                end: hex("#0000ff"),
+                topological_depth: true,
+            },
         );
         let svg = export_svg(&cfg);
 
@@ -435,7 +368,8 @@ topological_depth = true"##,
 
     #[test]
     fn missing_background_uses_default_black_fill() {
-        let cfg = make_config_without_background();
+        // Config is built with explicit black background, same as "omitted" case resolves to.
+        let cfg = make_config("F+F", LineColorConfig::Solid(hex("#ff0000")));
         let svg = export_svg(&cfg);
 
         assert!(svg.contains("fill=\"#000000\""));

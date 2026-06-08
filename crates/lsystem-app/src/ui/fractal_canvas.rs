@@ -1,7 +1,8 @@
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
-use lsystem_core::{ColorConfig, Config, ConfigDefaults, Dimensions};
+use lsystem_app_model::ConfigDefaults;
+use lsystem_core::{ColorConfig, Config, Dimensions};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,

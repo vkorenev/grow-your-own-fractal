@@ -19,6 +19,8 @@ iced = { git = "https://github.com/iced-rs/iced", rev = "51e9c2d06613efe42c59139
 include_dir = "0.7"
 js-sys = "0.3"
 log = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml_edit = { version = "0.25.11", features = ["serde"] }
 lsystem-core = { path = "crates/lsystem-core" }
 lsystem-renderer = { path = "crates/lsystem-renderer" }
 lsystem-app-model = { path = "crates/lsystem-app-model" }

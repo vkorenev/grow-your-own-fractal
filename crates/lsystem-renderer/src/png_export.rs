@@ -105,7 +105,9 @@ pub async fn render_png(
         Dimensions::ThreeD => {
             let height = width; // square viewport for perspective
             let mut pipeline = LinePipeline3D::new(device, FORMAT);
-            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth() {
+            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth()
+                && config.generation.has_stack_directives()
+            {
                 let data = geometry_to_depth_segments_3d(
                     lsystem_core::generate_3d_with_topological_depth(&config.generation),
                 );
@@ -141,7 +143,9 @@ pub async fn render_png(
         }
         Dimensions::TwoD => {
             let mut pipeline = LinePipeline2D::new(device, FORMAT);
-            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth() {
+            let (bounds_min, bounds_max) = if colors.line.needs_topological_depth()
+                && config.generation.has_stack_directives()
+            {
                 let data = geometry_to_depth_segments(
                     lsystem_core::generate_with_topological_depth(&config.generation),
                 );
