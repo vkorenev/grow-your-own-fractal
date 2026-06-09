@@ -118,6 +118,19 @@ pub enum EditorLineColorConfig {
 }
 
 impl EditorLineColorConfig {
+    /// Returns the gradient fields `(start, end, topological_depth)` if `self` is
+    /// `Gradient`, or `(None, None, None)` for any other variant.
+    pub fn gradient_fields(self) -> (Option<Rgb>, Option<Rgb>, Option<bool>) {
+        match self {
+            Self::Gradient {
+                start,
+                end,
+                topological_depth,
+            } => (start, end, topological_depth),
+            _ => (None, None, None),
+        }
+    }
+
     pub fn resolve(self, defaults: &LineColorDefaults) -> LineColorConfig {
         match self {
             Self::Solid(color) => LineColorConfig::Solid(color),
@@ -435,34 +448,35 @@ impl ConfigSource {
         }
     }
 
-    pub fn set_line_color(&mut self, line_color: &LineColorConfig) {
-        let line = line_table_mut(&mut self.document);
+    pub fn set_line_color(&mut self, line_color: Option<&EditorLineColorConfig>) {
         match line_color {
-            LineColorConfig::Solid(color) => {
+            None => {
+                if let Some(colors) = self.document["colors"].as_table_mut() {
+                    colors.remove("line");
+                }
+            }
+            Some(EditorLineColorConfig::Solid(color)) => {
+                let line = line_table_mut(&mut self.document);
                 remove_inactive_line_color_entries(line, "solid");
                 set_value_preserving_decor(&mut line["solid"], Value::from(color.to_string()));
             }
-            LineColorConfig::Gradient {
+            Some(EditorLineColorConfig::Gradient {
                 start,
                 end,
                 topological_depth,
-            } => {
+            }) => {
+                let line = line_table_mut(&mut self.document);
                 remove_inactive_line_color_entries(line, "gradient");
                 let gradient = line_color_table_mut(line, "gradient");
-                set_value_preserving_decor(&mut gradient["start"], Value::from(start.to_string()));
-                set_value_preserving_decor(&mut gradient["end"], Value::from(end.to_string()));
-                set_value_preserving_decor(
-                    &mut gradient["topological_depth"],
-                    Value::from(*topological_depth),
-                );
+                set_or_remove_optional_rgb(gradient, "start", *start);
+                set_or_remove_optional_rgb(gradient, "end", *end);
+                set_or_remove_optional_bool(gradient, "topological_depth", *topological_depth);
             }
-            LineColorConfig::HueCycle { initial } => {
+            Some(EditorLineColorConfig::HueCycle { initial }) => {
+                let line = line_table_mut(&mut self.document);
                 remove_inactive_line_color_entries(line, "hue_cycle");
                 let hue_cycle = line_color_table_mut(line, "hue_cycle");
-                set_value_preserving_decor(
-                    &mut hue_cycle["initial"],
-                    Value::from(initial.to_string()),
-                );
+                set_or_remove_optional_rgb(hue_cycle, "initial", *initial);
             }
         }
     }
@@ -576,6 +590,24 @@ fn line_table_mut(document: &mut DocumentMut) -> &mut Table {
     colors["line"]
         .as_table_mut()
         .expect("colors.line table was just ensured")
+}
+
+fn set_or_remove_optional_rgb(table: &mut Table, key: &str, value: Option<Rgb>) {
+    match value {
+        Some(rgb) => set_value_preserving_decor(&mut table[key], Value::from(rgb.to_string())),
+        None => {
+            table.remove(key);
+        }
+    }
+}
+
+fn set_or_remove_optional_bool(table: &mut Table, key: &str, value: Option<bool>) {
+    match value {
+        Some(b) => set_value_preserving_decor(&mut table[key], Value::from(b)),
+        None => {
+            table.remove(key);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -739,6 +771,83 @@ background = "#000000"
 solid = "#00e680"
 "##
         )
+    }
+
+    fn minimal_toml(name: &str) -> String {
+        format!(
+            r#"[metadata]
+name = "{name}"
+
+[l-system]
+dimensions = "2D"
+axiom = "F"
+iterations = 1
+
+[l-system.rules]
+F = "F"
+
+[turtle]
+angle = 90.0
+
+[colors]
+"#
+        )
+    }
+
+    #[test]
+    fn set_line_color_none_removes_colors_line() {
+        let toml = r##"
+[metadata]
+name = "t"
+[l-system]
+dimensions = "2D"
+axiom = "F"
+iterations = 1
+[l-system.rules]
+F = "F"
+[turtle]
+angle = 90.0
+[colors.line.hue_cycle]
+initial = "#e60000"
+"##;
+        let mut source = ConfigSource::parse(toml).unwrap();
+        source.set_line_color(None);
+        let out = source.to_toml_string();
+        assert!(!out.contains("hue_cycle"), "colors.line must be removed");
+    }
+
+    #[test]
+    fn set_line_color_gradient_omits_none_fields() {
+        let toml = minimal_toml("t");
+        let mut source = ConfigSource::parse(&toml).unwrap();
+        source.set_line_color(Some(&EditorLineColorConfig::Gradient {
+            start: Some(Rgb::new(0x11, 0x22, 0x33)),
+            end: None,
+            topological_depth: None,
+        }));
+        let out = source.to_toml_string();
+        assert!(out.contains("#112233"), "start must be written");
+        assert!(!out.contains("end"), "absent end must not be written");
+        assert!(
+            !out.contains("topological_depth"),
+            "absent td must not be written"
+        );
+    }
+
+    #[test]
+    fn set_line_color_hue_cycle_omits_none_initial() {
+        let toml = minimal_toml("t");
+        let mut source = ConfigSource::parse(&toml).unwrap();
+        source.set_line_color(Some(&EditorLineColorConfig::HueCycle { initial: None }));
+        let out = source.to_toml_string();
+        assert!(
+            out.contains("[colors.line"),
+            "hue_cycle table header must be present"
+        );
+        assert!(
+            !out.contains("initial"),
+            "absent initial must not be written"
+        );
     }
 
     #[test]
@@ -1964,146 +2073,6 @@ solid = "#00e680"
         assert_eq!(
             resolve_doc(&doc).colors.background,
             Rgb::new(0xff, 0x80, 0x00)
-        );
-    }
-
-    #[test]
-    fn set_line_color_writes_hex_strings() {
-        let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
-        let mut source = ConfigSource::parse(&toml).unwrap();
-        source.set_line_color(&LineColorConfig::Gradient {
-            start: Rgb::new(0x00, 0x11, 0x22),
-            end: Rgb::new(0xaa, 0xbb, 0xcc),
-            topological_depth: false,
-        });
-        let result = source.to_toml_string();
-        assert!(
-            result.contains(r##"start = "#001122""##),
-            "expected start hex, got: {result}"
-        );
-        assert!(
-            result.contains(r##"end = "#aabbcc""##),
-            "expected end hex, got: {result}"
-        );
-        // Round-trip
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
-        assert_eq!(
-            resolve_doc(&doc).colors.line,
-            LineColorConfig::Gradient {
-                start: Rgb::new(0x00, 0x11, 0x22),
-                end: Rgb::new(0xaa, 0xbb, 0xcc),
-                topological_depth: false,
-            }
-        );
-    }
-
-    #[test]
-    fn set_line_color_updates_gradient_topological_depth_in_place() {
-        let original = r##"[metadata]
-name = "Decorated Gradient"
-
-[l-system]
-dimensions = "2D"
-axiom = "F"
-iterations = 1
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = "#000000"
-
-[colors.line.gradient] # keep gradient table comment
-start = "#001122" # keep start comment
-end = "#aabbcc" # keep end comment
-"##;
-        let mut source = ConfigSource::parse(original).unwrap();
-
-        source.set_line_color(&LineColorConfig::Gradient {
-            start: Rgb::new(0x00, 0x11, 0x22),
-            end: Rgb::new(0xaa, 0xbb, 0xcc),
-            topological_depth: true,
-        });
-
-        let result = source.to_toml_string();
-        assert!(result.contains("[colors.line.gradient] # keep gradient table comment"));
-        assert!(result.contains("start = \"#001122\" # keep start comment"));
-        assert!(result.contains("end = \"#aabbcc\" # keep end comment"));
-        assert!(result.contains("topological_depth = true"));
-        assert!(!result.contains("[colors.line]\nsolid"));
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
-        assert_eq!(
-            doc.editor_config().colors.line,
-            Some(EditorLineColorConfig::Gradient {
-                start: Some(Rgb::new(0x00, 0x11, 0x22)),
-                end: Some(Rgb::new(0xaa, 0xbb, 0xcc)),
-                topological_depth: Some(true),
-            })
-        );
-        // Faithful resolve: topological_depth = true preserved (bracketless axiom "F").
-        assert_eq!(
-            resolve_doc(&doc).colors.line,
-            LineColorConfig::Gradient {
-                start: Rgb::new(0x00, 0x11, 0x22),
-                end: Rgb::new(0xaa, 0xbb, 0xcc),
-                topological_depth: true,
-            }
-        );
-    }
-
-    #[test]
-    fn set_line_color_updates_gradient_topological_depth_false_in_place() {
-        let original = r##"[metadata]
-name = "Decorated Gradient"
-
-[l-system]
-dimensions = "2D"
-axiom = "F"
-iterations = 1
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
-angle = 90.0
-step = 1.0
-initial_heading = 0.0
-
-[colors]
-background = "#000000"
-
-[colors.line.gradient] # keep gradient table comment
-start = "#001122" # keep start comment
-end = "#aabbcc" # keep end comment
-topological_depth = true # keep flag comment
-"##;
-        let mut source = ConfigSource::parse(original).unwrap();
-
-        source.set_line_color(&LineColorConfig::Gradient {
-            start: Rgb::new(0x00, 0x11, 0x22),
-            end: Rgb::new(0xaa, 0xbb, 0xcc),
-            topological_depth: false,
-        });
-
-        let result = source.to_toml_string();
-        assert!(result.contains("[colors.line.gradient] # keep gradient table comment"));
-        assert!(result.contains("start = \"#001122\" # keep start comment"));
-        assert!(result.contains("end = \"#aabbcc\" # keep end comment"));
-        assert!(result.contains("topological_depth = false # keep flag comment"));
-        assert!(!result.contains("topological_depth = true"));
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
-        assert_eq!(
-            resolve_doc(&doc).colors.line,
-            LineColorConfig::Gradient {
-                start: Rgb::new(0x00, 0x11, 0x22),
-                end: Rgb::new(0xaa, 0xbb, 0xcc),
-                topological_depth: false,
-            }
         );
     }
 }

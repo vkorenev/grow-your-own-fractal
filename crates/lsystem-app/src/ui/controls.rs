@@ -3,7 +3,7 @@ use iced::widget::{
     text_input,
 };
 use iced::{Color, Element, Length, Theme};
-use lsystem_app_model::{ConfigDefaults, EditorColorConfig};
+use lsystem_app_model::{ConfigDefaults, EditorColorConfig, EditorLineColorConfig};
 use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
     HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
@@ -11,7 +11,7 @@ use lsystem_app_model::{
 };
 use lsystem_core::{LineColorConfig, Rgb};
 
-use super::app_state::{FractalApp, Message};
+use super::app_state::{ColorDefaultField, FractalApp, Message};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
@@ -155,18 +155,17 @@ fn push_color_controls<'a>(
     let background = editor_colors
         .background
         .unwrap_or(color_defaults.background);
-    controls = controls.push(
-        checkbox(has_authored_background)
-            .label("Background")
-            .on_toggle(Message::BackgroundOverrideToggled),
-    );
-    if has_authored_background {
-        controls = controls.push(rgb_controls(
+    controls = controls
+        .push(
+            checkbox(!has_authored_background)
+                .label("Background: use default")
+                .on_toggle(Message::BackgroundDefaultToggled),
+        )
+        .push(rgb_controls(
             "Background RGB",
             background,
             Message::BackgroundColorChanged,
         ));
-    }
 
     let line_color = line_color_for_controls(editor_colors, &color_defaults.line);
     let selected_mode = Some(selected_line_color_mode(editor_colors));
@@ -179,48 +178,96 @@ fn push_color_controls<'a>(
     );
 
     match line_color {
-        LineColorConfig::Solid(color) => controls.push(rgb_controls("Line RGB", color, |hex| {
-            Message::LineColorChanged(LineColorConfig::Solid(hex))
-        })),
+        LineColorConfig::Solid(color) => {
+            let is_default_solid = editor_colors.line.is_none();
+            controls
+                .push(
+                    checkbox(is_default_solid)
+                        .label("Solid: use default")
+                        .on_toggle(|use_default| Message::LineColorDefaultToggled {
+                            field: ColorDefaultField::SolidLine,
+                            use_default,
+                        }),
+                )
+                .push(rgb_controls("Line RGB", color, |hex| {
+                    Message::LineColorChanged(Some(EditorLineColorConfig::Solid(hex)))
+                }))
+        }
         LineColorConfig::Gradient {
             start,
             end,
             topological_depth,
-        } => controls
-            .push(rgb_controls("Gradient start", start, move |hex| {
-                Message::LineColorChanged(LineColorConfig::Gradient {
-                    start: hex,
-                    end,
-                    topological_depth,
-                })
-            }))
-            .push(rgb_controls("Gradient end", end, move |hex| {
-                Message::LineColorChanged(LineColorConfig::Gradient {
-                    start,
-                    end: hex,
-                    topological_depth,
-                })
-            }))
-            .push(
-                checkbox(topological_depth)
-                    .label("Topological depth")
-                    .on_toggle(move |enabled| {
-                        Message::LineColorChanged(LineColorConfig::Gradient {
-                            start,
-                            end,
-                            topological_depth: enabled,
-                        })
-                    }),
-            ),
+        } => {
+            let (editor_start, editor_end, editor_td) = editor_colors
+                .line
+                .map(|l| l.gradient_fields())
+                .unwrap_or_default();
+            controls
+                .push(
+                    checkbox(editor_start.is_none())
+                        .label("Gradient start: use default")
+                        .on_toggle(|use_default| Message::LineColorDefaultToggled {
+                            field: ColorDefaultField::GradientStart,
+                            use_default,
+                        }),
+                )
+                .push(rgb_controls("Gradient start", start, move |hex| {
+                    Message::LineColorChanged(Some(EditorLineColorConfig::Gradient {
+                        start: Some(hex),
+                        end: editor_end,
+                        topological_depth: editor_td,
+                    }))
+                }))
+                .push(
+                    checkbox(editor_end.is_none())
+                        .label("Gradient end: use default")
+                        .on_toggle(|use_default| Message::LineColorDefaultToggled {
+                            field: ColorDefaultField::GradientEnd,
+                            use_default,
+                        }),
+                )
+                .push(rgb_controls("Gradient end", end, move |hex| {
+                    Message::LineColorChanged(Some(EditorLineColorConfig::Gradient {
+                        start: editor_start,
+                        end: Some(hex),
+                        topological_depth: editor_td,
+                    }))
+                }))
+                .push(
+                    checkbox(topological_depth)
+                        .label("Topological depth")
+                        .on_toggle(move |enabled| {
+                            Message::LineColorChanged(Some(EditorLineColorConfig::Gradient {
+                                start: editor_start,
+                                end: editor_end,
+                                topological_depth: Some(enabled),
+                            }))
+                        }),
+                )
+        }
         LineColorConfig::HueCycle { initial } => {
+            let editor_initial = match editor_colors.line {
+                Some(EditorLineColorConfig::HueCycle { initial }) => initial,
+                _ => None,
+            };
             let rotation_label = if hue_rotation.is_enabled() {
                 "Hue rotation: On"
             } else {
                 "Hue rotation: Off"
             };
             controls
+                .push(
+                    checkbox(editor_initial.is_none())
+                        .label("Initial: use default")
+                        .on_toggle(|use_default| Message::LineColorDefaultToggled {
+                            field: ColorDefaultField::HueCycleInitial,
+                            use_default,
+                        }),
+                )
                 .push(rgb_controls("Initial RGB", initial, |hex| {
-                    Message::LineColorChanged(LineColorConfig::HueCycle { initial: hex })
+                    Message::LineColorChanged(Some(EditorLineColorConfig::HueCycle {
+                        initial: Some(hex),
+                    }))
                 }))
                 .push(button(rotation_label).on_press(Message::ToggleHueRotation))
                 .push(

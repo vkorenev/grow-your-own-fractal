@@ -3,10 +3,10 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use lsystem_core::{Dimensions, LineColorConfig, Rgb};
+use lsystem_core::{Dimensions, Rgb};
 
 use crate::config_defaults::ParseConfigError;
-use crate::editor_config::{ConfigDocument, ConfigSource, EditorConfig};
+use crate::editor_config::{ConfigDocument, ConfigSource, EditorConfig, EditorLineColorConfig};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -380,9 +380,12 @@ impl CleanMut<'_> {
             .update_last_applied_source(|source| source.set_background(background))
     }
 
-    pub fn set_line_color(&mut self, line_color: LineColorConfig) -> Result<(), ParseConfigError> {
+    pub fn set_line_color(
+        &mut self,
+        line_color: Option<EditorLineColorConfig>,
+    ) -> Result<(), ParseConfigError> {
         self.0
-            .update_last_applied_source(|source| source.set_line_color(&line_color))
+            .update_last_applied_source(|source| source.set_line_color(line_color.as_ref()))
     }
 }
 
@@ -398,7 +401,7 @@ impl DirtyMut<'_> {
 mod tests {
     use super::*;
 
-    use lsystem_core::ConfigError;
+    use lsystem_core::{ConfigError, LineColorConfig};
 
     use crate::config_defaults::ConfigDefaults;
 
@@ -998,7 +1001,9 @@ solid = "#00e680"
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66)))
+            .set_line_color(Some(EditorLineColorConfig::Solid(Rgb::new(
+                0x33, 0x4d, 0x66,
+            ))))
             .unwrap();
         assert_eq!(
             runtime_config(workspace.selected()).colors.line,
@@ -1006,11 +1011,11 @@ solid = "#00e680"
         );
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Gradient {
-                start: Rgb::new(0x1a, 0x33, 0x4d),
-                end: Rgb::new(0xb3, 0xcc, 0xe6),
-                topological_depth: false,
-            })
+            .set_line_color(Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x1a, 0x33, 0x4d)),
+                end: Some(Rgb::new(0xb3, 0xcc, 0xe6)),
+                topological_depth: Some(false),
+            }))
             .unwrap();
         assert_eq!(
             runtime_config(workspace.selected()).colors.line,
@@ -1022,9 +1027,9 @@ solid = "#00e680"
         );
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::HueCycle {
-                initial: Rgb::new(0x40, 0x80, 0xbf),
-            })
+            .set_line_color(Some(EditorLineColorConfig::HueCycle {
+                initial: Some(Rgb::new(0x40, 0x80, 0xbf)),
+            }))
             .unwrap();
         assert_eq!(
             runtime_config(workspace.selected()).colors.line,
@@ -1036,11 +1041,11 @@ solid = "#00e680"
         // topological_depth: true is preserved faithfully even for bracketless grammars —
         // normalization happens at the geometry-allocation boundary, not in resolved Config.
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Gradient {
-                start: Rgb::new(0x33, 0x4d, 0x66),
-                end: Rgb::new(0x80, 0x99, 0xb3),
-                topological_depth: true,
-            })
+            .set_line_color(Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x33, 0x4d, 0x66)),
+                end: Some(Rgb::new(0x80, 0x99, 0xb3)),
+                topological_depth: Some(true),
+            }))
             .unwrap();
         assert_eq!(
             runtime_config(workspace.selected()).colors.line,
@@ -1058,11 +1063,11 @@ solid = "#00e680"
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Gradient {
-                start: Rgb::new(0x1a, 0x33, 0x4d),
-                end: Rgb::new(0xb3, 0xcc, 0xe6),
-                topological_depth: false,
-            })
+            .set_line_color(Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x1a, 0x33, 0x4d)),
+                end: Some(Rgb::new(0xb3, 0xcc, 0xe6)),
+                topological_depth: Some(false),
+            }))
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
         assert!(text.contains("[colors.line.gradient]"));
@@ -1072,9 +1077,9 @@ solid = "#00e680"
         assert!(!text.contains("initial ="));
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::HueCycle {
-                initial: Rgb::new(0x66, 0x80, 0x99),
-            })
+            .set_line_color(Some(EditorLineColorConfig::HueCycle {
+                initial: Some(Rgb::new(0x66, 0x80, 0x99)),
+            }))
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
         assert!(text.contains("[colors.line.hue_cycle]"));
@@ -1084,7 +1089,9 @@ solid = "#00e680"
         assert!(!text.contains("end ="));
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid(Rgb::new(0x33, 0x4d, 0x66)))
+            .set_line_color(Some(EditorLineColorConfig::Solid(Rgb::new(
+                0x33, 0x4d, 0x66,
+            ))))
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
         assert!(text.contains("solid = \"#334d66\""));
@@ -1093,11 +1100,11 @@ solid = "#00e680"
         assert!(!text.contains("end ="));
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Gradient {
-                start: Rgb::new(0x1a, 0x33, 0x4d),
-                end: Rgb::new(0x66, 0x80, 0x99),
-                topological_depth: true,
-            })
+            .set_line_color(Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x1a, 0x33, 0x4d)),
+                end: Some(Rgb::new(0x66, 0x80, 0x99)),
+                topological_depth: Some(true),
+            }))
             .unwrap();
         let text = workspace.selected().draft_text().into_owned();
         assert!(text.contains("[colors.line.gradient]"));
@@ -1139,7 +1146,9 @@ solid = "#00e680" # keep line color comment
             .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid(Rgb::new(0x66, 0x80, 0x99)))
+            .set_line_color(Some(EditorLineColorConfig::Solid(Rgb::new(
+                0x66, 0x80, 0x99,
+            ))))
             .unwrap();
 
         let text = workspace.selected().draft_text().into_owned();
@@ -1179,11 +1188,11 @@ end = "#ffffff"
             .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Gradient {
-                start: Rgb::new(0x66, 0x80, 0x99),
-                end: Rgb::new(0xb3, 0xcc, 0xe6),
-                topological_depth: false,
-            })
+            .set_line_color(Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x66, 0x80, 0x99)),
+                end: Some(Rgb::new(0xb3, 0xcc, 0xe6)),
+                topological_depth: Some(false),
+            }))
             .unwrap();
 
         let text = workspace.selected().draft_text().into_owned();
@@ -1208,7 +1217,9 @@ end = "#ffffff"
         assert!(!workspace.can_reset());
 
         clean_mut(&mut workspace)
-            .set_line_color(LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d)))
+            .set_line_color(Some(EditorLineColorConfig::Solid(Rgb::new(
+                0x1a, 0x33, 0x4d,
+            ))))
             .unwrap();
 
         assert!(workspace.can_reset());
@@ -1247,11 +1258,11 @@ end = "#ffffff"
                 .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
                 .unwrap();
             clean
-                .set_line_color(LineColorConfig::Gradient {
-                    start: Rgb::new(0x66, 0x80, 0x99),
-                    end: Rgb::new(0xb3, 0xcc, 0xe6),
-                    topological_depth: true,
-                })
+                .set_line_color(Some(EditorLineColorConfig::Gradient {
+                    start: Some(Rgb::new(0x66, 0x80, 0x99)),
+                    end: Some(Rgb::new(0xb3, 0xcc, 0xe6)),
+                    topological_depth: Some(true),
+                }))
                 .unwrap();
         }
 
@@ -1425,6 +1436,70 @@ end = "#ffffff"
         let err = workspace.rename(0, "Second").unwrap_err();
         assert!(matches!(err, ConfigWorkspaceError::DuplicateName(ref n) if n == "Second"));
         assert_eq!(workspace.selected().name(), "First");
+    }
+
+    #[test]
+    fn clean_entry_set_line_color_none_removes_colors_line_and_resolves_to_solid_default() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace).set_line_color(None).unwrap();
+
+        let entry = workspace.selected();
+        assert!(
+            !entry.draft_text().contains("[colors.line"),
+            "colors.line must be absent"
+        );
+        assert!(
+            !entry.draft_text().contains("solid ="),
+            "solid key must be absent"
+        );
+        assert!(entry.editor_config().colors.line.is_none());
+        assert!(matches!(
+            runtime_config(entry).colors.line,
+            LineColorConfig::Solid(_)
+        ));
+    }
+
+    #[test]
+    fn clean_entry_set_line_color_gradient_preserves_none_fields() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        clean_mut(&mut workspace)
+            .set_line_color(Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x11, 0x22, 0x33)),
+                end: None,
+                topological_depth: None,
+            }))
+            .unwrap();
+
+        let entry = workspace.selected();
+        assert!(
+            entry.draft_text().contains("#112233"),
+            "authored start present"
+        );
+        assert!(
+            !entry.draft_text().contains("end ="),
+            "absent end must not appear"
+        );
+        assert!(
+            !entry.draft_text().contains("topological_depth"),
+            "absent td must not appear"
+        );
+        assert_eq!(
+            entry.editor_config().colors.line,
+            Some(EditorLineColorConfig::Gradient {
+                start: Some(Rgb::new(0x11, 0x22, 0x33)),
+                end: None,
+                topological_depth: None,
+            })
+        );
+        let expected_end = ConfigDefaults::embedded().colors.line.gradient.end;
+        assert!(matches!(
+            runtime_config(entry).colors.line,
+            LineColorConfig::Gradient { end, .. } if end == expected_end
+        ));
     }
 
     #[test]

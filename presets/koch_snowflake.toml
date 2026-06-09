@@ -12,8 +12,4 @@ F = "F-F++F-F"
 [turtle]
 angle = 60.0
 
-[colors]
-background = "#000000"
-
 [colors.line.hue_cycle]
-initial = "#e60000"

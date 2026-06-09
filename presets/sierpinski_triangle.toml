@@ -13,8 +13,4 @@ X = "-FXF+FXF+FXF-"
 [turtle]
 angle = 120.0
 
-[colors]
-background = "#000000"
-
 [colors.line.hue_cycle]
-initial = "#e60000"

@@ -2,9 +2,9 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorConfig, EntryViewMut,
-    HueRotation, HueRotationDirection, LineColorMode, ParseConfigError,
-    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorConfig,
+    EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection, LineColorMode,
+    ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{ColorConfig, Config, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
@@ -22,6 +22,14 @@ use super::{PNG_MAX_WIDTH, PNG_MIN_WIDTH};
 const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ColorDefaultField {
+    SolidLine,
+    GradientStart,
+    GradientEnd,
+    HueCycleInitial,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     PresetSelected(String),
@@ -32,10 +40,14 @@ pub(super) enum Message {
     ResetConfig,
     IterationsChanged(u32),
     AngleChanged(f32),
-    BackgroundOverrideToggled(bool),
+    BackgroundDefaultToggled(bool),
     BackgroundColorChanged(Rgb),
     LineColorModeSelected(LineColorMode),
-    LineColorChanged(LineColorConfig),
+    LineColorChanged(Option<EditorLineColorConfig>),
+    LineColorDefaultToggled {
+        field: ColorDefaultField,
+        use_default: bool,
+    },
     PngWidthChanged(String),
     ExportSvg,
     ExportPng,
@@ -182,16 +194,17 @@ impl FractalApp {
             Message::AngleChanged(angle) => {
                 self.update_clean_config("angle slider", |clean| clean.set_angle(angle))
             }
-            Message::BackgroundOverrideToggled(enabled) => {
-                if let Some(bg) = self.selected_editor_config().colors.background {
-                    self.color_memory.remember_background(bg);
+            Message::BackgroundDefaultToggled(is_default) => {
+                if is_default {
+                    self.color_memory
+                        .remember_background(self.render_colors().background);
                 }
-                let background = if enabled {
-                    Some(self.color_memory.background())
-                } else {
+                let background = if is_default {
                     None
+                } else {
+                    Some(self.color_memory.background())
                 };
-                self.update_clean_color_config("background override toggle", |clean| {
+                self.update_clean_color_config("background", |clean| {
                     clean.set_background(background)
                 })
             }
@@ -202,23 +215,60 @@ impl FractalApp {
                 })
             }
             Message::LineColorModeSelected(mode) => {
-                let current = {
-                    let entry = self.config_workspace.selected();
-                    line_color_for_controls(
-                        &entry.editor_config().colors,
-                        &ConfigDefaults::embedded().colors.line,
-                    )
-                };
-                self.color_memory.remember_line(current);
-                let line_color = self.color_memory.line_for(mode);
-                self.update_clean_color_config("line color mode select", |clean| {
-                    clean.set_line_color(line_color)
+                let editor_line = self.config_workspace.selected().editor_config().colors.line;
+                self.color_memory.remember_line(editor_line);
+                let new_editor_line = self.color_memory.line_for(mode);
+                self.update_clean_color_config("line color mode", |clean| {
+                    clean.set_line_color(new_editor_line)
                 })
             }
             Message::LineColorChanged(line_color) => self
-                .update_clean_color_config("line color control", |clean| {
-                    clean.set_line_color(line_color)
-                }),
+                .update_clean_color_config("line color", |clean| clean.set_line_color(line_color)),
+            Message::LineColorDefaultToggled { field, use_default } => {
+                use ColorDefaultField::*;
+                let editor_line = self.config_workspace.selected().editor_config().colors.line;
+                if use_default {
+                    self.color_memory.remember_line(editor_line);
+                }
+                let (editor_start, editor_end, editor_td) =
+                    editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                let (mem_start, mem_end, _) = self.color_memory.gradient_fields();
+                let new_line = match (field, use_default) {
+                    (SolidLine, true) => None,
+                    (SolidLine, false) => Some(EditorLineColorConfig::Solid(
+                        self.color_memory.solid_color(),
+                    )),
+                    (GradientStart, true) => Some(EditorLineColorConfig::Gradient {
+                        start: None,
+                        end: editor_end,
+                        topological_depth: editor_td,
+                    }),
+                    (GradientStart, false) => Some(EditorLineColorConfig::Gradient {
+                        start: Some(mem_start),
+                        end: editor_end,
+                        topological_depth: editor_td,
+                    }),
+                    (GradientEnd, true) => Some(EditorLineColorConfig::Gradient {
+                        start: editor_start,
+                        end: None,
+                        topological_depth: editor_td,
+                    }),
+                    (GradientEnd, false) => Some(EditorLineColorConfig::Gradient {
+                        start: editor_start,
+                        end: Some(mem_end),
+                        topological_depth: editor_td,
+                    }),
+                    (HueCycleInitial, true) => {
+                        Some(EditorLineColorConfig::HueCycle { initial: None })
+                    }
+                    (HueCycleInitial, false) => Some(EditorLineColorConfig::HueCycle {
+                        initial: Some(self.color_memory.hue_cycle_initial()),
+                    }),
+                };
+                self.update_clean_color_config("line color default", |clean| {
+                    clean.set_line_color(new_line)
+                })
+            }
             Message::PngWidthChanged(value) => {
                 self.png_width_text = value;
                 self.export_status = None;
@@ -649,17 +699,17 @@ mod tests {
 
     #[test]
     fn color_control_memory_uses_defaults_and_restores_edits() {
-        let solid = LineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d));
-        let gradient = LineColorConfig::Gradient {
-            start: Rgb::new(0x66, 0x80, 0x99),
-            end: Rgb::new(0xb3, 0xcc, 0xe5),
-            topological_depth: false,
-        };
-        let topological_gradient = LineColorConfig::Gradient {
-            start: Rgb::new(0x33, 0x4d, 0x66),
-            end: Rgb::new(0x80, 0x99, 0xb3),
-            topological_depth: true,
-        };
+        let solid = Some(EditorLineColorConfig::Solid(Rgb::new(0x1a, 0x33, 0x4d)));
+        let gradient = Some(EditorLineColorConfig::Gradient {
+            start: Some(Rgb::new(0x66, 0x80, 0x99)),
+            end: Some(Rgb::new(0xb3, 0xcc, 0xe5)),
+            topological_depth: Some(false),
+        });
+        let topological_gradient = Some(EditorLineColorConfig::Gradient {
+            start: Some(Rgb::new(0x33, 0x4d, 0x66)),
+            end: Some(Rgb::new(0x80, 0x99, 0xb3)),
+            topological_depth: Some(true),
+        });
 
         let mut memory = ColorControlMemory::from_editor_config(
             &lsystem_app_model::EditorColorConfig {
@@ -673,20 +723,17 @@ mod tests {
 
         assert_eq!(memory.background(), Rgb::new(0xcc, 0xcc, 0xcc));
         assert_eq!(memory.line_for(LineColorMode::Solid), solid);
-        let defaults = lsystem_app_model::ConfigDefaults::embedded().colors.line;
         assert_eq!(
             memory.line_for(LineColorMode::Gradient),
-            LineColorConfig::Gradient {
-                start: defaults.gradient.start,
-                end: defaults.gradient.end,
-                topological_depth: defaults.gradient.topological_depth,
-            }
+            Some(EditorLineColorConfig::Gradient {
+                start: None,
+                end: None,
+                topological_depth: None,
+            })
         );
         assert_eq!(
             memory.line_for(LineColorMode::HueCycle),
-            LineColorConfig::HueCycle {
-                initial: defaults.hue_cycle.initial,
-            }
+            Some(EditorLineColorConfig::HueCycle { initial: None })
         );
 
         memory.remember_background(Rgb::new(0xe5, 0x1a, 0x33));
@@ -704,11 +751,11 @@ mod tests {
     #[test]
     fn clean_apply_preserves_inactive_line_color_memory() {
         let (mut app, _) = FractalApp::new();
-        let gradient = LineColorConfig::Gradient {
-            start: Rgb::new(0x66, 0x80, 0x99),
-            end: Rgb::new(0xb3, 0xcc, 0xe5),
-            topological_depth: false,
-        };
+        let gradient = Some(EditorLineColorConfig::Gradient {
+            start: Some(Rgb::new(0x66, 0x80, 0x99)),
+            end: Some(Rgb::new(0xb3, 0xcc, 0xe5)),
+            topological_depth: Some(false),
+        });
         app.color_memory.remember_line(gradient);
 
         let _ = app.update(Message::ApplyConfig);
@@ -730,20 +777,14 @@ mod tests {
 
         let start = Rgb::new(0x33, 0x4d, 0x66);
         let end = Rgb::new(0x80, 0x99, 0xb3);
-        let _ = app.update(Message::LineColorChanged(LineColorConfig::Gradient {
-            start,
-            end,
-            topological_depth: true,
-        }));
+        let _ = app.update(Message::LineColorChanged(Some(
+            EditorLineColorConfig::Gradient {
+                start: Some(start),
+                end: Some(end),
+                topological_depth: Some(true),
+            },
+        )));
 
-        assert_eq!(
-            app.control_line_color(),
-            LineColorConfig::Gradient {
-                start,
-                end,
-                topological_depth: true,
-            }
-        );
         // render_colors() is now a faithful resolve — no normalization.
         assert_eq!(
             app.render_colors().line,
@@ -789,7 +830,7 @@ mod tests {
         let background = Rgb::new(0x33, 0x4d, 0x66);
 
         let _ = app.update(Message::BackgroundColorChanged(background));
-        let _ = app.update(Message::BackgroundOverrideToggled(false));
+        let _ = app.update(Message::BackgroundDefaultToggled(true)); // true = use default (remove)
 
         assert_eq!(
             app.config_workspace
@@ -800,7 +841,7 @@ mod tests {
             None
         );
 
-        let _ = app.update(Message::BackgroundOverrideToggled(true));
+        let _ = app.update(Message::BackgroundDefaultToggled(false)); // false = explicit (restore)
 
         assert_eq!(
             app.config_workspace
