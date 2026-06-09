@@ -12,9 +12,6 @@ F = "F[+FF][-FF]FF[+F][-F]FF"
 [turtle]
 angle = 60.0
 
-[colors]
-background = "#000000"
-
 [colors.line.gradient]
 start = "#e699ff"
 end = "#1a80ff"

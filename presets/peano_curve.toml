@@ -13,8 +13,4 @@ R = "RFLFR+F+LFRFL-F-RFLFR"
 [turtle]
 angle = 90.0
 
-[colors]
-background = "#000000"
-
 [colors.line.hue_cycle]
-initial = "#e60000"

@@ -14,9 +14,6 @@ F = 'FF'
 angle = 40.0
 initial_heading = 90.0
 
-[colors]
-background = "#000000"
-
 [colors.line.gradient]
 start = "#8c400d"
 end = "#1af273"

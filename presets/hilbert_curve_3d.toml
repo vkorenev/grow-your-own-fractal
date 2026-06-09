@@ -12,8 +12,4 @@ X = '^\XF^\XFX-F^//XFX&F+//XFX-F/X-/'
 [turtle]
 angle = 90.0
 
-[colors]
-background = "#000000"
-
 [colors.line.hue_cycle]
-initial = "#e60000"

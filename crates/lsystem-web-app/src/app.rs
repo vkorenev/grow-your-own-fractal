@@ -4,9 +4,10 @@ use crate::renderer::{CanvasRenderer, RenderStatus};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EntryViewMut, HueRotation,
-    HueRotationDirection, LineColorMode, ParseConfigError, advance_hue_rotation_phase_degrees,
-    line_color_for_controls, load_presets, selected_line_color_mode,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorLineColorConfig,
+    EntryViewMut, HueRotation, HueRotationDirection, LineColorMode, ParseConfigError,
+    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    selected_line_color_mode,
 };
 use lsystem_core::{
     ColorConfig, Config, Dimensions, GenerationConfig, LineColorConfig, Rgb, contains_3d_symbols,
@@ -905,51 +906,44 @@ pub(crate) fn App() -> impl IntoView {
                         style="display:flex;flex-direction:column;gap:9px"
                         title=dirty_tooltip
                     >
-                    <label class="check-row" for="background-override">
-                        <input
-                            id="background-override"
-                            type="checkbox"
-                            prop:checked=move || {
-                                editor_color_config.with(|c| c.background.is_some())
-                            }
-                            disabled=is_dirty
-                            on:change:target=move |ev| {
-                                let current_bg = editor_color_config.with_untracked(|editor| {
-                                    editor
-                                        .background
-                                        .unwrap_or(ConfigDefaults::embedded().colors.background)
-                                });
-                                if editor_color_config
-                                    .with_untracked(|c| c.background.is_some())
-                                {
-                                    color_memory.update(|memory| {
-                                        memory.remember_background(current_bg);
-                                    });
+                    <span class="section-label">"Background"</span>
+                    <div class="color-row">
+                        <label class="check-row" for="background-override">
+                            <input
+                                id="background-override"
+                                type="checkbox"
+                                prop:checked=move || {
+                                    editor_color_config.with(|c| c.background.is_none())
                                 }
-                                let enabled = ev.target().checked();
-                                let background = if enabled {
-                                    Some(color_memory.get_untracked().background())
-                                } else {
-                                    None
-                                };
-                                update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "background checkbox",
-                                    move |clean| clean.set_background(background),
-                                );
-                            }
-                        />
-                        <span>"Background"</span>
-                    </label>
-
-                    <div
-                        class="color-row"
-                        class:hidden=move || {
-                            editor_color_config.with(|c| c.background.is_none())
-                        }
-                    >
-                        <label for="background-color">"Background color"</label>
+                                disabled=is_dirty
+                                on:change:target=move |ev| {
+                                    let use_default = ev.target().checked();
+                                    if use_default {
+                                        let current_bg =
+                                            editor_color_config.with_untracked(|editor| {
+                                                editor.background.unwrap_or(
+                                                    ConfigDefaults::embedded().colors.background,
+                                                )
+                                            });
+                                        color_memory.update(|memory| {
+                                            memory.remember_background(current_bg);
+                                        });
+                                    }
+                                    let background = if use_default {
+                                        None
+                                    } else {
+                                        Some(color_memory.get_untracked().background())
+                                    };
+                                    update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        "background checkbox",
+                                        move |clean| clean.set_background(background),
+                                    );
+                                }
+                            />
+                            <span>"Default"</span>
+                        </label>
                         <input
                             id="background-color"
                             type="color"
@@ -999,13 +993,10 @@ pub(crate) fn App() -> impl IntoView {
                                 log::error!("unknown line color mode selected: {mode_key}");
                                 return;
                             };
-                            let editor = editor_color_config.get_untracked();
-                            let current = line_color_for_controls(
-                                &editor,
-                                &ConfigDefaults::embedded().colors.line,
-                            );
-                            let Some(line_color) = color_memory.try_update(|memory| {
-                                memory.remember_line(current);
+                            let editor_line =
+                                editor_color_config.with_untracked(|e| e.line);
+                            let Some(new_editor_line) = color_memory.try_update(|memory| {
+                                memory.remember_line(editor_line);
                                 memory.line_for(mode)
                             }) else {
                                 log::error!(
@@ -1020,10 +1011,10 @@ pub(crate) fn App() -> impl IntoView {
                                 config_workspace,
                                 error,
                                 "line color mode select",
-                                move |clean| clean.set_line_color(line_color),
+                                move |clean| clean.set_line_color(new_editor_line),
                             ) {
                                 color_memory.update(|memory| {
-                                    memory.remember_line(line_color);
+                                    memory.remember_line(new_editor_line);
                                 });
                             }
                         }
@@ -1034,129 +1025,251 @@ pub(crate) fn App() -> impl IntoView {
                     </select>
 
                     <div
-                        class="color-row"
                         class:hidden=move || {
                             !matches!(
                                 control_line_color.get(),
                                 LineColorConfig::Solid(_)
                             )
                         }
+                        style="display:flex;flex-direction:column;gap:6px"
                     >
-                        <label for="line-solid-color">"Line color"</label>
-                        <input
-                            id="line-solid-color"
-                            type="color"
-                            prop:value=move || {
-                                solid_color_for_mode(control_line_color, color_memory)
-                                .to_string()
-                            }
-                            disabled=is_dirty
-                            on:input:target=move |ev| {
-                                let Ok(color) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
-                                    return;
-                                };
-                                let line_color = LineColorConfig::Solid(color);
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "solid line color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
+                        <span class="section-label">"Color"</span>
+                        <div class="color-row">
+                            <label class="check-row" for="line-solid-use-default">
+                                <input
+                                    id="line-solid-use-default"
+                                    type="checkbox"
+                                    prop:checked=move || {
+                                        editor_color_config.with(|c| c.line.is_none())
+                                    }
+                                    disabled=is_dirty
+                                    on:change:target=move |ev| {
+                                        let use_default = ev.target().checked();
+                                        if use_default {
+                                            let editor_line =
+                                                editor_color_config.with_untracked(|e| e.line);
+                                            color_memory.update(|m| m.remember_line(editor_line));
+                                        }
+                                        let line_color = if use_default {
+                                            None
+                                        } else {
+                                            Some(EditorLineColorConfig::Solid(
+                                                color_memory.get_untracked().solid_color(),
+                                            ))
+                                        };
+                                        update_clean_config(
+                                            config_workspace,
+                                            error,
+                                            "solid use-default checkbox",
+                                            move |clean| clean.set_line_color(line_color),
+                                        );
+                                    }
+                                />
+                                <span>"Default"</span>
+                            </label>
+                            <input
+                                id="line-solid-color"
+                                type="color"
+                                prop:value=move || {
+                                    solid_color_for_mode(control_line_color, color_memory)
+                                    .to_string()
                                 }
-                            }
-                        />
+                                disabled=is_dirty
+                                on:input:target=move |ev| {
+                                    let Ok(color) = ev.target().value().parse::<Rgb>() else {
+                                        error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let line_color = Some(EditorLineColorConfig::Solid(color));
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        "solid line color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(Some(
+                                                EditorLineColorConfig::Solid(color),
+                                            ));
+                                        });
+                                    }
+                                }
+                            />
+                        </div>
                     </div>
 
                     <div
-                        class="color-row"
                         class:hidden=move || {
                             !matches!(
                                 control_line_color.get(),
                                 LineColorConfig::Gradient { .. }
                             )
                         }
+                        style="display:flex;flex-direction:column;gap:6px"
                     >
-                        <label for="line-gradient-start">"Gradient start"</label>
-                        <input
-                            id="line-gradient-start"
-                            type="color"
-                            prop:value=move || {
-                                let (start, _, _) = gradient_fields_for_mode(
-                                    control_line_color,
-                                    color_memory,
-                                );
-                                start.to_string()
-                            }
-                            disabled=is_dirty
-                            on:input:target=move |ev| {
-                                let Ok(start) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
-                                    return;
-                                };
-                                let (_, end, topological_depth) = gradient_fields_for_mode_untracked(
-                                    control_line_color,
-                                    color_memory,
-                                );
-                                let line_color = LineColorConfig::Gradient {
-                                    start,
-                                    end,
-                                    topological_depth,
-                                };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "gradient start color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
+                        <span class="section-label">"Start"</span>
+                        <div class="color-row">
+                            <label class="check-row" for="line-gradient-start-use-default">
+                                <input
+                                    id="line-gradient-start-use-default"
+                                    type="checkbox"
+                                    prop:checked=move || {
+                                        editor_color_config.with(|c| {
+                                            c.line.map(|l| l.gradient_fields()).unwrap_or_default().0.is_none()
+                                        })
+                                    }
+                                    disabled=is_dirty
+                                    on:change:target=move |ev| {
+                                        let use_default = ev.target().checked();
+                                        let editor_line =
+                                            editor_color_config.with_untracked(|e| e.line);
+                                        if use_default {
+                                            color_memory.update(|m| m.remember_line(editor_line));
+                                        }
+                                        let (_, editor_end, editor_td) =
+                                            editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                                        let start = if use_default {
+                                            None
+                                        } else {
+                                            Some(color_memory.get_untracked().gradient_fields().0)
+                                        };
+                                        let line_color =
+                                            Some(EditorLineColorConfig::Gradient {
+                                                start,
+                                                end: editor_end,
+                                                topological_depth: editor_td,
+                                            });
+                                        update_clean_config(
+                                            config_workspace,
+                                            error,
+                                            "gradient start use-default",
+                                            move |clean| clean.set_line_color(line_color),
+                                        );
+                                    }
+                                />
+                                <span>"Default"</span>
+                            </label>
+                            <input
+                                id="line-gradient-start"
+                                type="color"
+                                prop:value=move || {
+                                    let (start, _, _) = gradient_fields_for_mode(
+                                        control_line_color,
+                                        color_memory,
+                                    );
+                                    start.to_string()
                                 }
-                            }
-                        />
+                                disabled=is_dirty
+                                on:input:target=move |ev| {
+                                    let Ok(start) = ev.target().value().parse::<Rgb>() else {
+                                        error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let editor_line =
+                                        editor_color_config.get_untracked().line;
+                                    let (_, editor_end, editor_td) =
+                                        editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                                    let line_color =
+                                        Some(EditorLineColorConfig::Gradient {
+                                            start: Some(start),
+                                            end: editor_end,
+                                            topological_depth: editor_td,
+                                        });
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        "gradient start color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            />
+                        </div>
 
-                        <label for="line-gradient-end">"Gradient end"</label>
-                        <input
-                            id="line-gradient-end"
-                            type="color"
-                            prop:value=move || {
-                                let (_, end, _) = gradient_fields_for_mode(
-                                    control_line_color,
-                                    color_memory,
-                                );
-                                end.to_string()
-                            }
-                            disabled=is_dirty
-                            on:input:target=move |ev| {
-                                let Ok(end) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
-                                    return;
-                                };
-                                let (start, _, topological_depth) = gradient_fields_for_mode_untracked(
-                                    control_line_color,
-                                    color_memory,
-                                );
-                                let line_color = LineColorConfig::Gradient {
-                                    start,
-                                    end,
-                                    topological_depth,
-                                };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "gradient end color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
+                        <span class="section-label">"End"</span>
+                        <div class="color-row">
+                            <label class="check-row" for="line-gradient-end-use-default">
+                                <input
+                                    id="line-gradient-end-use-default"
+                                    type="checkbox"
+                                    prop:checked=move || {
+                                        editor_color_config.with(|c| {
+                                            c.line.map(|l| l.gradient_fields()).unwrap_or_default().1.is_none()
+                                        })
+                                    }
+                                    disabled=is_dirty
+                                    on:change:target=move |ev| {
+                                        let use_default = ev.target().checked();
+                                        let editor_line =
+                                            editor_color_config.with_untracked(|e| e.line);
+                                        if use_default {
+                                            color_memory.update(|m| m.remember_line(editor_line));
+                                        }
+                                        let (editor_start, _, editor_td) =
+                                            editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                                        let end = if use_default {
+                                            None
+                                        } else {
+                                            Some(color_memory.get_untracked().gradient_fields().1)
+                                        };
+                                        let line_color =
+                                            Some(EditorLineColorConfig::Gradient {
+                                                start: editor_start,
+                                                end,
+                                                topological_depth: editor_td,
+                                            });
+                                        update_clean_config(
+                                            config_workspace,
+                                            error,
+                                            "gradient end use-default",
+                                            move |clean| clean.set_line_color(line_color),
+                                        );
+                                    }
+                                />
+                                <span>"Default"</span>
+                            </label>
+                            <input
+                                id="line-gradient-end"
+                                type="color"
+                                prop:value=move || {
+                                    let (_, end, _) = gradient_fields_for_mode(
+                                        control_line_color,
+                                        color_memory,
+                                    );
+                                    end.to_string()
                                 }
-                            }
-                        />
+                                disabled=is_dirty
+                                on:input:target=move |ev| {
+                                    let Ok(end) = ev.target().value().parse::<Rgb>() else {
+                                        error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let editor_line =
+                                        editor_color_config.get_untracked().line;
+                                    let (editor_start, _, editor_td) =
+                                        editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                                    let line_color =
+                                        Some(EditorLineColorConfig::Gradient {
+                                            start: editor_start,
+                                            end: Some(end),
+                                            topological_depth: editor_td,
+                                        });
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        "gradient end color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            />
+                        </div>
 
                         <label for="line-gradient-topological-depth">"Topological depth"</label>
                         <input
@@ -1171,15 +1284,15 @@ pub(crate) fn App() -> impl IntoView {
                             }
                             disabled=is_dirty
                             on:change:target=move |ev| {
-                                let (start, end, _) = gradient_fields_for_mode_untracked(
-                                    control_line_color,
-                                    color_memory,
-                                );
-                                let line_color = LineColorConfig::Gradient {
-                                    start,
-                                    end,
-                                    topological_depth: ev.target().checked(),
-                                };
+                                let editor_line = editor_color_config.get_untracked().line;
+                                let (editor_start, editor_end, _) =
+                                    editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                                let checked = ev.target().checked();
+                                let line_color = Some(EditorLineColorConfig::Gradient {
+                                    start: editor_start,
+                                    end: editor_end,
+                                    topological_depth: Some(checked),
+                                });
                                 if update_clean_config(
                                     config_workspace,
                                     error,
@@ -1195,41 +1308,87 @@ pub(crate) fn App() -> impl IntoView {
                     </div>
 
                     <div
-                        class="color-row"
                         class:hidden=move || {
                             !matches!(
                                 control_line_color.get(),
                                 LineColorConfig::HueCycle { .. }
                             )
                         }
+                        style="display:flex;flex-direction:column;gap:6px"
                     >
-                        <label for="line-hue-cycle-initial">"Initial color"</label>
-                        <input
-                            id="line-hue-cycle-initial"
-                            type="color"
-                            prop:value=move || {
-                                hue_cycle_initial_for_mode(control_line_color, color_memory)
-                                .to_string()
-                            }
-                            disabled=is_dirty
-                            on:input:target=move |ev| {
-                                let Ok(initial) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
-                                    return;
-                                };
-                                let line_color = LineColorConfig::HueCycle { initial };
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "hue-cycle initial color input",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
+                        <span class="section-label">"Initial"</span>
+                        <div class="color-row">
+                            <label class="check-row" for="line-hue-cycle-use-default">
+                                <input
+                                    id="line-hue-cycle-use-default"
+                                    type="checkbox"
+                                    prop:checked=move || {
+                                        matches!(
+                                            editor_color_config.with(|c| c.line),
+                                            None | Some(EditorLineColorConfig::HueCycle {
+                                                initial: None
+                                            })
+                                        )
+                                    }
+                                    disabled=is_dirty
+                                    on:change:target=move |ev| {
+                                        let use_default = ev.target().checked();
+                                        if use_default {
+                                            let editor_line =
+                                                editor_color_config.with_untracked(|e| e.line);
+                                            color_memory.update(|m| m.remember_line(editor_line));
+                                        }
+                                        let line_color = if use_default {
+                                            Some(EditorLineColorConfig::HueCycle { initial: None })
+                                        } else {
+                                            Some(EditorLineColorConfig::HueCycle {
+                                                initial: Some(
+                                                    color_memory.get_untracked().hue_cycle_initial(),
+                                                ),
+                                            })
+                                        };
+                                        update_clean_config(
+                                            config_workspace,
+                                            error,
+                                            "hue-cycle use-default checkbox",
+                                            move |clean| clean.set_line_color(line_color),
+                                        );
+                                    }
+                                />
+                                <span>"Default"</span>
+                            </label>
+                            <input
+                                id="line-hue-cycle-initial"
+                                type="color"
+                                prop:value=move || {
+                                    hue_cycle_initial_for_mode(control_line_color, color_memory)
+                                    .to_string()
                                 }
-                            }
-                        />
+                                disabled=is_dirty
+                                on:input:target=move |ev| {
+                                    let Ok(initial) = ev.target().value().parse::<Rgb>() else {
+                                        error.set(Some("Invalid color value.".to_string()));
+                                        return;
+                                    };
+                                    let line_color =
+                                        Some(EditorLineColorConfig::HueCycle { initial: Some(initial) });
+                                    if update_clean_config(
+                                        config_workspace,
+                                        error,
+                                        "hue-cycle initial color input",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(Some(
+                                                EditorLineColorConfig::HueCycle {
+                                                    initial: Some(initial),
+                                                },
+                                            ));
+                                        });
+                                    }
+                                }
+                            />
+                        </div>
                     </div>
                     </div>
                 </crate::ui::Disclosure>
@@ -1599,16 +1758,6 @@ fn gradient_fields_for_mode(
     memory: RwSignal<ColorControlMemory>,
 ) -> (Rgb, Rgb, bool) {
     gradient_fields_from(line_color.get(), memory.with(|m| m.gradient_fields()))
-}
-
-fn gradient_fields_for_mode_untracked(
-    line_color: Memo<LineColorConfig>,
-    memory: RwSignal<ColorControlMemory>,
-) -> (Rgb, Rgb, bool) {
-    gradient_fields_from(
-        line_color.get_untracked(),
-        memory.with_untracked(|m| m.gradient_fields()),
-    )
 }
 
 fn hue_cycle_initial_for_mode(
