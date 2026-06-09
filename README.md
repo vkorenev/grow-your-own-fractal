@@ -170,15 +170,18 @@ rotation phase currently visible in the UI.
 
 | File | Name | Description |
 |------|------|-------------|
+| `presets/box_fractal.toml` | Box Fractal | Square-grid fractal built by replacing each edge with a five-segment box pattern. |
 | `presets/dragon_curve.toml` | Harter-Heightway Dragon | Self-similar curve obtained by repeatedly folding a strip of paper in half. |
 | `presets/gosper_curve.toml` | Gosper Curve | Space-filling curve that tiles the plane with hexagonal regions; also known as the flowsnake. |
 | `presets/hilbert_curve.toml` | Hilbert Curve | Space-filling curve that maps a line continuously to a 2D square while preserving locality. |
 | `presets/hilbert_curve_3d.toml` | 3D Hilbert Curve | Three-dimensional Hilbert-style space-filling curve using pitch and roll turns. |
 | `presets/koch_snowflake.toml` | Koch Snowflake | Classic fractal snowflake built by iteratively replacing each edge with a triangular bump. |
+| `presets/levy_c_curve.toml` | Lévy C Curve | Self-similar curve formed by recursively replacing a segment with two right-angled turns. |
 | `presets/peano_curve.toml` | Peano Curve | First known space-filling curve; fills a square with a continuous self-similar path. |
 | `presets/plant_a.toml` | Plant A | Branching plant-like structure modelled with push/pop brackets for recursive branching. |
-| `presets/sierpinski_curve.toml` | Sierpinski Curve | Space-filling curve traced along the boundary of a Sierpinski triangle. |
-| `presets/sierpinski_triangle.toml` | Sierpinski Triangle | Self-similar triangle subdivided into progressively smaller triangular holes. |
+| `presets/sierpinski_arrowhead_curve.toml` | Sierpiński Arrowhead Curve | Continuous self-similar curve that traces a Sierpiński triangle with alternating arrowhead turns. |
+| `presets/sierpinski_curve.toml` | Sierpiński Curve | Space-filling curve traced along the boundary of a Sierpiński triangle. |
+| `presets/sierpinski_triangle.toml` | Sierpiński Triangle | Self-similar triangle subdivided into progressively smaller triangular holes. |
 | `presets/snowflake.toml` | Snowflake | Branching snowflake pattern with six-fold symmetry and recursive side branches. |
 | `presets/plant_3d.toml` | 3D Plant | Branching 3D plant using pitch symbols to spread branches in all directions. |
 | `presets/ternary_tree_3d.toml` | 3D Ternary Tree | Branching tree that splits into three pitched branches at each recursive step. |

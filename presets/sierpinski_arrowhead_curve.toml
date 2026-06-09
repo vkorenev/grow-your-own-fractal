@@ -1,14 +1,14 @@
 [metadata]
-name = "Sierpiński Triangle"
+name = "Sierpiński Arrowhead Curve"
 
 [l-system]
 dimensions = "2D"
-axiom = "FXF-FF-FF"
+axiom = "YF"
 iterations = 9
-angle = 120.0
+angle = 60.0
 
 [l-system.rules]
-F = "FF"
-X = "-FXF+FXF+FXF-"
+X = "YF+XF+Y"
+Y = "XF-YF-X"
 
 [colors.line.hue_cycle]
