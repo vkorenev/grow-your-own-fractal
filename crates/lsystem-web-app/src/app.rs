@@ -30,7 +30,12 @@ pub(crate) fn App() -> impl IntoView {
         &ConfigDefaults::embedded().colors,
     ));
     let config_workspace = RwSignal::new(initial_workspace);
-    let error = RwSignal::new(None::<String>);
+    let grammar_error = RwSignal::new(None::<String>);
+    let toml_error = RwSignal::new(None::<String>);
+    let workspace_error = RwSignal::new(None::<String>);
+    let export_error = RwSignal::new(None::<String>);
+    let animation_error = RwSignal::new(None::<String>);
+    let colors_error = RwSignal::new(None::<String>);
     let png_width = RwSignal::new(2048u32);
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(true);
@@ -95,8 +100,6 @@ pub(crate) fn App() -> impl IntoView {
     let grammar_rules: RwSignal<Vec<(String, String)>> = RwSignal::new(rules_to_editor_rows(
         &editor_generation_config.get_untracked().rules,
     ));
-
-    let dims_3d_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     let save_format = RwSignal::new("png"); // "svg" | "png"
 
@@ -172,6 +175,7 @@ pub(crate) fn App() -> impl IntoView {
     });
 
     let start_animation_loop = move || {
+        animation_error.set(None);
         animation_token.update(|t| *t = t.wrapping_add(1));
         let token = animation_token.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
@@ -184,7 +188,7 @@ pub(crate) fn App() -> impl IntoView {
                         auto_rotate.set(false);
                         hue_rotation.update(|m| m.stop());
                         hue_rotation_phase.set_value(0.0);
-                        error.set(Some(
+                        animation_error.set(Some(
                             "Animation stopped unexpectedly. Try toggling it again.".to_string(),
                         ));
                         break;
@@ -309,7 +313,10 @@ pub(crate) fn App() -> impl IntoView {
     });
 
     let select_current_config = move || {
-        error.set(None);
+        grammar_error.set(None);
+        toml_error.set(None);
+        workspace_error.set(None);
+        colors_error.set(None);
         refresh_color_memory();
         sync_grammar_editor();
     };
@@ -322,10 +329,10 @@ pub(crate) fn App() -> impl IntoView {
             .try_update(|workspace| workspace.apply().map(|_| ()).map_err(|e| e.to_string()));
         match result {
             Some(Ok(())) => select_current_config(),
-            Some(Err(msg)) => error.set(Some(msg)),
+            Some(Err(msg)) => toml_error.set(Some(msg)),
             None => {
                 log::error!("apply: config_workspace signal was unavailable");
-                error.set(Some("Internal error: could not apply config.".to_string()));
+                toml_error.set(Some("Internal error: could not apply config.".to_string()));
             }
         }
     };
@@ -347,7 +354,7 @@ pub(crate) fn App() -> impl IntoView {
             Some(false) => {}
             None => {
                 log::error!("revert: config_workspace signal was unavailable");
-                error.set(Some("Internal error: could not revert config.".to_string()));
+                toml_error.set(Some("Internal error: could not revert config.".to_string()));
             }
         }
     };
@@ -357,11 +364,11 @@ pub(crate) fn App() -> impl IntoView {
         let idx = config_workspace.with_untracked(|ws| ws.selected_index());
         match config_workspace.try_update(|ws| ws.rename(idx, &name)) {
             Some(Ok(())) => {
-                error.set(None);
+                workspace_error.set(None);
                 rename_mode.set(false);
             }
-            Some(Err(e)) => error.set(Some(e.to_string())),
-            None => error.set(Some("Internal error: could not rename.".to_string())),
+            Some(Err(e)) => workspace_error.set(Some(e.to_string())),
+            None => workspace_error.set(Some("Internal error: could not rename.".to_string())),
         }
     };
 
@@ -378,8 +385,8 @@ pub(crate) fn App() -> impl IntoView {
                     "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
                 );
             }
-            Some(Err(msg)) => error.set(Some(msg)),
-            None => error.set(Some("Internal error: could not reset.".to_string())),
+            Some(Err(msg)) => workspace_error.set(Some(msg)),
+            None => workspace_error.set(Some("Internal error: could not reset.".to_string())),
         }
     };
 
@@ -411,23 +418,26 @@ pub(crate) fn App() -> impl IntoView {
         let mut rules: Vec<(char, String)> = Vec::with_capacity(rules_raw.len());
         for (k, v) in rules_raw {
             let Some(c) = k.chars().next() else {
-                error.set(Some(
+                grammar_error.set(Some(
                     "Each rule must have a symbol. Remove or complete empty rows before applying."
                         .to_string(),
                 ));
                 return;
             };
             if !seen.insert(c) {
-                error.set(Some(format!(
+                grammar_error.set(Some(format!(
                     "Duplicate rule symbol '{c}'. Each symbol may appear only once."
                 )));
                 return;
             }
             rules.push((c, v));
         }
-        if update_clean_config(config_workspace, error, "grammar apply", move |clean| {
-            clean.set_grammar(&axiom, &rules)
-        }) {
+        if update_clean_config(
+            config_workspace,
+            grammar_error,
+            "grammar apply",
+            move |clean| clean.set_grammar(&axiom, &rules),
+        ) {
             sync_grammar_editor();
         }
     };
@@ -457,25 +467,16 @@ pub(crate) fn App() -> impl IntoView {
         } else {
             Dimensions::TwoD
         };
-        if next == Dimensions::TwoD {
-            let generation = editor_generation_config.get_untracked();
-            if contains_3d_symbols(&generation.axiom)
-                || generation
-                    .rules
-                    .values()
-                    .any(|rhs| contains_3d_symbols(rhs))
-            {
-                dims_3d_error.set(Some(
-                    "Remove 3D-only symbols (& ^ / \\) from the grammar before switching to 2D."
-                        .to_string(),
-                ));
-                return;
-            }
+        // Defensive: "2d" button is disabled when grammar_has_3d_symbols(); guard against bypass.
+        if next == Dimensions::TwoD && grammar_has_3d_symbols() {
+            return;
         }
-        dims_3d_error.set(None);
-        update_clean_config(config_workspace, error, "set dimensions", move |clean| {
-            clean.set_dimensions(next)
-        });
+        update_clean_config(
+            config_workspace,
+            grammar_error,
+            "set dimensions",
+            move |clean| clean.set_dimensions(next),
+        );
     };
 
     let apply_hue_rotation = move |dir: Option<HueRotationDirection>| match dir {
@@ -560,13 +561,13 @@ pub(crate) fn App() -> impl IntoView {
                                 }
                                 Some(Err(err)) => {
                                     log::error!("select preset: rejected index {idx}: {err}");
-                                    error.set(Some(err));
+                                    workspace_error.set(Some(err));
                                 }
                                 None => {
                                     log::error!(
                                         "select preset: config_workspace signal was unavailable"
                                     );
-                                    error.set(Some(
+                                    workspace_error.set(Some(
                                         "Internal error: could not select config.".to_string(),
                                     ));
                                 }
@@ -618,7 +619,7 @@ pub(crate) fn App() -> impl IntoView {
                                     }
                                     on:click=move |_| commit_rename()
                                 >"Save"</button>
-                                <button type="button" on:click=move |_| rename_mode.set(false)>"✕"</button>
+                                <button type="button" on:click=move |_| rename_mode.set(false)>"Cancel"</button>
                             </div>
                         }.into_any()
                     } else {
@@ -632,10 +633,10 @@ pub(crate) fn App() -> impl IntoView {
                                         });
                                         match result {
                                             Some(Ok(())) => select_current_config(),
-                                            Some(Err(msg)) => error.set(Some(msg)),
+                                            Some(Err(msg)) => workspace_error.set(Some(msg)),
                                             None => {
                                                 log::error!("copy: config_workspace signal was unavailable");
-                                                error.set(Some(
+                                                workspace_error.set(Some(
                                                     "Internal error: could not copy config.".to_string(),
                                                 ));
                                             }
@@ -660,6 +661,9 @@ pub(crate) fn App() -> impl IntoView {
                         }.into_any()
                     }}
                 </div>
+                {move || workspace_error.get().map(|msg| view! {
+                    <span class="inline-status error">{msg}</span>
+                })}
 
                 <crate::ui::Disclosure title="Edit TOML" open=false
                     badge=Signal::derive(is_dirty)>
@@ -676,7 +680,7 @@ pub(crate) fn App() -> impl IntoView {
                             });
                             if updated.is_none() {
                                 log::error!("textarea input: config_workspace signal was unavailable");
-                                error.set(Some(
+                                toml_error.set(Some(
                                     "Internal error: could not update config.".to_string(),
                                 ));
                             }
@@ -701,9 +705,38 @@ pub(crate) fn App() -> impl IntoView {
                         </button>
                     </div>
                     </div>
+                    {move || toml_error.get().map(|msg| view! {
+                        <span class="inline-status error">{msg}</span>
+                    })}
                 </crate::ui::Disclosure>
 
-                <crate::ui::Disclosure title="Grammar" badge=Signal::derive(grammar_is_dirty)>
+                <crate::ui::Disclosure title="L-System" badge=Signal::derive(grammar_is_dirty)>
+                    <div style="display:flex;flex-direction:column;gap:5px">
+                        <span class="section-label">"Dimensions"</span>
+                        <div title=dirty_tooltip>
+                        <crate::ui::SegmentedToggle
+                            options=vec![("2d", "2D"), ("3d", "3D")]
+                            selected=Signal::derive(move || match editor_generation_config.get().dimensions {
+                                Dimensions::TwoD => "2d",
+                                Dimensions::ThreeD => "3d",
+                            })
+                            on_change=move |key| try_set_dimensions(key)
+                            disabled=Signal::derive(is_dirty)
+                            disabled_keys=Signal::derive(move || {
+                                if grammar_has_3d_symbols() { vec!["2d"] } else { vec![] }
+                            })
+                        />
+                        </div>
+                        <Show when=move || grammar_has_3d_symbols()>
+                            <span class="inline-status warning">
+                                "Grammar contains 3D-only symbols (& ^ / \\) — 2D mode is unavailable"
+                            </span>
+                        </Show>
+                    </div>
+
+                    <hr class="section-divider" />
+
+                    <span class="section-label">"Grammar"</span>
                     <div title=dirty_tooltip>
                     <table class="grammar-table">
                         <tbody>
@@ -805,7 +838,7 @@ pub(crate) fn App() -> impl IntoView {
                         <div title=move || {
                             if is_dirty() { "Apply or Revert TOML changes first" }
                             else if grammar_has_3d_symbols() && !is_3d() {
-                                "Contains 3D-only symbols — switch to 3D mode in Parameters first"
+                                "Contains 3D-only symbols — switch to 3D mode in Dimensions first"
                             } else { "" }
                         }>
                             <button
@@ -820,30 +853,13 @@ pub(crate) fn App() -> impl IntoView {
                             on:click=move |_| sync_grammar_editor()
                         >"Revert"</button>
                     </div>
-                    {move || error.get().map(|msg| view! {
+                    {move || grammar_error.get().map(|msg| view! {
                         <span class="inline-status error">{msg}</span>
                     })}
-                </crate::ui::Disclosure>
 
-                <crate::ui::Disclosure title="Parameters">
-                    <div style="display:flex;flex-direction:column;gap:5px">
-                        <span class="section-label">"Dimensions"</span>
-                        <div title=dirty_tooltip>
-                        <crate::ui::SegmentedToggle
-                            options=vec![("2d", "2D"), ("3d", "3D")]
-                            selected=Signal::derive(move || match editor_generation_config.get().dimensions {
-                                Dimensions::TwoD => "2d",
-                                Dimensions::ThreeD => "3d",
-                            })
-                            on_change=move |key| try_set_dimensions(key)
-                            disabled=Signal::derive(is_dirty)
-                        />
-                        </div>
-                        {move || dims_3d_error.get().map(|msg| view! {
-                            <span class="inline-status error">{msg}</span>
-                        })}
-                    </div>
+                    <hr class="section-divider" />
 
+                    <span class="section-label">"Parameters"</span>
                     <div class="spinner-row" title=dirty_tooltip>
                         <span class="spinner-label">"Angle (°)"</span>
                         <crate::ui::Spinner
@@ -854,7 +870,7 @@ pub(crate) fn App() -> impl IntoView {
                                 if let Ok(v) = s.parse::<f32>() {
                                     let v = v.clamp(1.0, 180.0);
                                     update_clean_config(
-                                        config_workspace, error, "angle",
+                                        config_workspace, grammar_error,"angle",
                                         move |clean| clean.set_angle(v),
                                     );
                                 }
@@ -874,7 +890,7 @@ pub(crate) fn App() -> impl IntoView {
                             on_commit=move |s| {
                                 if let Ok(v) = s.parse::<f32>() {
                                     update_clean_config(
-                                        config_workspace, error, "initial_heading",
+                                        config_workspace, grammar_error,"initial_heading",
                                         move |clean| clean.set_initial_heading(v),
                                     );
                                 }
@@ -892,7 +908,7 @@ pub(crate) fn App() -> impl IntoView {
                                 if let Ok(v) = s.parse::<u32>() {
                                     let v = v.clamp(0, max_iterations.get_untracked());
                                     update_clean_config(
-                                        config_workspace, error, "iterations",
+                                        config_workspace, grammar_error,"iterations",
                                         move |clean| clean.set_iterations(v),
                                     );
                                 }
@@ -936,7 +952,7 @@ pub(crate) fn App() -> impl IntoView {
                                     };
                                     update_clean_config(
                                         config_workspace,
-                                        error,
+                                        colors_error,
                                         "background checkbox",
                                         move |clean| clean.set_background(background),
                                     );
@@ -958,12 +974,12 @@ pub(crate) fn App() -> impl IntoView {
                             disabled=is_dirty
                             on:input:target=move |ev| {
                                 let Ok(color) = ev.target().value().parse::<Rgb>() else {
-                                    error.set(Some("Invalid color value.".to_string()));
+                                    colors_error.set(Some("Invalid color value.".to_string()));
                                     return;
                                 };
                                 if update_clean_config(
                                     config_workspace,
-                                    error,
+                                    colors_error,
                                     "background color input",
                                     move |clean| clean.set_background(Some(color)),
                                 ) {
@@ -975,9 +991,14 @@ pub(crate) fn App() -> impl IntoView {
                         />
                     </div>
 
-                    <label for="line-color-mode">"Line color"</label>
+                    <hr class="section-divider" />
+
+                    <span class="section-label">"Line"</span>
+                    <div style="display:flex;align-items:center;gap:8px">
+                    <label for="line-color-mode">"Style"</label>
                     <select
                         id="line-color-mode"
+                        style="flex:1"
                         prop:value=move || {
                             editor_color_config
                                 .with(|editor| {
@@ -1002,14 +1023,14 @@ pub(crate) fn App() -> impl IntoView {
                                 log::error!(
                                     "line color mode select: line color memory signal was unavailable"
                                 );
-                                error.set(Some(
+                                colors_error.set(Some(
                                     "Internal error: could not update line color.".to_string(),
                                 ));
                                 return;
                             };
                             if update_clean_config(
                                 config_workspace,
-                                error,
+                                colors_error,
                                 "line color mode select",
                                 move |clean| clean.set_line_color(new_editor_line),
                             ) {
@@ -1023,6 +1044,7 @@ pub(crate) fn App() -> impl IntoView {
                         <option value="gradient">"Gradient"</option>
                         <option value="hue_cycle">"Hue cycle"</option>
                     </select>
+                    </div>
 
                     <div
                         class:hidden=move || {
@@ -1033,9 +1055,9 @@ pub(crate) fn App() -> impl IntoView {
                         }
                         style="display:flex;flex-direction:column;gap:6px"
                     >
-                        <span class="section-label">"Color"</span>
                         <div class="color-row">
                             <label class="check-row" for="line-solid-use-default">
+                                <span>"Color"</span>
                                 <input
                                     id="line-solid-use-default"
                                     type="checkbox"
@@ -1059,7 +1081,7 @@ pub(crate) fn App() -> impl IntoView {
                                         };
                                         update_clean_config(
                                             config_workspace,
-                                            error,
+                                            colors_error,
                                             "solid use-default checkbox",
                                             move |clean| clean.set_line_color(line_color),
                                         );
@@ -1077,13 +1099,13 @@ pub(crate) fn App() -> impl IntoView {
                                 disabled=is_dirty
                                 on:input:target=move |ev| {
                                     let Ok(color) = ev.target().value().parse::<Rgb>() else {
-                                        error.set(Some("Invalid color value.".to_string()));
+                                        colors_error.set(Some("Invalid color value.".to_string()));
                                         return;
                                     };
                                     let line_color = Some(EditorLineColorConfig::Solid(color));
                                     if update_clean_config(
                                         config_workspace,
-                                        error,
+                                        colors_error,
                                         "solid line color input",
                                         move |clean| clean.set_line_color(line_color),
                                     ) {
@@ -1107,9 +1129,9 @@ pub(crate) fn App() -> impl IntoView {
                         }
                         style="display:flex;flex-direction:column;gap:6px"
                     >
-                        <span class="section-label">"Start"</span>
                         <div class="color-row">
                             <label class="check-row" for="line-gradient-start-use-default">
+                                <span>"Start"</span>
                                 <input
                                     id="line-gradient-start-use-default"
                                     type="checkbox"
@@ -1141,7 +1163,7 @@ pub(crate) fn App() -> impl IntoView {
                                             });
                                         update_clean_config(
                                             config_workspace,
-                                            error,
+                                            colors_error,
                                             "gradient start use-default",
                                             move |clean| clean.set_line_color(line_color),
                                         );
@@ -1162,7 +1184,7 @@ pub(crate) fn App() -> impl IntoView {
                                 disabled=is_dirty
                                 on:input:target=move |ev| {
                                     let Ok(start) = ev.target().value().parse::<Rgb>() else {
-                                        error.set(Some("Invalid color value.".to_string()));
+                                        colors_error.set(Some("Invalid color value.".to_string()));
                                         return;
                                     };
                                     let editor_line =
@@ -1177,7 +1199,7 @@ pub(crate) fn App() -> impl IntoView {
                                         });
                                     if update_clean_config(
                                         config_workspace,
-                                        error,
+                                        colors_error,
                                         "gradient start color input",
                                         move |clean| clean.set_line_color(line_color),
                                     ) {
@@ -1189,9 +1211,9 @@ pub(crate) fn App() -> impl IntoView {
                             />
                         </div>
 
-                        <span class="section-label">"End"</span>
                         <div class="color-row">
                             <label class="check-row" for="line-gradient-end-use-default">
+                                <span>"End"</span>
                                 <input
                                     id="line-gradient-end-use-default"
                                     type="checkbox"
@@ -1223,7 +1245,7 @@ pub(crate) fn App() -> impl IntoView {
                                             });
                                         update_clean_config(
                                             config_workspace,
-                                            error,
+                                            colors_error,
                                             "gradient end use-default",
                                             move |clean| clean.set_line_color(line_color),
                                         );
@@ -1244,7 +1266,7 @@ pub(crate) fn App() -> impl IntoView {
                                 disabled=is_dirty
                                 on:input:target=move |ev| {
                                     let Ok(end) = ev.target().value().parse::<Rgb>() else {
-                                        error.set(Some("Invalid color value.".to_string()));
+                                        colors_error.set(Some("Invalid color value.".to_string()));
                                         return;
                                     };
                                     let editor_line =
@@ -1259,7 +1281,7 @@ pub(crate) fn App() -> impl IntoView {
                                         });
                                     if update_clean_config(
                                         config_workspace,
-                                        error,
+                                        colors_error,
                                         "gradient end color input",
                                         move |clean| clean.set_line_color(line_color),
                                     ) {
@@ -1271,40 +1293,42 @@ pub(crate) fn App() -> impl IntoView {
                             />
                         </div>
 
-                        <label for="line-gradient-topological-depth">"Topological depth"</label>
-                        <input
-                            id="line-gradient-topological-depth"
-                            type="checkbox"
-                            prop:checked=move || {
-                                let (_, _, topological_depth) = gradient_fields_for_mode(
-                                    control_line_color,
-                                    color_memory,
-                                );
-                                topological_depth
-                            }
-                            disabled=is_dirty
-                            on:change:target=move |ev| {
-                                let editor_line = editor_color_config.get_untracked().line;
-                                let (editor_start, editor_end, _) =
-                                    editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
-                                let checked = ev.target().checked();
-                                let line_color = Some(EditorLineColorConfig::Gradient {
-                                    start: editor_start,
-                                    end: editor_end,
-                                    topological_depth: Some(checked),
-                                });
-                                if update_clean_config(
-                                    config_workspace,
-                                    error,
-                                    "gradient topological depth toggle",
-                                    move |clean| clean.set_line_color(line_color),
-                                ) {
-                                    color_memory.update(|memory| {
-                                        memory.remember_line(line_color);
-                                    });
+                        <label class="check-row" for="line-gradient-topological-depth">
+                            <input
+                                id="line-gradient-topological-depth"
+                                type="checkbox"
+                                prop:checked=move || {
+                                    let (_, _, topological_depth) = gradient_fields_for_mode(
+                                        control_line_color,
+                                        color_memory,
+                                    );
+                                    topological_depth
                                 }
-                            }
-                        />
+                                disabled=is_dirty
+                                on:change:target=move |ev| {
+                                    let editor_line = editor_color_config.get_untracked().line;
+                                    let (editor_start, editor_end, _) =
+                                        editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
+                                    let checked = ev.target().checked();
+                                    let line_color = Some(EditorLineColorConfig::Gradient {
+                                        start: editor_start,
+                                        end: editor_end,
+                                        topological_depth: Some(checked),
+                                    });
+                                    if update_clean_config(
+                                        config_workspace,
+                                        colors_error,
+                                        "gradient topological depth toggle",
+                                        move |clean| clean.set_line_color(line_color),
+                                    ) {
+                                        color_memory.update(|memory| {
+                                            memory.remember_line(line_color);
+                                        });
+                                    }
+                                }
+                            />
+                            <span>"Color by topological depth"</span>
+                        </label>
                     </div>
 
                     <div
@@ -1316,9 +1340,9 @@ pub(crate) fn App() -> impl IntoView {
                         }
                         style="display:flex;flex-direction:column;gap:6px"
                     >
-                        <span class="section-label">"Initial"</span>
                         <div class="color-row">
                             <label class="check-row" for="line-hue-cycle-use-default">
+                                <span>"Initial"</span>
                                 <input
                                     id="line-hue-cycle-use-default"
                                     type="checkbox"
@@ -1349,7 +1373,7 @@ pub(crate) fn App() -> impl IntoView {
                                         };
                                         update_clean_config(
                                             config_workspace,
-                                            error,
+                                            colors_error,
                                             "hue-cycle use-default checkbox",
                                             move |clean| clean.set_line_color(line_color),
                                         );
@@ -1367,14 +1391,14 @@ pub(crate) fn App() -> impl IntoView {
                                 disabled=is_dirty
                                 on:input:target=move |ev| {
                                     let Ok(initial) = ev.target().value().parse::<Rgb>() else {
-                                        error.set(Some("Invalid color value.".to_string()));
+                                        colors_error.set(Some("Invalid color value.".to_string()));
                                         return;
                                     };
                                     let line_color =
                                         Some(EditorLineColorConfig::HueCycle { initial: Some(initial) });
                                     if update_clean_config(
                                         config_workspace,
-                                        error,
+                                        colors_error,
                                         "hue-cycle initial color input",
                                         move |clean| clean.set_line_color(line_color),
                                     ) {
@@ -1391,6 +1415,9 @@ pub(crate) fn App() -> impl IntoView {
                         </div>
                     </div>
                     </div>
+                    {move || colors_error.get().map(|msg| view! {
+                        <span class="inline-status error">{msg}</span>
+                    })}
                 </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Animations">
@@ -1420,6 +1447,9 @@ pub(crate) fn App() -> impl IntoView {
                                     }
                                 />
                             </div>
+                        </Show>
+                        <Show when=move || !is_3d()>
+                            <span class="inline-status warning">"Switch to 3D mode to enable auto-rotate"</span>
                         </Show>
                     </div>
 
@@ -1461,7 +1491,13 @@ pub(crate) fn App() -> impl IntoView {
                                 />
                             </div>
                         </Show>
+                        <Show when=move || !matches!(control_line_color.get(), LineColorConfig::HueCycle { .. })>
+                            <span class="inline-status warning">"Select Hue cycle in Colors to enable hue rotation"</span>
+                        </Show>
                     </div>
+                    {move || animation_error.get().map(|msg| view! {
+                        <span class="inline-status error">{msg}</span>
+                    })}
                 </crate::ui::Disclosure>
 
                 <crate::ui::Disclosure title="Save image" open=false>
@@ -1495,6 +1531,7 @@ pub(crate) fn App() -> impl IntoView {
                     <button
                         type="button"
                         on:click=move |_| {
+                            export_error.set(None);
                             let config = config_for_render();
                             if save_format.get_untracked() == "svg" {
                                 export_svg(config);
@@ -1507,7 +1544,7 @@ pub(crate) fn App() -> impl IntoView {
                                         })
                                     })
                                 else {
-                                    error.set(Some("Cannot save: GPU renderer not ready.".to_string()));
+                                    export_error.set(Some("Cannot save: GPU renderer not ready.".to_string()));
                                     return;
                                 };
                                 export_png(
@@ -1516,11 +1553,14 @@ pub(crate) fn App() -> impl IntoView {
                                     camera,
                                     config,
                                     png_width.get_untracked(),
-                                    move |e| error.set(Some(e)),
+                                    move |e| export_error.set(Some(e)),
                                 );
                             }
                         }
                     >"Save"</button>
+                    {move || export_error.get().map(|msg| view! {
+                        <span class="inline-status error">{msg}</span>
+                    })}
                 </crate::ui::Disclosure>
 
                 </div>
@@ -1697,7 +1737,7 @@ fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec
 
 fn update_clean_config(
     config_workspace: RwSignal<ConfigWorkspace>,
-    error: RwSignal<Option<String>>,
+    grammar_error: RwSignal<Option<String>>,
     event: &'static str,
     update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
 ) -> bool {
@@ -1716,17 +1756,17 @@ fn update_clean_config(
     });
     match result {
         Some(Ok(true)) => {
-            error.set(None);
+            grammar_error.set(None);
             true
         }
         Some(Ok(false)) => false,
         Some(Err(msg)) => {
-            error.set(Some(msg));
+            grammar_error.set(Some(msg));
             false
         }
         None => {
             log::error!("{event}: config_workspace signal was unavailable");
-            error.set(Some("Internal error: could not update config.".to_string()));
+            grammar_error.set(Some("Internal error: could not update config.".to_string()));
             false
         }
     }

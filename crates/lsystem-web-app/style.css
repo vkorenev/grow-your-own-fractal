@@ -68,6 +68,8 @@ textarea {
 .controls textarea {
   min-height: 210px;
   padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
@@ -438,6 +440,7 @@ textarea {
 
 .inline-status { font-size: 12px; min-height: 16px; }
 .inline-status.error { color: #ff7b7b; }
+.inline-status.warning { color: #d4a840; }
 
 /* ── Disclosure badge (amber dot for dirty state) ── */
 .disclosure-badge {
