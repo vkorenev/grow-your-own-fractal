@@ -5,12 +5,10 @@ name = "Peano Curve"
 dimensions = "2D"
 axiom = "L"
 iterations = 4
+angle = 90.0
 
 [l-system.rules]
 L = "LFRFL-F-RFLFR+F+LFRFL"
 R = "RFLFR+F+LFRFL-F-RFLFR"
-
-[turtle]
-angle = 90.0
 
 [colors.line.hue_cycle]

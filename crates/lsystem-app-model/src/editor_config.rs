@@ -66,10 +66,10 @@ impl EditorGenerationConfig {
             axiom: self.axiom.clone(),
             iterations: self.iterations.min(max_iterations),
             angle: self.angle,
-            step: self.step.unwrap_or_else(|| defaults.turtle.step()),
+            step: self.step.unwrap_or_else(|| defaults.l_system.step()),
             initial_heading: self
                 .initial_heading
-                .unwrap_or_else(|| defaults.turtle.initial_heading()),
+                .unwrap_or_else(|| defaults.l_system.initial_heading()),
             rules: self.rules.clone(),
         }
     }
@@ -158,7 +158,6 @@ struct RawConfig {
     metadata: RawMetadata,
     #[serde(rename = "l-system")]
     l_system: RawLSystem,
-    turtle: RawTurtle,
     colors: RawColors,
 }
 
@@ -174,6 +173,12 @@ struct RawLSystem {
     dimensions: RawDimensions,
     axiom: String,
     iterations: u32,
+    #[serde(deserialize_with = "deserialize_number")]
+    angle: f64,
+    #[serde(default, deserialize_with = "deserialize_optional_number")]
+    step: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_number")]
+    initial_heading: Option<f64>,
     rules: BTreeMap<String, String>,
 }
 
@@ -192,17 +197,6 @@ impl From<RawDimensions> for Dimensions {
             RawDimensions::ThreeD => Self::ThreeD,
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTurtle {
-    #[serde(deserialize_with = "deserialize_number")]
-    angle: f64,
-    #[serde(default, deserialize_with = "deserialize_optional_number")]
-    step: Option<f64>,
-    #[serde(default, deserialize_with = "deserialize_optional_number")]
-    initial_heading: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -236,14 +230,14 @@ impl TryFrom<RawConfig> for EditorConfig {
     fn try_from(raw: RawConfig) -> Result<Self, Self::Error> {
         let dimensions = Dimensions::from(raw.l_system.dimensions);
 
-        let angle = validate_angle(raw.turtle.angle as f32)?;
+        let angle = validate_angle(raw.l_system.angle as f32)?;
         let step = raw
-            .turtle
+            .l_system
             .step
             .map(|step| validate_step(step as f32))
             .transpose()?;
         let initial_heading = raw
-            .turtle
+            .l_system
             .initial_heading
             .map(|heading| validate_initial_heading(heading as f32))
             .transpose()?;
@@ -391,14 +385,14 @@ impl ConfigSource {
 
     pub fn set_angle(&mut self, angle: f32) {
         set_value_preserving_decor(
-            &mut self.document["turtle"]["angle"],
+            &mut self.document["l-system"]["angle"],
             Value::from(f64::from(angle)),
         );
     }
 
     pub fn set_initial_heading(&mut self, initial_heading: f32) {
         set_value_preserving_decor(
-            &mut self.document["turtle"]["initial_heading"],
+            &mut self.document["l-system"]["initial_heading"],
             Value::from(f64::from(initial_heading)),
         );
     }
@@ -615,7 +609,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    use crate::config_defaults::{GradientDefaults, HueCycleDefaults, TurtleDefaults};
+    use crate::config_defaults::{GradientDefaults, HueCycleDefaults, LSystemDefaults};
 
     fn parse_config(toml_str: &str) -> Result<Config, ParseConfigError> {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?
@@ -634,7 +628,7 @@ mod tests {
 
     fn custom_defaults() -> ConfigDefaults {
         ConfigDefaults {
-            turtle: TurtleDefaults::try_new(2.5, 15.0).unwrap(),
+            l_system: LSystemDefaults::try_new(2.5, 15.0).unwrap(),
             colors: crate::config_defaults::ColorDefaults {
                 background: hex("#112233"),
                 line: LineColorDefaults {
@@ -698,14 +692,12 @@ name = "Koch Snowflake"
 dimensions = "2D"
 axiom = "F++F++F"
 iterations = 4
-
-[l-system.rules]
-F = "F-F++F-F"
-
-[turtle]
 angle = 60.0
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "F-F++F-F"
 
 [colors]
 background = "#000000"
@@ -758,12 +750,10 @@ name = "test"
 dimensions = {dimensions}
 axiom = "{axiom}"
 iterations = {iterations}
-{rules_table}
-[turtle]
 angle = {angle}
 step = {step}
 initial_heading = {initial_heading}
-
+{rules_table}
 [colors]
 background = "#000000"
 
@@ -782,12 +772,10 @@ name = "{name}"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
+angle = 90.0
 
 [l-system.rules]
 F = "F"
-
-[turtle]
-angle = 90.0
 
 [colors]
 "#
@@ -803,10 +791,9 @@ name = "t"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
+angle = 90.0
 [l-system.rules]
 F = "F"
-[turtle]
-angle = 90.0
 [colors.line.hue_cycle]
 initial = "#e60000"
 "##;
@@ -860,14 +847,12 @@ name = "Styled"
 dimensions = "3D"
 axiom = 'F\F'
 iterations = 2
-
-[l-system.rules]
-F = 'F\F'
-
-[turtle]
 angle = 22.5
 step = 1.0
 initial_heading = 45.0
+
+[l-system.rules]
+F = 'F\F'
 
 [colors]
 background = "#001a33"
@@ -892,12 +877,10 @@ name = "Old" # keep name comment
 dimensions = "2D"
 axiom = "F"
 iterations = 1
+angle = 90.0
 
 [l-system.rules]
 F = "FF"
-
-[turtle]
-angle = 90.0
 
 [colors]
 background = "#000000"
@@ -960,11 +943,11 @@ solid = "#00e680"
         assert_eq!(doc.editor_config().colors.line, None);
         assert_eq!(
             resolve_doc(&doc).generation.step,
-            ConfigDefaults::embedded().turtle.step()
+            ConfigDefaults::embedded().l_system.step()
         );
         assert_eq!(
             resolve_doc(&doc).generation.initial_heading,
-            ConfigDefaults::embedded().turtle.initial_heading()
+            ConfigDefaults::embedded().l_system.initial_heading()
         );
         assert_eq!(
             resolve_doc(&doc).colors.background,
@@ -1346,10 +1329,10 @@ metadata.name = "Dotted"
 l-system.dimensions = "3D"
 l-system.axiom = 'F\F'
 l-system.iterations = 2
+l-system.angle = 45.0
+l-system.step = 1.0
+l-system.initial_heading = 0.0
 l-system.rules.F = 'F\F'
-turtle.angle = 45.0
-turtle.step = 1.0
-turtle.initial_heading = 0.0
 colors.background = "#000000"
 colors.line.solid = "#00e680"
 "##;
@@ -1374,14 +1357,12 @@ name = "Implicit Parents"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
 angle = 60.0
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "FF"
 
 [colors.line]
 solid = "#00e680"
@@ -1422,14 +1403,12 @@ name = 'Formatted'
 dimensions = "3D"
 axiom = 'F\F'
 iterations = 2
-
-[l-system.rules]
-F = 'F\F'
-
-[turtle]
 angle = 45.0
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = 'F\F'
 
 [colors]
 background = "#000000"
@@ -1467,12 +1446,10 @@ name = "test"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
+angle = 90.0
 
 [l-system.rules]
 F = "FF"
-
-[turtle]
-angle = 90.0
 
 [colors]
 background = "#000000"
@@ -1482,10 +1459,10 @@ solid = "#00e680"
 "##;
         let config = parse_config(toml).unwrap();
         let defaults = ConfigDefaults::embedded();
-        assert_eq!(config.generation.step, defaults.turtle.step());
+        assert_eq!(config.generation.step, defaults.l_system.step());
         assert_eq!(
             config.generation.initial_heading,
-            defaults.turtle.initial_heading()
+            defaults.l_system.initial_heading()
         );
     }
 
@@ -1495,7 +1472,7 @@ solid = "#00e680"
         let config = parse_config(&toml).unwrap();
         assert_eq!(
             config.generation.initial_heading,
-            ConfigDefaults::embedded().turtle.initial_heading()
+            ConfigDefaults::embedded().l_system.initial_heading()
         );
     }
 
@@ -1503,7 +1480,7 @@ solid = "#00e680"
     fn rejects_missing_angle() {
         let toml = NESTED_KOCH_TOML.replace("angle = 60.0\n", "");
         let err = parse_config(&toml).unwrap_err();
-        assert_toml_deserialize_error_contains(err, &["turtle", "angle"]);
+        assert_toml_deserialize_error_contains(err, &["l-system", "angle"]);
     }
 
     #[test]
@@ -1529,7 +1506,7 @@ solid = "#00e680"
             let toml = NESTED_KOCH_TOML.replace(source, replacement);
             let err = parse_config(&toml).unwrap_err();
 
-            assert_toml_deserialize_error_contains(err, &["turtle", field]);
+            assert_toml_deserialize_error_contains(err, &["l-system", field]);
         }
     }
 
@@ -1543,8 +1520,6 @@ name = "test"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
-
-[turtle]
 angle = 90.0
 step = 1.0
 initial_heading = 0.0
@@ -1691,7 +1666,7 @@ solid = "#00e680"
         );
         let err = parse_config(&toml).unwrap_err();
 
-        assert_toml_deserialize_error_contains(err, &["turtle", "friction"]);
+        assert_toml_deserialize_error_contains(err, &["l-system", "friction"]);
     }
 
     #[test]

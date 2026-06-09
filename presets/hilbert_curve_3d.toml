@@ -5,11 +5,9 @@ name = "3D Hilbert Curve"
 dimensions = "3D"
 axiom = "X"
 iterations = 3
+angle = 90.0
 
 [l-system.rules]
 X = '^\XF^\XFX-F^//XFX&F+//XFX-F/X-/'
-
-[turtle]
-angle = 90.0
 
 [colors.line.hue_cycle]

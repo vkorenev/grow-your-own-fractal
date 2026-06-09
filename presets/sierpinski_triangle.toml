@@ -5,12 +5,10 @@ name = "Sierpinski Triangle"
 dimensions = "2D"
 axiom = "FXF-FF-FF"
 iterations = 9
+angle = 120.0
 
 [l-system.rules]
 F = "FF"
 X = "-FXF+FXF+FXF-"
-
-[turtle]
-angle = 120.0
 
 [colors.line.hue_cycle]

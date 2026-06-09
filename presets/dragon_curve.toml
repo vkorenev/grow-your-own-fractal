@@ -5,12 +5,10 @@ name = "Harter-Heightway Dragon"
 dimensions = "2D"
 axiom = "FX"
 iterations = 16
+angle = 90.0
 
 [l-system.rules]
 X = "X+YF+"
 Y = "-FX-Y"
-
-[turtle]
-angle = 90.0
 
 [colors.line.hue_cycle]

@@ -414,14 +414,12 @@ name = "{name}"
 dimensions = "2D"
 axiom = "{axiom}"
 iterations = 1
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
 angle = {angle}
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "FF"
 
 [colors]
 background = "#000000"
@@ -443,10 +441,10 @@ solid = "#00e680"
 l-system.dimensions = "2D"
 l-system.axiom = "F"
 l-system.iterations = 1
+l-system.angle = 60.0
+l-system.step = 1.0
+l-system.initial_heading = 0.0
 l-system.rules.F = "FF"
-turtle.angle = 60.0
-turtle.step = 1.0
-turtle.initial_heading = 0.0
 colors.background = "#000000"
 colors.line.solid = "#00e680"
 "##
@@ -461,14 +459,12 @@ name = "Decorated"
 dimensions = "2D"
 axiom = "F"
 iterations = 1 # keep iterations comment
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
 angle = 60.0 # keep angle comment
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "FF"
 
 [colors]
 background = "#000000"
@@ -1124,14 +1120,12 @@ name = "Decorated Color"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
 angle = 60.0
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "FF"
 
 [colors]
 background = "#000000" # keep background comment
@@ -1165,14 +1159,12 @@ name = "Decorated Arrays"
 dimensions = "2D"
 axiom = "F"
 iterations = 1
-
-[l-system.rules]
-F = "FF"
-
-[turtle]
 angle = 60.0
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "FF"
 
 [colors]
 background = "#000000"
@@ -1239,7 +1231,7 @@ end = "#ffffff"
         let entry = workspace.selected();
         let text = entry.draft_text();
         assert!(text.contains("l-system.iterations = 5"));
-        assert!(text.contains("turtle.angle = 45.5"));
+        assert!(text.contains("l-system.angle = 45.5"));
         assert!(!text.contains("[l-system]"));
         assert!(!text.contains("[turtle]"));
         assert_eq!(entry.editor_config().generation.iterations, 5);

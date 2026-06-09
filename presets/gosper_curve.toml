@@ -5,12 +5,10 @@ name = "Gosper Curve"
 dimensions = "2D"
 axiom = "XF"
 iterations = 4
+angle = 60.0
 
 [l-system.rules]
 X = "X+YF++YF-FX--FXFX-YF+"
 Y = "-FX+YFYF++YF+FX--FX-Y"
-
-[turtle]
-angle = 60.0
 
 [colors.line.hue_cycle]
