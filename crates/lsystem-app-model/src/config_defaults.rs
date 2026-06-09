@@ -25,7 +25,7 @@ const DEFAULTS_TOML: &str = include_str!("defaults.toml");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfigDefaults {
-    pub turtle: TurtleDefaults,
+    pub l_system: LSystemDefaults,
     pub colors: ColorDefaults,
 }
 
@@ -44,12 +44,12 @@ impl ConfigDefaults {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TurtleDefaults {
+pub struct LSystemDefaults {
     step: f32,
     initial_heading: f32,
 }
 
-impl TurtleDefaults {
+impl LSystemDefaults {
     pub fn try_new(step: f32, initial_heading: f32) -> Result<Self, ConfigError> {
         Ok(Self {
             step: validate_step(step)?,
@@ -96,13 +96,14 @@ pub struct HueCycleDefaults {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDefaults {
-    turtle: RawTurtleDefaults,
+    #[serde(rename = "l-system")]
+    l_system: RawLSystemDefaults,
     colors: RawColorDefaults,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawTurtleDefaults {
+struct RawLSystemDefaults {
     #[serde(deserialize_with = "deserialize_number")]
     step: f64,
     #[serde(deserialize_with = "deserialize_number")]
@@ -145,9 +146,9 @@ impl TryFrom<RawDefaults> for ConfigDefaults {
 
     fn try_from(raw: RawDefaults) -> Result<Self, Self::Error> {
         Ok(Self {
-            turtle: TurtleDefaults::try_new(
-                raw.turtle.step as f32,
-                raw.turtle.initial_heading as f32,
+            l_system: LSystemDefaults::try_new(
+                raw.l_system.step as f32,
+                raw.l_system.initial_heading as f32,
             )?,
             colors: ColorDefaults {
                 background: parse_rgb(raw.colors.background, "colors.background")?,
@@ -261,7 +262,7 @@ mod tests {
 
     fn custom_defaults() -> ConfigDefaults {
         ConfigDefaults {
-            turtle: TurtleDefaults::try_new(2.5, 15.0).unwrap(),
+            l_system: LSystemDefaults::try_new(2.5, 15.0).unwrap(),
             colors: ColorDefaults {
                 background: hex("#112233"),
                 line: LineColorDefaults {
@@ -283,8 +284,8 @@ mod tests {
     fn embedded_defaults_toml_parses_and_preserves_current_values() {
         let defaults = ConfigDefaults::embedded();
 
-        assert_eq!(defaults.turtle.step(), 1.0);
-        assert_eq!(defaults.turtle.initial_heading(), 0.0);
+        assert_eq!(defaults.l_system.step(), 1.0);
+        assert_eq!(defaults.l_system.initial_heading(), 0.0);
         assert_eq!(defaults.colors.background, hex("#000000"));
         assert_eq!(defaults.colors.line.solid, hex("#00e680"));
         assert_eq!(
@@ -304,21 +305,21 @@ mod tests {
     }
 
     #[test]
-    fn turtle_defaults_reject_invalid_values() {
+    fn l_system_defaults_reject_invalid_values() {
         assert!(matches!(
-            TurtleDefaults::try_new(0.0, 0.0),
+            LSystemDefaults::try_new(0.0, 0.0),
             Err(ConfigError::InvalidStep(0.0))
         ));
         assert!(matches!(
-            TurtleDefaults::try_new(-1.0, 0.0),
+            LSystemDefaults::try_new(-1.0, 0.0),
             Err(ConfigError::InvalidStep(-1.0))
         ));
         assert!(matches!(
-            TurtleDefaults::try_new(f32::NAN, 0.0),
+            LSystemDefaults::try_new(f32::NAN, 0.0),
             Err(ConfigError::InvalidStep(step)) if step.is_nan()
         ));
         assert!(matches!(
-            TurtleDefaults::try_new(1.0, f32::NAN),
+            LSystemDefaults::try_new(1.0, f32::NAN),
             Err(ConfigError::InvalidInitialHeading(initial_heading)) if initial_heading.is_nan()
         ));
     }

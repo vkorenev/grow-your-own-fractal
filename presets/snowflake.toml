@@ -5,12 +5,10 @@ name = "Snowflake"
 dimensions = "2D"
 axiom = "[F]+[F]+[F]+[F]+[F]+[F]"
 iterations = 4
+angle = 60.0
 
 [l-system.rules]
 F = "F[+FF][-FF]FF[+F][-F]FF"
-
-[turtle]
-angle = 60.0
 
 [colors.line.gradient]
 start = "#e699ff"

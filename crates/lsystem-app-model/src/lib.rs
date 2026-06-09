@@ -13,7 +13,7 @@ pub use animation::{
 pub use color::{
     ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
 };
-pub use config_defaults::{ConfigDefaults, ParseConfigError, TurtleDefaults};
+pub use config_defaults::{ConfigDefaults, LSystemDefaults, ParseConfigError};
 pub use config_workspace::{
     CleanMut, ConfigEntry, ConfigWorkspace, ConfigWorkspaceError, DirtyMut, EntryViewMut,
 };

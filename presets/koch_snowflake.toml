@@ -5,11 +5,9 @@ name = "Koch Snowflake"
 dimensions = "2D"
 axiom = "F++F++F"
 iterations = 6
+angle = 60.0
 
 [l-system.rules]
 F = "F-F++F-F"
-
-[turtle]
-angle = 60.0
 
 [colors.line.hue_cycle]

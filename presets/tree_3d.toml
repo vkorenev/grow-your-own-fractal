@@ -5,13 +5,11 @@ name = "3D Tree"
 dimensions = "3D"
 axiom = "A"
 iterations = 7
+angle = 40.0
+initial_heading = 90.0
 
 [l-system.rules]
 A = 'F[+/A]/[-/A]F[&/A]/[^/A]'
 F = 'FF'
-
-[turtle]
-angle = 40.0
-initial_heading = 90.0
 
 [colors.line.hue_cycle]

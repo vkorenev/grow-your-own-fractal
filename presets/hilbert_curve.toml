@@ -5,12 +5,10 @@ name = "Hilbert Curve"
 dimensions = "2D"
 axiom = "A"
 iterations = 5
+angle = 90.0
 
 [l-system.rules]
 A = "-BF+AFA+FB-"
 B = "+AF-BFB-FA+"
-
-[turtle]
-angle = 90.0
 
 [colors.line.hue_cycle]

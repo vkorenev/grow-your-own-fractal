@@ -5,14 +5,12 @@ name = "3D Plant"
 dimensions = "3D"
 axiom = "X"
 iterations = 6
+angle = 30.0
+initial_heading = 90.0
 
 [l-system.rules]
 X = "F[+X][-X][&X][^X]"
 F = "FF"
-
-[turtle]
-angle = 30.0
-initial_heading = 90.0
 
 [colors.line.gradient]
 start = "#59590d"

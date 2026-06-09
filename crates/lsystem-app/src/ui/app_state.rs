@@ -963,14 +963,12 @@ name = "3D"
 dimensions = "3D"
 axiom = "F"
 iterations = 1
-
-[l-system.rules]
-F = "F"
-
-[turtle]
 angle = 60.0
 step = 1.0
 initial_heading = 0.0
+
+[l-system.rules]
+F = "F"
 
 [colors.line]
 solid = "#00e680"
