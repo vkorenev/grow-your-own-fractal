@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn max_safe_sierpinski_gpu_limit() {
-        // Sierpinski: 3 × 5^n segments.
+        // Sierpiński: 3 × 5^n segments.
         // n=9 → 5_859_375, n=10 → 29_296_875. Limit = 16_777_216.
         let rules = sierpinski_rules();
         assert_eq!(max_safe_iterations("F-F-F", &rules, 16_777_216), 9);
