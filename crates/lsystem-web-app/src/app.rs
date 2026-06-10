@@ -1,7 +1,7 @@
-use crate::export::{export_png, export_svg};
+use crate::export::{download_toml, export_png, export_svg};
 use crate::presets::max_iterations_for_editor_config;
 use crate::renderer::{CanvasRenderer, RenderStatus};
-use leptos::html::Canvas;
+use leptos::html::{Canvas, Input};
 use leptos::prelude::*;
 use lsystem_app_model::{
     CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorLineColorConfig,
@@ -110,6 +110,7 @@ pub(crate) fn App() -> impl IntoView {
     };
 
     let canvas_ref = NodeRef::<Canvas>::new();
+    let file_input_ref = NodeRef::<Input>::new();
 
     let config_for_render = move || Config {
         name: config_workspace.with_untracked(|ws| ws.selected().name().to_string()),
@@ -606,7 +607,7 @@ pub(crate) fn App() -> impl IntoView {
                 <div class="preset-actions">
                     {move || if rename_mode.get() {
                         view! {
-                            <div style="display:contents">
+                            <div class="btn-row">
                                 <button
                                     type="button"
                                     disabled=move || {
@@ -625,38 +626,66 @@ pub(crate) fn App() -> impl IntoView {
                     } else {
                         view! {
                             <div style="display:contents">
-                                <button
-                                    type="button"
-                                    on:click=move |_| {
-                                        let result = config_workspace.try_update(|workspace| {
-                                            workspace.copy().map(|_| ()).map_err(|e| e.to_string())
-                                        });
-                                        match result {
-                                            Some(Ok(())) => select_current_config(),
-                                            Some(Err(msg)) => workspace_error.set(Some(msg)),
-                                            None => {
-                                                log::error!("copy: config_workspace signal was unavailable");
+                                <div class="btn-row">
+                                    <button
+                                        type="button"
+                                        on:click=move |_| {
+                                            let result = config_workspace.try_update(|workspace| {
+                                                workspace.copy().map(|_| ()).map_err(|e| e.to_string())
+                                            });
+                                            match result {
+                                                Some(Ok(())) => select_current_config(),
+                                                Some(Err(msg)) => workspace_error.set(Some(msg)),
+                                                None => {
+                                                    log::error!("copy: config_workspace signal was unavailable");
+                                                    workspace_error.set(Some(
+                                                        "Internal error: could not copy config.".to_string(),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    >"Copy"</button>
+                                    <button
+                                        type="button"
+                                        on:click=move |_| {
+                                            rename_draft.set(
+                                                config_workspace.with(|ws| ws.selected().name().to_string())
+                                            );
+                                            rename_mode.set(true);
+                                        }
+                                    >"Rename"</button>
+                                    <button
+                                        type="button"
+                                        disabled=move || config_workspace.with(|ws| !ws.can_reset())
+                                        on:click=move |_| do_reset()
+                                    >"Reset"</button>
+                                </div>
+                                <hr class="section-divider" />
+                                <div class="btn-row">
+                                    <button
+                                        type="button"
+                                        on:click=move |_| {
+                                            if let Some(el) = file_input_ref.get_untracked() {
+                                                el.click();
+                                            } else {
                                                 workspace_error.set(Some(
-                                                    "Internal error: could not copy config.".to_string(),
+                                                    "Internal error: upload input unavailable.".to_string(),
                                                 ));
                                             }
                                         }
-                                    }
-                                >"Copy"</button>
-                                <button
-                                    type="button"
-                                    on:click=move |_| {
-                                        rename_draft.set(
-                                            config_workspace.with(|ws| ws.selected().name().to_string())
-                                        );
-                                        rename_mode.set(true);
-                                    }
-                                >"Rename"</button>
-                                <button
-                                    type="button"
-                                    disabled=move || config_workspace.with(|ws| !ws.can_reset())
-                                    on:click=move |_| do_reset()
-                                >"Reset"</button>
+                                    >"Open"</button>
+                                    <button
+                                        type="button"
+                                        on:click=move |_| {
+                                            workspace_error.set(None);
+                                            let name = config_workspace
+                                                .with_untracked(|ws| ws.selected().name().to_string());
+                                            download_toml(&name, &toml_text.get_untracked(), |msg| {
+                                                workspace_error.set(Some(msg));
+                                            });
+                                        }
+                                    >"Save"</button>
+                                </div>
                             </div>
                         }.into_any()
                     }}
@@ -664,8 +693,76 @@ pub(crate) fn App() -> impl IntoView {
                 {move || workspace_error.get().map(|msg| view! {
                     <span class="inline-status error">{msg}</span>
                 })}
+                <input
+                    type="file"
+                    accept=".toml"
+                    style="display:none"
+                    node_ref=file_input_ref
+                    on:change=move |_| {
+                        let Some(input) = file_input_ref.get_untracked() else {
+                            log::error!("import_toml on:change: file_input_ref was None");
+                            workspace_error.set(Some(
+                                "Internal error: upload input unavailable.".to_string(),
+                            ));
+                            return;
+                        };
+                        let Some(files) = input.files() else {
+                            log::error!(
+                                "import_toml on:change: input.files() returned None"
+                            );
+                            return;
+                        };
+                        let Some(file) = files.get(0) else { return };
+                        let promise = file.text();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            match wasm_bindgen_futures::JsFuture::from(promise).await {
+                                Ok(val) => {
+                                    let Some(text) = val.as_string() else {
+                                        log::error!(
+                                            "import_toml: File.text() resolved to a \
+                                             non-string JS value: {val:?}"
+                                        );
+                                        workspace_error.set(Some(
+                                            "Failed to read file: unexpected content type."
+                                                .to_string(),
+                                        ));
+                                        if let Some(input) = file_input_ref.get_untracked() {
+                                            input.set_value("");
+                                        }
+                                        return;
+                                    };
+                                    let result = config_workspace
+                                        .try_update(|ws| ws.import_toml(&text));
+                                    match result {
+                                        Some(Ok(_)) => select_current_config(),
+                                        Some(Err(e)) => {
+                                            workspace_error.set(Some(e.to_string()));
+                                        }
+                                        None => {
+                                            log::error!(
+                                                "import_toml: config_workspace signal was \
+                                                 unavailable"
+                                            );
+                                            workspace_error.set(Some(
+                                                "Internal error: could not import config."
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    workspace_error
+                                        .set(Some(format!("Failed to read file: {e:?}")));
+                                }
+                            }
+                            if let Some(input) = file_input_ref.get_untracked() {
+                                input.set_value("");
+                            }
+                        });
+                    }
+                />
 
-                <crate::ui::Disclosure title="Edit TOML" open=false
+                <crate::ui::Disclosure title="Edit Config" open=false
                     badge=Signal::derive(is_dirty)>
                     <div title=grammar_dirty_tooltip>
                     <textarea

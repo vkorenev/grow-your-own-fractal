@@ -199,6 +199,30 @@ impl ConfigWorkspace {
         Ok(Some(&self.entries[idx]))
     }
 
+    /// Parses and validates `text` as a config document, creates a new custom entry from it
+    /// (no bundled default), auto-selects the new entry, and returns its index.
+    ///
+    /// If the parsed name collides with an existing entry name, ` 2`, ` 3`, … is appended
+    /// until the name is unique. Returns [`ConfigWorkspaceError::ParseConfig`] if `text` fails
+    /// to parse or validate. On error the workspace state is unchanged: no entry is added and
+    /// the selection is not moved.
+    pub fn import_toml(&mut self, text: &str) -> Result<usize, ConfigWorkspaceError> {
+        let source = ConfigSource::parse(text)?;
+        let doc = ConfigDocument::try_from(source)?;
+        let base_name = doc.name().to_string();
+        let unique = self.unique_name(&base_name);
+        let doc = if unique != base_name {
+            let mut source = doc.source().clone();
+            source.set_name(&unique);
+            ConfigDocument::try_from(source)?
+        } else {
+            doc
+        };
+        self.entries.push(ConfigEntry::custom(doc));
+        self.selected = self.entries.len() - 1;
+        Ok(self.selected)
+    }
+
     fn unique_name(&self, base: &str) -> String {
         std::iter::once(base.to_string())
             .chain((2usize..).map(|suffix| format!("{base} {suffix}")))
@@ -223,6 +247,14 @@ impl ConfigEntry {
             draft: None,
             last_applied: doc,
         })
+    }
+
+    fn custom(last_applied: ConfigDocument) -> Self {
+        Self {
+            default: None,
+            draft: None,
+            last_applied,
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -1502,6 +1534,69 @@ end = "#ffffff"
             workspace.rename(1, "Y").unwrap_err(),
             ConfigWorkspaceError::InvalidIndex(1)
         ));
+    }
+
+    #[test]
+    fn import_toml_creates_new_selected_entry_with_no_default() {
+        let first = config_text("First", "F", 60.0);
+        let imported = config_text("Imported", "F+F", 90.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        let idx = workspace.import_toml(&imported).unwrap();
+
+        assert_eq!(idx, 1);
+        assert_eq!(workspace.selected_index(), 1);
+        assert_eq!(workspace.selected().name(), "Imported");
+        assert!(!workspace.selected().is_dirty());
+        assert!(!workspace.can_reset()); // custom entries have no bundled default
+        assert_eq!(workspace.entries().len(), 2);
+    }
+
+    #[test]
+    fn import_toml_deduplicates_name_with_suffix() {
+        let first = config_text("First", "F", 60.0);
+        let duplicate = config_text("First", "F+F", 90.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        let idx = workspace.import_toml(&duplicate).unwrap();
+
+        assert_eq!(idx, 1);
+        assert_eq!(workspace.selected().name(), "First 2");
+        assert!(!workspace.selected().is_dirty());
+        assert_eq!(workspace.selected().editor_config().generation.angle, 90.0);
+    }
+
+    #[test]
+    fn import_toml_rejects_invalid_toml() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        let err = workspace.import_toml("not valid toml").unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigWorkspaceError::ParseConfig(ParseConfigError::TomlParse(_))
+        ));
+        assert_eq!(workspace.entries().len(), 1);
+        assert_eq!(workspace.selected_index(), 0);
+    }
+
+    #[test]
+    fn import_toml_rejects_parseable_toml_with_invalid_config() {
+        let first = config_text("First", "F", 60.0);
+        let invalid = config_text("Invalid", "[", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+
+        let err = workspace.import_toml(&invalid).unwrap_err();
+
+        assert!(matches!(
+            err,
+            ConfigWorkspaceError::ParseConfig(ParseConfigError::Validation(
+                ConfigError::UnmatchedOpen { .. }
+            ))
+        ));
+        assert_eq!(workspace.entries().len(), 1);
+        assert_eq!(workspace.selected_index(), 0);
     }
 
     #[test]

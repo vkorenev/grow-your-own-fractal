@@ -51,6 +51,22 @@ pub(crate) fn export_png(
     });
 }
 
+pub(crate) fn download_toml(name: &str, text: &str, on_error: impl Fn(String)) {
+    let filename = sanitize_filename(name, "toml");
+    let array = js_sys::Array::new();
+    array.push(&wasm_bindgen::JsValue::from_str(text));
+    let props = web_sys::BlobPropertyBag::new();
+    props.set_type("application/toml");
+    match web_sys::Blob::new_with_str_sequence_and_options(&array, &props) {
+        Ok(blob) => download_blob(blob, filename),
+        Err(err) => {
+            let msg = format!("Failed to create TOML download blob: {err:?}");
+            log::error!("{msg}");
+            on_error(msg);
+        }
+    }
+}
+
 fn download_blob(blob: web_sys::Blob, suggested_name: String) {
     let Some(window) = web_sys::window() else {
         log::error!("Cannot download export: window is unavailable");
