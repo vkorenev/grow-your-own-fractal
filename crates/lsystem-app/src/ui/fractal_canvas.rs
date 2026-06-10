@@ -487,28 +487,7 @@ async fn yield_generation() {
 
 #[cfg(target_arch = "wasm32")]
 async fn yield_generation() {
-    use wasm_bindgen::{JsCast, JsValue, closure::Closure};
-
-    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-        let Some(window) = web_sys::window() else {
-            let _ = resolve.call0(&JsValue::UNDEFINED);
-            return;
-        };
-
-        let fallback_resolve = resolve.clone();
-        let callback = Closure::once_into_js(move || {
-            let _ = resolve.call0(&JsValue::UNDEFINED);
-        });
-
-        if window
-            .set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), 0)
-            .is_err()
-        {
-            let _ = fallback_resolve.call0(&JsValue::UNDEFINED);
-        }
-    });
-
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    gloo_timers::future::TimeoutFuture::new(0).await;
 }
 
 impl Default for Scene {

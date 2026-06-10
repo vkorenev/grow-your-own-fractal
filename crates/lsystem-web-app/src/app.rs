@@ -680,9 +680,7 @@ pub(crate) fn App() -> impl IntoView {
                                             workspace_error.set(None);
                                             let name = config_workspace
                                                 .with_untracked(|ws| ws.selected().name().to_string());
-                                            download_toml(&name, &toml_text.get_untracked(), |msg| {
-                                                workspace_error.set(Some(msg));
-                                            });
+                                            download_toml(&name, &toml_text.get_untracked());
                                         }
                                     >"Save"</button>
                                 </div>
@@ -713,24 +711,10 @@ pub(crate) fn App() -> impl IntoView {
                             return;
                         };
                         let Some(file) = files.get(0) else { return };
-                        let promise = file.text();
+                        let file = gloo_file::File::from(file);
                         wasm_bindgen_futures::spawn_local(async move {
-                            match wasm_bindgen_futures::JsFuture::from(promise).await {
-                                Ok(val) => {
-                                    let Some(text) = val.as_string() else {
-                                        log::error!(
-                                            "import_toml: File.text() resolved to a \
-                                             non-string JS value: {val:?}"
-                                        );
-                                        workspace_error.set(Some(
-                                            "Failed to read file: unexpected content type."
-                                                .to_string(),
-                                        ));
-                                        if let Some(input) = file_input_ref.get_untracked() {
-                                            input.set_value("");
-                                        }
-                                        return;
-                                    };
+                            match gloo_file::futures::read_as_text(&file).await {
+                                Ok(text) => {
                                     let result = config_workspace
                                         .try_update(|ws| ws.import_toml(&text));
                                     match result {
@@ -752,7 +736,7 @@ pub(crate) fn App() -> impl IntoView {
                                 }
                                 Err(e) => {
                                     workspace_error
-                                        .set(Some(format!("Failed to read file: {e:?}")));
+                                        .set(Some(format!("Failed to read file: {e}")));
                                 }
                             }
                             if let Some(input) = file_input_ref.get_untracked() {
