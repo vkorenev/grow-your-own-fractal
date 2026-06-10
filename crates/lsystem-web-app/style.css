@@ -437,7 +437,7 @@ textarea {
 
 .rename-input { flex: 1; }
 
-.inline-status { font-size: 12px; min-height: 16px; }
+.inline-status { display: block; font-size: 12px; min-height: 16px; flex-shrink: 0; }
 .inline-status.error { color: #ff7b7b; }
 .inline-status.warning { color: #d4a840; }
 

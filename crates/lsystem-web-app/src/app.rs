@@ -36,7 +36,6 @@ pub(crate) fn App() -> impl IntoView {
     let export_error = RwSignal::new(None::<String>);
     let animation_error = RwSignal::new(None::<String>);
     let colors_error = RwSignal::new(None::<String>);
-    let upload_error = RwSignal::new(None::<String>);
     let png_width = RwSignal::new(2048u32);
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(true);
@@ -319,7 +318,6 @@ pub(crate) fn App() -> impl IntoView {
         toml_error.set(None);
         workspace_error.set(None);
         colors_error.set(None);
-        upload_error.set(None);
         refresh_color_memory();
         sync_grammar_editor();
     };
@@ -670,7 +668,7 @@ pub(crate) fn App() -> impl IntoView {
                                             if let Some(el) = file_input_ref.get_untracked() {
                                                 el.click();
                                             } else {
-                                                upload_error.set(Some(
+                                                workspace_error.set(Some(
                                                     "Internal error: upload input unavailable.".to_string(),
                                                 ));
                                             }
@@ -679,10 +677,11 @@ pub(crate) fn App() -> impl IntoView {
                                     <button
                                         type="button"
                                         on:click=move |_| {
+                                            workspace_error.set(None);
                                             let name = config_workspace
                                                 .with_untracked(|ws| ws.selected().name().to_string());
                                             download_toml(&name, &toml_text.get_untracked(), |msg| {
-                                                upload_error.set(Some(msg));
+                                                workspace_error.set(Some(msg));
                                             });
                                         }
                                     >"Save"</button>
@@ -694,9 +693,6 @@ pub(crate) fn App() -> impl IntoView {
                 {move || workspace_error.get().map(|msg| view! {
                     <span class="inline-status error">{msg}</span>
                 })}
-                {move || upload_error.get().map(|msg| view! {
-                    <span class="inline-status error">{msg}</span>
-                })}
                 <input
                     type="file"
                     accept=".toml"
@@ -705,7 +701,7 @@ pub(crate) fn App() -> impl IntoView {
                     on:change=move |_| {
                         let Some(input) = file_input_ref.get_untracked() else {
                             log::error!("import_toml on:change: file_input_ref was None");
-                            upload_error.set(Some(
+                            workspace_error.set(Some(
                                 "Internal error: upload input unavailable.".to_string(),
                             ));
                             return;
@@ -726,7 +722,7 @@ pub(crate) fn App() -> impl IntoView {
                                             "import_toml: File.text() resolved to a \
                                              non-string JS value: {val:?}"
                                         );
-                                        upload_error.set(Some(
+                                        workspace_error.set(Some(
                                             "Failed to read file: unexpected content type."
                                                 .to_string(),
                                         ));
@@ -740,14 +736,14 @@ pub(crate) fn App() -> impl IntoView {
                                     match result {
                                         Some(Ok(_)) => select_current_config(),
                                         Some(Err(e)) => {
-                                            upload_error.set(Some(e.to_string()));
+                                            workspace_error.set(Some(e.to_string()));
                                         }
                                         None => {
                                             log::error!(
                                                 "import_toml: config_workspace signal was \
                                                  unavailable"
                                             );
-                                            upload_error.set(Some(
+                                            workspace_error.set(Some(
                                                 "Internal error: could not import config."
                                                     .to_string(),
                                             ));
@@ -755,7 +751,7 @@ pub(crate) fn App() -> impl IntoView {
                                     }
                                 }
                                 Err(e) => {
-                                    upload_error
+                                    workspace_error
                                         .set(Some(format!("Failed to read file: {e:?}")));
                                 }
                             }
