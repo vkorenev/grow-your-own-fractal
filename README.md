@@ -157,6 +157,12 @@ hue cycle over time without changing the config text.
 | `F` | Reset camera to fit the fractal |
 | Auto-rotate toggle | Continuously orbit around the Y axis at the configured speed |
 
+## Sharing configs
+
+The **Save** button saves the current editor text to a `.toml` file, including any
+unapplied draft. The **Open** button loads a `.toml` file from disk and adds it as a
+new custom config entry without affecting any existing entries.
+
 ## Exporting
 
 The **Export SVG** button saves the current fractal as a resolution-independent

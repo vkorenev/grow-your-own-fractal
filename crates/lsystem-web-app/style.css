@@ -427,14 +427,13 @@ textarea {
 .preset-row { display: flex; gap: 5px; align-items: center; }
 .preset-row select { flex: 1; min-width: 0; }
 
-.preset-actions { display: flex; gap: 5px; margin-top: 4px; }
-.preset-actions button { flex: 1; }
+.preset-actions { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
 
 .btn-row { display: flex; gap: 5px; }
-.btn-row button { flex: 1; }
+.btn-row button { flex: 1; white-space: nowrap; }
 /* Tooltip wrapper divs inside btn-row — must behave like flex items */
 .btn-row > div { flex: 1; display: flex; }
-.btn-row > div > button { flex: 1; }
+.btn-row > div > button { flex: 1; white-space: nowrap; }
 
 .rename-input { flex: 1; }
 
