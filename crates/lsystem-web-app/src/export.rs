@@ -8,14 +8,8 @@ use wasm_bindgen::JsCast;
 pub(crate) fn export_svg(config: Config) {
     let filename = sanitize_filename(&config.name, "svg");
     let svg = lsystem_core::svg_export::export_svg(&config);
-    let array = js_sys::Array::new();
-    array.push(&wasm_bindgen::JsValue::from_str(&svg));
-    let props = web_sys::BlobPropertyBag::new();
-    props.set_type("image/svg+xml");
-    match web_sys::Blob::new_with_str_sequence_and_options(&array, &props) {
-        Ok(blob) => download_blob(blob, filename),
-        Err(err) => log::error!("Failed to create SVG export blob: {err:?}"),
-    }
+    let blob = gloo_file::Blob::new_with_options(svg.as_str(), Some("image/svg+xml"));
+    download_blob(blob, filename);
 }
 
 pub(crate) fn export_png(
@@ -32,15 +26,9 @@ pub(crate) fn export_png(
             .await
         {
             Ok(png) => {
-                let array = js_sys::Array::new();
-                let bytes = js_sys::Uint8Array::from(png.bytes.as_slice());
-                array.push(&bytes);
-                let props = web_sys::BlobPropertyBag::new();
-                props.set_type("image/png");
-                match web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props) {
-                    Ok(blob) => download_blob(blob, filename),
-                    Err(err) => log::error!("Failed to create PNG export blob: {err:?}"),
-                }
+                let blob =
+                    gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/png"));
+                download_blob(blob, filename);
             }
             Err(err) => {
                 let error = format!("Failed to export PNG: {err}");
@@ -51,23 +39,13 @@ pub(crate) fn export_png(
     });
 }
 
-pub(crate) fn download_toml(name: &str, text: &str, on_error: impl Fn(String)) {
+pub(crate) fn download_toml(name: &str, text: &str) {
     let filename = sanitize_filename(name, "toml");
-    let array = js_sys::Array::new();
-    array.push(&wasm_bindgen::JsValue::from_str(text));
-    let props = web_sys::BlobPropertyBag::new();
-    props.set_type("application/toml");
-    match web_sys::Blob::new_with_str_sequence_and_options(&array, &props) {
-        Ok(blob) => download_blob(blob, filename),
-        Err(err) => {
-            let msg = format!("Failed to create TOML download blob: {err:?}");
-            log::error!("{msg}");
-            on_error(msg);
-        }
-    }
+    let blob = gloo_file::Blob::new_with_options(text, Some("application/toml"));
+    download_blob(blob, filename);
 }
 
-fn download_blob(blob: web_sys::Blob, suggested_name: String) {
+fn download_blob(blob: gloo_file::Blob, suggested_name: String) {
     let Some(window) = web_sys::window() else {
         log::error!("Cannot download export: window is unavailable");
         return;
@@ -76,18 +54,11 @@ fn download_blob(blob: web_sys::Blob, suggested_name: String) {
         log::error!("Cannot download export: document is unavailable");
         return;
     };
-    let url = match web_sys::Url::create_object_url_with_blob(&blob) {
-        Ok(url) => url,
-        Err(err) => {
-            log::error!("Failed to create export object URL: {err:?}");
-            return;
-        }
-    };
+    let url = gloo_file::ObjectUrl::from(blob);
     let el = match document.create_element("a") {
         Ok(el) => el,
         Err(err) => {
             log::error!("Failed to create export download link: {err:?}");
-            let _ = web_sys::Url::revoke_object_url(&url);
             return;
         }
     };
@@ -95,7 +66,6 @@ fn download_blob(blob: web_sys::Blob, suggested_name: String) {
         Ok(anchor) => anchor,
         Err(err) => {
             log::error!("Export download link was not an anchor element: {err:?}");
-            let _ = web_sys::Url::revoke_object_url(&url);
             return;
         }
     };
@@ -106,5 +76,4 @@ fn download_blob(blob: web_sys::Blob, suggested_name: String) {
         anchor.click();
         let _ = body.remove_child(&anchor);
     }
-    let _ = web_sys::Url::revoke_object_url(&url);
 }

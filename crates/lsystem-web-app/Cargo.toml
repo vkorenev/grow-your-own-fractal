@@ -13,14 +13,13 @@ lsystem-app-model = { workspace = true }
 lsystem-renderer = { workspace = true, features = ["png"] }
 console_error_panic_hook.workspace = true
 console_log.workspace = true
+gloo-file = { workspace = true, features = ["futures"] }
 js-sys.workspace = true
 leptos = { version = "0.8", features = ["csr"] }
 log.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys = { workspace = true, features = [
-    "Blob",
-    "BlobPropertyBag",
     "Document",
     "DomRect",
     "Element",
@@ -35,7 +34,6 @@ web-sys = { workspace = true, features = [
     "KeyboardEvent",
     "MouseEvent",
     "PointerEvent",
-    "Url",
     "WheelEvent",
     "Window",
 ] }

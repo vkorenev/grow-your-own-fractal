@@ -133,13 +133,7 @@ async fn save_png(cfg: Config, width: u32, path: PathBuf, camera: Camera) -> Exp
 
 #[cfg(target_arch = "wasm32")]
 fn save_svg(svg: String, suggested_name: String) -> ExportOutcome {
-    let array = js_sys::Array::new();
-    array.push(&wasm_bindgen::JsValue::from_str(&svg));
-    let props = web_sys::BlobPropertyBag::new();
-    props.set_type("image/svg+xml");
-    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&array, &props) else {
-        return ExportOutcome::Failed("failed to create SVG Blob".to_string());
-    };
+    let blob = gloo_file::Blob::new_with_options(svg.as_str(), Some("image/svg+xml"));
     download_blob(blob, suggested_name);
     ExportOutcome::Saved("SVG")
 }
@@ -153,15 +147,7 @@ async fn save_png(
 ) -> ExportOutcome {
     match lsystem_renderer::png_export::render_png_standalone(&cfg, width, &camera).await {
         Ok(png) => {
-            let array = js_sys::Array::new();
-            let bytes = js_sys::Uint8Array::from(png.bytes.as_slice());
-            array.push(&bytes);
-            let props = web_sys::BlobPropertyBag::new();
-            props.set_type("image/png");
-            let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &props)
-            else {
-                return ExportOutcome::Failed("failed to create PNG Blob".to_string());
-            };
+            let blob = gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/png"));
             download_blob(blob, suggested_name);
             ExportOutcome::Saved("PNG")
         }
@@ -173,7 +159,7 @@ async fn save_png(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn download_blob(blob: web_sys::Blob, suggested_name: String) {
+fn download_blob(blob: gloo_file::Blob, suggested_name: String) {
     use wasm_bindgen::JsCast;
 
     let Some(window) = web_sys::window() else {
@@ -183,9 +169,7 @@ fn download_blob(blob: web_sys::Blob, suggested_name: String) {
         return;
     };
 
-    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
-        return;
-    };
+    let url = gloo_file::ObjectUrl::from(blob);
 
     let Ok(el) = document.create_element("a") else {
         return;
@@ -201,5 +185,4 @@ fn download_blob(blob: web_sys::Blob, suggested_name: String) {
         anchor.click();
         let _ = body.remove_child(&anchor);
     }
-    let _ = web_sys::Url::revoke_object_url(&url);
 }
