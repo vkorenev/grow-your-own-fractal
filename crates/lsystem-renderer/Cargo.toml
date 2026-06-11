@@ -6,7 +6,10 @@ license.workspace = true
 
 [features]
 default = []
-png = ["dep:futures-channel", "dep:png"]
+png = ["dep:futures-channel", "dep:png", "dep:gloo-timers"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { workspace = true, features = ["futures"], optional = true }
 
 [dependencies]
 lsystem-core.workspace = true

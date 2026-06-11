@@ -268,19 +268,44 @@ async fn finish_render(
         .map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
         });
-    // Native needs polling to drive the map_async callback. On browser WebGPU this is a no-op;
-    // callback completion is driven by the browser event loop.
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .map_err(PngExportError::Poll)?;
-
-    receiver
-        .await
-        .map_err(|_| PngExportError::MapChannelClosed)?
-        .map_err(PngExportError::Map)?;
+    // Native: block the thread until the map_async callback fires.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .map_err(PngExportError::Poll)?;
+        receiver
+            .await
+            .map_err(|_| PngExportError::MapChannelClosed)?
+            .map_err(PngExportError::Map)?;
+    }
+    // Wasm: device.poll(Wait) is not supported. On the WebGPU backend, poll()
+    // is a no-op — the browser resolves the mapAsync promise automatically via
+    // its own event loop. On the WebGL2 fallback, poll(Poll) additionally fires
+    // pending wgpu callbacks. In both cases, yielding to the macrotask queue
+    // via setTimeout(0) is what allows the browser to advance GPU work.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut receiver = receiver;
+        loop {
+            let _ = device.poll(wgpu::PollType::Poll);
+            match receiver.try_recv() {
+                Ok(Some(result)) => {
+                    result.map_err(PngExportError::Map)?;
+                    break;
+                }
+                Ok(None) => {
+                    // Yield to the macrotask queue (setTimeout 0) so the browser
+                    // can advance GPU work and resolve the WebGPU mapAsync promise.
+                    gloo_timers::future::TimeoutFuture::new(0).await;
+                }
+                Err(_) => return Err(PngExportError::MapChannelClosed),
+            }
+        }
+    }
     let rgba = {
         let mapped = readback.slice(..).get_mapped_range();
         readback_layout.strip_padding(&mapped)

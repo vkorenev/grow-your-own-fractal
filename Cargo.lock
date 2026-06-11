@@ -2416,6 +2416,7 @@ dependencies = [
  "encase",
  "futures-channel",
  "glam 0.33.0",
+ "gloo-timers",
  "log",
  "lsystem-core",
  "png",
