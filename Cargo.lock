@@ -2420,6 +2420,7 @@ dependencies = [
  "log",
  "lsystem-core",
  "png",
+ "pollster",
  "wgpu",
 ]
 

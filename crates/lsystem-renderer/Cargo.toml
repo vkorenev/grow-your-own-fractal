@@ -20,3 +20,6 @@ glam = { workspace = true, features = ["encase"] }
 log.workspace = true
 png = { version = "0.18", optional = true }
 wgpu.workspace = true
+
+[dev-dependencies]
+pollster = "0.4"

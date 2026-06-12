@@ -13,6 +13,7 @@ use lsystem_core::{
     ColorConfig, Config, Dimensions, GenerationConfig, LineColorConfig, Rgb, contains_3d_symbols,
 };
 use lsystem_renderer::line_renderer::FrameSkipReason;
+use lsystem_renderer::png_export::{MAX_DIMENSION as PNG_MAX_WIDTH, MIN_WIDTH as PNG_MIN_WIDTH};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
@@ -1602,7 +1603,7 @@ pub(crate) fn App() -> impl IntoView {
                                 step=16.0
                                 on_commit=move |s| {
                                     if let Ok(v) = s.parse::<u32>() {
-                                        png_width.set(v.clamp(256, 4096));
+                                        png_width.set(v.clamp(PNG_MIN_WIDTH, PNG_MAX_WIDTH));
                                     }
                                 }
                             />
