@@ -36,6 +36,15 @@ impl AnimationParams {
         if self.num_frames == 0 || self.num_frames > Self::MAX_FRAMES {
             return Err(AnimationExportError::InvalidFrameCount(self.num_frames));
         }
+        for (name, val) in [
+            ("initial_hue_phase_degrees", self.initial_hue_phase_degrees),
+            ("hue_rotation_dps", self.hue_rotation_dps),
+            ("auto_rotate_dps", self.auto_rotate_dps),
+        ] {
+            if !val.is_finite() {
+                return Err(AnimationExportError::NonFiniteValue(name));
+            }
+        }
         Ok(())
     }
 }
@@ -45,6 +54,8 @@ pub enum AnimationExportError {
     /// `num_frames` was outside `1..=AnimationParams::MAX_FRAMES`.
     InvalidFrameCount(u32),
     ZeroFps,
+    /// A float field in [`AnimationParams`] was NaN or infinite.
+    NonFiniteValue(&'static str),
     Export(ExportError),
 }
 
@@ -57,6 +68,9 @@ impl Display for AnimationExportError {
                 MAX_FRAMES = AnimationParams::MAX_FRAMES,
             ),
             Self::ZeroFps => write!(f, "animation fps must be > 0"),
+            Self::NonFiniteValue(field) => {
+                write!(f, "animation param `{field}` must be finite")
+            }
             Self::Export(e) => e.fmt(f),
         }
     }
@@ -156,6 +170,8 @@ pub async fn render_animation_standalone(
     params: &AnimationParams,
     on_progress: impl Fn(u32, u32),
 ) -> Result<PngExport, AnimationExportError> {
+    params.validate()?;
+    validate_width(width)?;
     let (device, queue) =
         wgpu_util::create_headless_device("animation_export_device", "animation export")
             .await
@@ -227,6 +243,44 @@ mod tests {
             ..default_params()
         };
         assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn validates_nan_initial_hue() {
+        let p = AnimationParams {
+            initial_hue_phase_degrees: f32::NAN,
+            ..default_params()
+        };
+        assert!(matches!(
+            p.validate(),
+            Err(AnimationExportError::NonFiniteValue(
+                "initial_hue_phase_degrees"
+            ))
+        ));
+    }
+
+    #[test]
+    fn validates_inf_hue_rotation_dps() {
+        let p = AnimationParams {
+            hue_rotation_dps: f32::INFINITY,
+            ..default_params()
+        };
+        assert!(matches!(
+            p.validate(),
+            Err(AnimationExportError::NonFiniteValue("hue_rotation_dps"))
+        ));
+    }
+
+    #[test]
+    fn validates_inf_auto_rotate_dps() {
+        let p = AnimationParams {
+            auto_rotate_dps: f32::NEG_INFINITY,
+            ..default_params()
+        };
+        assert!(matches!(
+            p.validate(),
+            Err(AnimationExportError::NonFiniteValue("auto_rotate_dps"))
+        ));
     }
 }
 

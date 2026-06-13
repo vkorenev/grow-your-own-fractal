@@ -126,6 +126,7 @@ pub async fn render_png_standalone(
     width: u32,
     camera: &Camera,
 ) -> Result<PngExport, ExportError> {
+    validate_width(width)?;
     let (device, queue) =
         wgpu_util::create_headless_device("png_export_device", "PNG export").await?;
     render_png(&device, &queue, config, width, camera).await
