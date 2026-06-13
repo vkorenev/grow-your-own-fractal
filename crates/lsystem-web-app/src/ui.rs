@@ -39,7 +39,7 @@ pub fn Disclosure(
 /// Text input flanked by − and + buttons.
 ///
 /// `value` — reactive display string (controlled from outside).
-/// `on_commit` — called with the new string on Enter or ± click only; blur does not commit.
+/// `on_commit` — called with the new string on Enter, ± click, or blur with a valid value.
 ///   On blur with unparseable content the field resets to `value`.
 /// `step` — amount added/subtracted by ± buttons (parsed as f64 from `value`).
 #[component]
@@ -72,6 +72,8 @@ pub fn Spinner(
         }
     };
 
+    let on_commit_blur = on_commit.clone();
+
     view! {
         <div class="spinner">
             <button
@@ -92,8 +94,10 @@ pub fn Spinner(
                     }
                 }
                 on:blur=move |_| {
-                    // If the field contains something that won't parse, reset to last good value
-                    if displayed.get_untracked().parse::<f64>().is_err() {
+                    let text = displayed.get_untracked();
+                    if text.parse::<f64>().is_ok() {
+                        on_commit_blur(text);
+                    } else {
                         displayed.set(value.get_untracked());
                     }
                 }
