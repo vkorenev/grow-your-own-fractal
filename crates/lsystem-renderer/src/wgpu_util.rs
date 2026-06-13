@@ -50,6 +50,41 @@ mod non_browser_wasm {
     }
 }
 
+#[cfg(feature = "png")]
+#[derive(Debug)]
+pub(crate) enum CreateDeviceError {
+    NoAdapter,
+    RequestDevice(wgpu::RequestDeviceError),
+}
+
+#[cfg(feature = "png")]
+pub(crate) async fn create_headless_device(
+    label: &'static str,
+    context: &'static str,
+) -> Result<(wgpu::Device, wgpu::Queue), CreateDeviceError> {
+    let instance = new_instance().await;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|_| CreateDeviceError::NoAdapter)?;
+    let adapter_info = adapter.get_info();
+    log::info!(
+        "Selected {context} GPU adapter: {} ({})",
+        adapter_info.name,
+        adapter_info.backend
+    );
+    let (device, queue) = adapter
+        .request_device(&device_descriptor(label, &adapter))
+        .await
+        .map_err(CreateDeviceError::RequestDevice)?;
+    install_uncaptured_error_handler(&device, context);
+    Ok((device, queue))
+}
+
 pub(crate) fn install_uncaptured_error_handler(device: &wgpu::Device, context: &'static str) {
     device.on_uncaptured_error(Arc::new(move |error| match error {
         wgpu::Error::OutOfMemory { .. } => {
