@@ -12,6 +12,7 @@ use lsystem_app_model::{
 use lsystem_core::{
     ColorConfig, Config, Dimensions, GenerationConfig, LineColorConfig, Rgb, contains_3d_symbols,
 };
+use lsystem_renderer::animation_export::AnimationParams;
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use lsystem_renderer::png_export::{MAX_DIMENSION as PNG_MAX_WIDTH, MIN_WIDTH as PNG_MIN_WIDTH};
 use wasm_bindgen::JsCast;
@@ -38,6 +39,12 @@ pub(crate) fn App() -> impl IntoView {
     let animation_error = RwSignal::new(None::<String>);
     let colors_error = RwSignal::new(None::<String>);
     let png_width = RwSignal::new(2048u32);
+    let anim_fps: RwSignal<u16> = RwSignal::new(30);
+    let anim_duration_secs: RwSignal<f32> = RwSignal::new(4.0);
+    let anim_progress: RwSignal<Option<(u32, u32)>> = RwSignal::new(None);
+    let anim_exporting: RwSignal<bool> = RwSignal::new(false);
+    let anim_num_frames =
+        Memo::new(move |_| (anim_duration_secs.get() * anim_fps.get() as f32).round() as u32);
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(true);
     let auto_rotate_speed = RwSignal::new(20.0f32);
@@ -102,7 +109,11 @@ pub(crate) fn App() -> impl IntoView {
         &editor_generation_config.get_untracked().rules,
     ));
 
-    let save_format = RwSignal::new("png"); // "svg" | "png"
+    let save_format = RwSignal::new("png"); // "svg" | "png" | "apng"
+    let effective_save_format = Memo::new(move |_| {
+        let fmt = save_format.get();
+        if is_3d() && fmt == "svg" { "png" } else { fmt }
+    });
 
     let sync_grammar_editor = move || {
         let generation = editor_generation_config.get_untracked();
@@ -1584,18 +1595,30 @@ pub(crate) fn App() -> impl IntoView {
 
                 <crate::ui::Disclosure title="Save image" open=false>
                     {move || if is_3d() {
-                        view! { <span class="section-label">"PNG"</span> }.into_any()
+                        view! {
+                            <crate::ui::SegmentedToggle
+                                options=vec![("png", "PNG"), ("apng", "APNG")]
+                                selected=Signal::derive(move || effective_save_format.get())
+                                on_change=move |key| {
+                                    save_format.set(key);
+                                    export_error.set(None);
+                                }
+                            />
+                        }.into_any()
                     } else {
                         view! {
                             <crate::ui::SegmentedToggle
-                                options=vec![("svg", "SVG"), ("png", "PNG")]
-                                selected=Signal::derive(move || save_format.get())
-                                on_change=move |key| save_format.set(key)
+                                options=vec![("svg", "SVG"), ("png", "PNG"), ("apng", "APNG")]
+                                selected=Signal::derive(move || effective_save_format.get())
+                                on_change=move |key| {
+                                    save_format.set(key);
+                                    export_error.set(None);
+                                }
                             />
                         }.into_any()
                     }}
 
-                    <Show when=move || save_format.get() == "png">
+                    <Show when=move || effective_save_format.get() != "svg">
                         <div class="spinner-row">
                             <span class="spinner-label">"Width (px)"</span>
                             <crate::ui::Spinner
@@ -1610,14 +1633,96 @@ pub(crate) fn App() -> impl IntoView {
                         </div>
                     </Show>
 
+                    <Show when=move || effective_save_format.get() == "apng">
+                        <div class="spinner-row">
+                            <span class="spinner-label">"FPS"</span>
+                            <select
+                                on:change=move |ev| {
+                                    if let Ok(v) = event_target_value(&ev).parse::<u16>() {
+                                        anim_fps.set(v);
+                                    }
+                                }
+                                prop:value=move || anim_fps.get().to_string()
+                            >
+                                <option value="12">"12"</option>
+                                <option value="24">"24"</option>
+                                <option value="30">"30"</option>
+                                <option value="60">"60"</option>
+                            </select>
+                        </div>
+
+                        <div class="spinner-row">
+                            <span class="spinner-label">"Duration (s)"</span>
+                            <crate::ui::Spinner
+                                value=Signal::derive(move || format!("{:.1}", anim_duration_secs.get()))
+                                step=1.0
+                                on_commit=move |s| {
+                                    if let Ok(v) = s.parse::<f32>() {
+                                        anim_duration_secs.set(v.max(0.1));
+                                    }
+                                }
+                            />
+                        </div>
+
+                        <Show when=move || hue_rotation.with(|m| m.is_enabled())>
+                            {move || {
+                                let speed = hue_rotation.with(|m| m.speed_degrees_per_second());
+                                let loop_secs = 360.0 / speed;
+                                view! {
+                                    <button
+                                        type="button"
+                                        on:click=move |_| anim_duration_secs.set(loop_secs)
+                                    >
+                                        {format!("Hue loop ({loop_secs:.1}s)")}
+                                    </button>
+                                }
+                            }}
+                        </Show>
+
+                        <Show when=move || auto_rotate.get() && is_3d()>
+                            {move || {
+                                let speed = auto_rotate_speed.get();
+                                let loop_secs = 360.0 / speed;
+                                view! {
+                                    <button
+                                        type="button"
+                                        on:click=move |_| anim_duration_secs.set(loop_secs)
+                                    >
+                                        {format!("Orbit loop ({loop_secs:.1}s)")}
+                                    </button>
+                                }
+                            }}
+                        </Show>
+
+                        <span class="section-label" style="color:var(--color-muted)">
+                            {move || format!("{} frames", anim_num_frames.get())}
+                        </span>
+
+                        {move || anim_progress.get().map(|(n, total)| view! {
+                            <span class="inline-status">{format!("Exporting frame {n} / {total}…")}</span>
+                        })}
+                    </Show>
+
+                    <Show when=move || effective_save_format.get() == "apng" && (anim_num_frames.get() > AnimationParams::MAX_FRAMES)>
+                        <span class="inline-status warning">
+                            {move || format!(
+                                "Duration produces {} frames; max is {}.",
+                                anim_num_frames.get(),
+                                AnimationParams::MAX_FRAMES,
+                            )}
+                        </span>
+                    </Show>
+
                     <button
                         type="button"
+                        disabled=move || effective_save_format.get() == "apng" && (anim_exporting.get() || anim_num_frames.get() > AnimationParams::MAX_FRAMES)
                         on:click=move |_| {
                             export_error.set(None);
+                            let fmt = effective_save_format.get_untracked();
                             let config = config_for_render();
-                            if save_format.get_untracked() == "svg" {
+                            if fmt == "svg" {
                                 export_svg(config);
-                            } else {
+                            } else if fmt == "png" {
                                 let Some(Some((device, queue, camera))) =
                                     renderer.try_with_value(|opt| {
                                         opt.as_ref().map(|r| {
@@ -1637,11 +1742,65 @@ pub(crate) fn App() -> impl IntoView {
                                     png_width.get_untracked(),
                                     move |e| export_error.set(Some(e)),
                                 );
+                            } else {
+                                let Some(Some((device, queue, camera))) =
+                                    renderer.try_with_value(|opt| {
+                                        opt.as_ref().map(|r| {
+                                            let (d, q) = r.device_queue();
+                                            (d, q, r.camera())
+                                        })
+                                    })
+                                else {
+                                    export_error.set(Some("Cannot save: GPU renderer not ready.".to_string()));
+                                    return;
+                                };
+                                let fps = anim_fps.get_untracked();
+                                let num_frames = anim_num_frames.get_untracked();
+                                let initial_hue = hue_rotation_phase.get_value();
+                                let hue_rotation_dps = hue_rotation.with_untracked(|m| {
+                                    if m.is_enabled() {
+                                        let sign = if m.direction() == HueRotationDirection::Forward { 1.0f32 } else { -1.0 };
+                                        sign * m.speed_degrees_per_second()
+                                    } else {
+                                        0.0
+                                    }
+                                });
+                                let auto_rotate_dps = if auto_rotate.get_untracked() && is_3d() {
+                                    auto_rotate_speed.get_untracked()
+                                } else {
+                                    0.0
+                                };
+                                let params = AnimationParams {
+                                    fps,
+                                    num_frames,
+                                    initial_hue_phase_degrees: initial_hue,
+                                    hue_rotation_dps,
+                                    auto_rotate_dps,
+                                };
+                                let width = png_width.get_untracked();
+                                anim_exporting.set(true);
+                                anim_progress.set(None);
+                                crate::export::export_animation(
+                                    device,
+                                    queue,
+                                    camera,
+                                    config,
+                                    width,
+                                    params,
+                                    move |n, total| anim_progress.set(Some((n, total))),
+                                    move |err| {
+                                        anim_exporting.set(false);
+                                        anim_progress.set(None);
+                                        if let Some(msg) = err {
+                                            export_error.set(Some(msg));
+                                        }
+                                    },
+                                );
                             }
                         }
                     >"Save"</button>
-                    {move || export_error.get().map(|msg| view! {
-                        <span class="inline-status error">{msg}</span>
+                    {move || export_error.get().map(|m| view! {
+                        <span class="inline-status error">{m}</span>
                     })}
                 </crate::ui::Disclosure>
 

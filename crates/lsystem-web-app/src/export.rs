@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use lsystem_app_model::sanitize_filename;
 use lsystem_core::Config;
+use lsystem_renderer::animation_export::AnimationParams;
 use lsystem_renderer::camera::Camera;
 use wasm_bindgen::JsCast;
 
@@ -34,6 +35,45 @@ pub(crate) fn export_png(
                 let error = format!("Failed to export PNG: {err}");
                 log::error!("{error}");
                 on_error(error);
+            }
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn export_animation(
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    camera: Camera,
+    config: Config,
+    width: u32,
+    params: AnimationParams,
+    on_progress: impl Fn(u32, u32) + 'static,
+    on_done: impl Fn(Option<String>) + 'static,
+) {
+    let filename = sanitize_filename(&config.name, "apng");
+    wasm_bindgen_futures::spawn_local(async move {
+        match lsystem_renderer::animation_export::render_animation(
+            &device,
+            &queue,
+            &config,
+            width,
+            &camera,
+            &params,
+            &on_progress,
+        )
+        .await
+        {
+            Ok(png) => {
+                let blob =
+                    gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/apng"));
+                download_blob(blob, filename);
+                on_done(None);
+            }
+            Err(err) => {
+                let msg = format!("Failed to export APNG: {err}");
+                log::error!("{msg}");
+                on_done(Some(msg));
             }
         }
     });
