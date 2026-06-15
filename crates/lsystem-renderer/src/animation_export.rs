@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use lsystem_core::Config;
 
 use crate::camera::Camera;
-use crate::offscreen::{ExportScene, RenderTarget, validate_width};
+use crate::offscreen::{ExportScene, RenderTarget, validate_height, validate_width};
 use crate::png_export::{ExportError, PngExport};
 use crate::wgpu_util;
 
@@ -99,20 +99,22 @@ impl From<ExportError> for AnimationExportError {
 /// frame. Sizing and camera semantics match
 /// [`render_png`](crate::png_export::render_png). `on_progress` receives
 /// `(completed_frames, total_frames)` after each frame.
+#[allow(clippy::too_many_arguments)]
 pub async fn render_animation(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     config: &Config,
     width: u32,
+    height: u32,
     camera: &Camera,
     params: &AnimationParams,
     on_progress: impl Fn(u32, u32),
 ) -> Result<PngExport, AnimationExportError> {
     params.validate()?;
     validate_width(width)?;
+    validate_height(height)?;
 
     let scene = ExportScene::new(device, queue, config);
-    let height = scene.height_for_width(width)?;
     let target = RenderTarget::new(device, width, height);
     let background = config.colors.background.to_array();
     let base_color = scene.color_params();
@@ -166,17 +168,29 @@ pub async fn render_animation(
 pub async fn render_animation_standalone(
     config: &Config,
     width: u32,
+    height: u32,
     camera: &Camera,
     params: &AnimationParams,
     on_progress: impl Fn(u32, u32),
 ) -> Result<PngExport, AnimationExportError> {
     params.validate()?;
     validate_width(width)?;
+    validate_height(height)?;
     let (device, queue) =
         wgpu_util::create_headless_device("animation_export_device", "animation export")
             .await
             .map_err(ExportError::from)?;
-    render_animation(&device, &queue, config, width, camera, params, on_progress).await
+    render_animation(
+        &device,
+        &queue,
+        config,
+        width,
+        height,
+        camera,
+        params,
+        on_progress,
+    )
+    .await
 }
 
 fn encode_error(e: png::EncodingError) -> AnimationExportError {
@@ -321,6 +335,7 @@ mod gpu_tests {
         let export = pollster::block_on(render_animation_standalone(
             &trivial_config(),
             256,
+            128,
             &crate::camera::Camera::default(),
             &params,
             |_, _| {},
@@ -328,10 +343,11 @@ mod gpu_tests {
         .expect("render_animation_standalone failed");
 
         assert_eq!(export.width, 256);
+        assert_eq!(export.height, 128);
         let decoder = png::Decoder::new(std::io::Cursor::new(export.bytes.as_slice()));
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
-        assert_eq!((info.width, info.height), (export.width, export.height));
+        assert_eq!((info.width, info.height), (256, 128));
         assert_eq!(
             info.animation_control()
                 .expect("missing animation control")

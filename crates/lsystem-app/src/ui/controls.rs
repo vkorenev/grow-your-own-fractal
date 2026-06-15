@@ -75,8 +75,13 @@ impl FractalApp {
             controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
 
             controls = controls.push(text("PNG width").size(13)).push(
-                text_input("2048", &self.png_width_text)
+                text_input("800", &self.png_width_text)
                     .on_input(Message::PngWidthChanged)
+                    .width(Length::Fill),
+            );
+            controls = controls.push(text("PNG height").size(13)).push(
+                text_input("800", &self.png_height_text)
+                    .on_input(Message::PngHeightChanged)
                     .width(Length::Fill),
             );
 

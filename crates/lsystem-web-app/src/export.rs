@@ -19,12 +19,15 @@ pub(crate) fn export_png(
     camera: Camera,
     config: Config,
     width: u32,
+    height: u32,
     on_error: impl Fn(String) + 'static,
 ) {
     let filename = sanitize_filename(&config.name, "png");
     wasm_bindgen_futures::spawn_local(async move {
-        match lsystem_renderer::png_export::render_png(&device, &queue, &config, width, &camera)
-            .await
+        match lsystem_renderer::png_export::render_png(
+            &device, &queue, &config, width, height, &camera,
+        )
+        .await
         {
             Ok(png) => {
                 let blob =
@@ -47,6 +50,7 @@ pub(crate) fn export_animation(
     camera: Camera,
     config: Config,
     width: u32,
+    height: u32,
     params: AnimationParams,
     on_progress: impl Fn(u32, u32) + 'static,
     on_done: impl Fn(Option<String>) + 'static,
@@ -58,6 +62,7 @@ pub(crate) fn export_animation(
             &queue,
             &config,
             width,
+            height,
             &camera,
             &params,
             &on_progress,
