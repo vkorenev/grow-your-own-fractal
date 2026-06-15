@@ -168,7 +168,8 @@ new custom config entry without affecting any existing entries.
 The **Export SVG** button saves the current fractal as a resolution-independent
 SVG file. SVG export is only available for 2D fractals.
 The **Export PNG** button renders the fractal to a raster PNG using the selected
-PNG width. For 3D fractals, PNG captures the current camera orientation.
+PNG width and height. For 3D fractals, PNG captures the current camera
+orientation.
 Exports use the static colors from the active config, not any transient hue
 rotation phase currently visible in the UI.
 

@@ -11,7 +11,7 @@ use crate::lsystem_bridge::{
     color_params_from_config, geometry_to_depth_segments, geometry_to_depth_segments_3d,
     geometry_to_segments, geometry_to_segments_3d, viewport_transform,
 };
-use crate::png_export::{ExportError, MAX_DIMENSION, MIN_WIDTH};
+use crate::png_export::{ExportError, MAX_DIMENSION, MIN_DIMENSION};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const BYTES_PER_PIXEL: u32 = 4;
@@ -38,27 +38,16 @@ impl Display for ReadbackError {
 impl Error for ReadbackError {}
 
 pub(crate) fn validate_width(width: u32) -> Result<(), ExportError> {
-    if (MIN_WIDTH..=MAX_DIMENSION).contains(&width) {
+    if (MIN_DIMENSION..=MAX_DIMENSION).contains(&width) {
         Ok(())
     } else {
         Err(ExportError::InvalidWidth(width))
     }
 }
 
-fn derive_height(
-    width: u32,
-    bounds_min: [f32; 2],
-    bounds_max: [f32; 2],
-) -> Result<u32, ExportError> {
-    let geom_w = (bounds_max[0] - bounds_min[0]).max(1.0);
-    let geom_h = (bounds_max[1] - bounds_min[1]).max(1.0);
-    let height = (width as f32 * geom_h / geom_w).ceil();
-    if !height.is_finite() {
-        return Err(ExportError::InvalidHeight(0));
-    }
-    let height = height as u32;
-    if (1..=MAX_DIMENSION).contains(&height) {
-        Ok(height)
+pub(crate) fn validate_height(height: u32) -> Result<(), ExportError> {
+    if (MIN_DIMENSION..=MAX_DIMENSION).contains(&height) {
+        Ok(())
     } else {
         Err(ExportError::InvalidHeight(height))
     }
@@ -155,19 +144,6 @@ impl ExportScene {
     /// Color params resolved from the config at upload time.
     pub(crate) fn color_params(&self) -> ColorParams {
         self.color_params
-    }
-
-    /// Output height for the given width: 2D derives it from the geometry
-    /// aspect ratio, 3D renders a square frame.
-    pub(crate) fn height_for_width(&self, width: u32) -> Result<u32, ExportError> {
-        match &self.geometry {
-            SceneGeometry::TwoD {
-                bounds_min,
-                bounds_max,
-                ..
-            } => derive_height(width, *bounds_min, *bounds_max),
-            SceneGeometry::ThreeD { .. } => Ok(width),
-        }
     }
 
     /// Writes the view uniform. 2D export always fits the geometry bounds
@@ -401,10 +377,10 @@ mod tests {
     #[test]
     fn validates_export_width() {
         assert!(matches!(
-            validate_width(MIN_WIDTH - 1),
-            Err(ExportError::InvalidWidth(width)) if width == MIN_WIDTH - 1
+            validate_width(MIN_DIMENSION - 1),
+            Err(ExportError::InvalidWidth(width)) if width == MIN_DIMENSION - 1
         ));
-        assert!(validate_width(MIN_WIDTH).is_ok());
+        assert!(validate_width(MIN_DIMENSION).is_ok());
         assert!(validate_width(MAX_DIMENSION).is_ok());
         assert!(matches!(
             validate_width(MAX_DIMENSION + 1),
@@ -413,13 +389,16 @@ mod tests {
     }
 
     #[test]
-    fn derives_height_from_bounds_with_degenerate_dimensions() {
-        assert_eq!(derive_height(1024, [0.0, 0.0], [2.0, 1.0]).unwrap(), 512);
-        assert_eq!(derive_height(1024, [0.0, 0.0], [10.0, 0.0]).unwrap(), 103);
-        assert_eq!(derive_height(1024, [0.0, 0.0], [0.0, 4.0]).unwrap(), 4096);
+    fn validates_export_height() {
         assert!(matches!(
-            derive_height(1024, [0.0, 0.0], [0.0, 5.0]),
-            Err(ExportError::InvalidHeight(5120))
+            validate_height(MIN_DIMENSION - 1),
+            Err(ExportError::InvalidHeight(height)) if height == MIN_DIMENSION - 1
+        ));
+        assert!(validate_height(MIN_DIMENSION).is_ok());
+        assert!(validate_height(MAX_DIMENSION).is_ok());
+        assert!(matches!(
+            validate_height(MAX_DIMENSION + 1),
+            Err(ExportError::InvalidHeight(height)) if height == MAX_DIMENSION + 1
         ));
     }
 

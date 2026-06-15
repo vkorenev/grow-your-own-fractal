@@ -17,7 +17,7 @@ use crate::export::choose_export_path;
 use crate::export::{ExportKind, ExportOutcome, ExportRequest, handle_export};
 
 use super::fractal_canvas::{Scene, SceneBuildResult, build_scene};
-use super::{PNG_MAX_WIDTH, PNG_MIN_WIDTH};
+use super::{PNG_MAX_DIMENSION, PNG_MIN_DIMENSION};
 
 const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
@@ -49,6 +49,7 @@ pub(super) enum Message {
         use_default: bool,
     },
     PngWidthChanged(String),
+    PngHeightChanged(String),
     ExportSvg,
     ExportPng,
     ExportFinished(ExportOutcome),
@@ -88,6 +89,8 @@ pub(super) struct FractalApp {
     pub(super) max_iterations: u32,
     pub(super) png_width: u32,
     pub(super) png_width_text: String,
+    pub(super) png_height: u32,
+    pub(super) png_height_text: String,
     pub(super) error: Option<String>,
     pub(super) export_status: Option<String>,
     pub(super) scene_pending: bool,
@@ -116,8 +119,10 @@ impl FractalApp {
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
             iterations: 1,
             max_iterations: 1,
-            png_width: 2048,
-            png_width_text: "2048".to_string(),
+            png_width: 800,
+            png_width_text: "800".to_string(),
+            png_height: 800,
+            png_height_text: "800".to_string(),
             error: None,
             export_status: None,
             scene_pending: false,
@@ -273,7 +278,15 @@ impl FractalApp {
                 self.png_width_text = value;
                 self.export_status = None;
                 if let Ok(width) = self.png_width_text.parse::<u32>() {
-                    self.png_width = width.clamp(PNG_MIN_WIDTH, PNG_MAX_WIDTH);
+                    self.png_width = width.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION);
+                }
+                Task::none()
+            }
+            Message::PngHeightChanged(value) => {
+                self.png_height_text = value;
+                self.export_status = None;
+                if let Ok(height) = self.png_height_text.parse::<u32>() {
+                    self.png_height = height.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION);
                 }
                 Task::none()
             }
@@ -648,6 +661,16 @@ impl FractalApp {
         } else {
             self.png_width
         };
+        let png_height = if matches!(kind, ExportKind::Png) {
+            match self.normalized_png_height() {
+                Ok(height) => height,
+                Err(error) => {
+                    return Task::done(Message::ExportFinished(ExportOutcome::Failed(error)));
+                }
+            }
+        } else {
+            self.png_height
+        };
 
         #[cfg(not(target_arch = "wasm32"))]
         let request = {
@@ -660,6 +683,7 @@ impl FractalApp {
                 ExportKind::Png => ExportRequest::Png {
                     config,
                     width: png_width,
+                    height: png_height,
                     path,
                     camera: self.scene.camera.clone(),
                 },
@@ -672,6 +696,7 @@ impl FractalApp {
             ExportKind::Png => ExportRequest::Png {
                 config,
                 width: png_width,
+                height: png_height,
                 camera: self.scene.camera.clone(),
             },
         };
@@ -682,14 +707,27 @@ impl FractalApp {
     fn normalized_png_width(&mut self) -> Result<u32, String> {
         let Ok(width) = self.png_width_text.trim().parse::<u32>() else {
             return Err(format!(
-                "PNG width must be a number from {PNG_MIN_WIDTH} to {PNG_MAX_WIDTH}"
+                "PNG width must be a number from {PNG_MIN_DIMENSION} to {PNG_MAX_DIMENSION}"
             ));
         };
 
-        let width = width.clamp(PNG_MIN_WIDTH, PNG_MAX_WIDTH);
+        let width = width.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION);
         self.png_width = width;
         self.png_width_text = width.to_string();
         Ok(width)
+    }
+
+    fn normalized_png_height(&mut self) -> Result<u32, String> {
+        let Ok(height) = self.png_height_text.trim().parse::<u32>() else {
+            return Err(format!(
+                "PNG height must be a number from {PNG_MIN_DIMENSION} to {PNG_MAX_DIMENSION}"
+            ));
+        };
+
+        let height = height.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION);
+        self.png_height = height;
+        self.png_height_text = height.to_string();
+        Ok(height)
     }
 }
 
@@ -761,6 +799,28 @@ mod tests {
         let _ = app.update(Message::ApplyConfig);
 
         assert_eq!(app.color_memory.line_for(LineColorMode::Gradient), gradient);
+    }
+
+    #[test]
+    fn png_dimensions_default_to_square_800() {
+        let (app, _) = FractalApp::new();
+
+        assert_eq!(app.png_width, 800);
+        assert_eq!(app.png_width_text, "800");
+        assert_eq!(app.png_height, 800);
+        assert_eq!(app.png_height_text, "800");
+    }
+
+    #[test]
+    fn png_height_change_clamps_and_normalizes_text() {
+        let (mut app, _) = FractalApp::new();
+
+        let _ = app.update(Message::PngHeightChanged("9000".to_string()));
+        assert_eq!(app.png_height, PNG_MAX_DIMENSION);
+        assert_eq!(app.png_height_text, "9000");
+
+        assert_eq!(app.normalized_png_height().unwrap(), PNG_MAX_DIMENSION);
+        assert_eq!(app.png_height_text, PNG_MAX_DIMENSION.to_string());
     }
 
     #[test]

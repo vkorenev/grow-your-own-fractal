@@ -3,7 +3,9 @@ mod controls;
 mod fractal_canvas;
 
 use iced::Size;
-use lsystem_renderer::png_export::{MAX_DIMENSION as PNG_MAX_WIDTH, MIN_WIDTH as PNG_MIN_WIDTH};
+use lsystem_renderer::png_export::{
+    MAX_DIMENSION as PNG_MAX_DIMENSION, MIN_DIMENSION as PNG_MIN_DIMENSION,
+};
 
 use app_state::FractalApp;
 

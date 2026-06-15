@@ -14,7 +14,9 @@ use lsystem_core::{
 };
 use lsystem_renderer::animation_export::AnimationParams;
 use lsystem_renderer::line_renderer::FrameSkipReason;
-use lsystem_renderer::png_export::{MAX_DIMENSION as PNG_MAX_WIDTH, MIN_WIDTH as PNG_MIN_WIDTH};
+use lsystem_renderer::png_export::{
+    MAX_DIMENSION as PNG_MAX_DIMENSION, MIN_DIMENSION as PNG_MIN_DIMENSION,
+};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
@@ -38,7 +40,8 @@ pub(crate) fn App() -> impl IntoView {
     let export_error = RwSignal::new(None::<String>);
     let animation_error = RwSignal::new(None::<String>);
     let colors_error = RwSignal::new(None::<String>);
-    let png_width = RwSignal::new(2048u32);
+    let png_width = RwSignal::new(800u32);
+    let png_height = RwSignal::new(800u32);
     let anim_fps: RwSignal<u16> = RwSignal::new(30);
     let anim_duration_secs: RwSignal<f32> = RwSignal::new(4.0);
     let anim_progress: RwSignal<Option<(u32, u32)>> = RwSignal::new(None);
@@ -1626,7 +1629,19 @@ pub(crate) fn App() -> impl IntoView {
                                 step=16.0
                                 on_commit=move |s| {
                                     if let Ok(v) = s.parse::<u32>() {
-                                        png_width.set(v.clamp(PNG_MIN_WIDTH, PNG_MAX_WIDTH));
+                                        png_width.set(v.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION));
+                                    }
+                                }
+                            />
+                        </div>
+                        <div class="spinner-row">
+                            <span class="spinner-label">"Height (px)"</span>
+                            <crate::ui::Spinner
+                                value=Signal::derive(move || png_height.get().to_string())
+                                step=16.0
+                                on_commit=move |s| {
+                                    if let Ok(v) = s.parse::<u32>() {
+                                        png_height.set(v.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION));
                                     }
                                 }
                             />
@@ -1740,6 +1755,7 @@ pub(crate) fn App() -> impl IntoView {
                                     camera,
                                     config,
                                     png_width.get_untracked(),
+                                    png_height.get_untracked(),
                                     move |e| export_error.set(Some(e)),
                                 );
                             } else {
@@ -1778,6 +1794,7 @@ pub(crate) fn App() -> impl IntoView {
                                     auto_rotate_dps,
                                 };
                                 let width = png_width.get_untracked();
+                                let height = png_height.get_untracked();
                                 anim_exporting.set(true);
                                 anim_progress.set(None);
                                 crate::export::export_animation(
@@ -1786,6 +1803,7 @@ pub(crate) fn App() -> impl IntoView {
                                     camera,
                                     config,
                                     width,
+                                    height,
                                     params,
                                     move |n, total| anim_progress.set(Some((n, total))),
                                     move |err| {

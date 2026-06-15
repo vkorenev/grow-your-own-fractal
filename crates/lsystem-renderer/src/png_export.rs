@@ -4,14 +4,14 @@ use std::fmt::{Display, Formatter};
 use lsystem_core::Config;
 
 use crate::camera::Camera;
-use crate::offscreen::{ExportScene, ReadbackError, RenderTarget, validate_width};
+use crate::offscreen::{ExportScene, ReadbackError, RenderTarget, validate_height, validate_width};
 use crate::wgpu_util::{self, CreateDeviceError};
 
-/// Minimum export width in pixels accepted by [`render_png`] and
+/// Minimum export width and height in pixels accepted by [`render_png`] and
 /// [`render_animation`](crate::animation_export::render_animation).
-pub const MIN_WIDTH: u32 = 256;
-/// Maximum export width — and derived height — in pixels.
-pub const MAX_DIMENSION: u32 = 4096;
+pub const MIN_DIMENSION: u32 = 1;
+/// Maximum export width and height in pixels.
+pub const MAX_DIMENSION: u32 = 8192;
 
 /// An encoded PNG (or APNG) image together with its pixel dimensions.
 pub struct PngExport {
@@ -39,13 +39,13 @@ impl Display for ExportError {
             Self::InvalidWidth(width) => {
                 write!(
                     f,
-                    "export width must be in {MIN_WIDTH}..={MAX_DIMENSION}, got {width}"
+                    "export width must be in {MIN_DIMENSION}..={MAX_DIMENSION}, got {width}"
                 )
             }
             Self::InvalidHeight(height) => {
                 write!(
                     f,
-                    "derived export height must be in 1..={MAX_DIMENSION}, got {height}"
+                    "export height must be in {MIN_DIMENSION}..={MAX_DIMENSION}, got {height}"
                 )
             }
             Self::NoAdapter => write!(f, "no GPU adapter available for export"),
@@ -89,22 +89,22 @@ impl From<CreateDeviceError> for ExportError {
     }
 }
 
-/// Renders `config` to a PNG of the given width on `device`.
+/// Renders `config` to a PNG of the given dimensions on `device`.
 ///
-/// The height is derived from the geometry aspect ratio in 2D and equals
-/// `width` in 3D. `camera` selects the 3D orientation; 2D export always fits
-/// the geometry bounds and ignores camera pan/zoom.
+/// `camera` selects the 3D orientation; 2D export always fits the geometry
+/// bounds and ignores camera pan/zoom.
 pub async fn render_png(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     config: &Config,
     width: u32,
+    height: u32,
     camera: &Camera,
 ) -> Result<PngExport, ExportError> {
     validate_width(width)?;
+    validate_height(height)?;
 
     let scene = ExportScene::new(device, queue, config);
-    let height = scene.height_for_width(width)?;
     scene.write_camera(queue, camera, width, height);
 
     let target = RenderTarget::new(device, width, height);
@@ -124,12 +124,14 @@ pub async fn render_png(
 pub async fn render_png_standalone(
     config: &Config,
     width: u32,
+    height: u32,
     camera: &Camera,
 ) -> Result<PngExport, ExportError> {
     validate_width(width)?;
+    validate_height(height)?;
     let (device, queue) =
         wgpu_util::create_headless_device("png_export_device", "PNG export").await?;
-    render_png(&device, &queue, config, width, camera).await
+    render_png(&device, &queue, config, width, height, camera).await
 }
 
 fn encode_png_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ExportError> {

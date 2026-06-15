@@ -44,6 +44,7 @@ pub(crate) enum ExportRequest {
     Png {
         config: Config,
         width: u32,
+        height: u32,
         path: PathBuf,
         camera: Camera,
     },
@@ -53,6 +54,7 @@ pub(crate) enum ExportRequest {
     Png {
         config: Config,
         width: u32,
+        height: u32,
         camera: Camera,
     },
 }
@@ -76,9 +78,10 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
         ExportRequest::Png {
             config,
             width,
+            height,
             path,
             camera,
-        } => save_png(config, width, path, camera).await,
+        } => save_png(config, width, height, path, camera).await,
         #[cfg(target_arch = "wasm32")]
         ExportRequest::Svg(config) => {
             let filename = suggested_filename(&config.name, ExportKind::Svg);
@@ -89,10 +92,11 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
         ExportRequest::Png {
             config,
             width,
+            height,
             camera,
         } => {
             let filename = suggested_filename(&config.name, ExportKind::Png);
-            save_png(config, width, camera, filename).await
+            save_png(config, width, height, camera, filename).await
         }
     }
 }
@@ -118,8 +122,14 @@ fn save_svg(svg: String, path: PathBuf) -> ExportOutcome {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn save_png(cfg: Config, width: u32, path: PathBuf, camera: Camera) -> ExportOutcome {
-    match lsystem_renderer::png_export::render_png_standalone(&cfg, width, &camera).await {
+async fn save_png(
+    cfg: Config,
+    width: u32,
+    height: u32,
+    path: PathBuf,
+    camera: Camera,
+) -> ExportOutcome {
+    match lsystem_renderer::png_export::render_png_standalone(&cfg, width, height, &camera).await {
         Ok(png) => match std::fs::write(&path, png.bytes) {
             Ok(()) => ExportOutcome::Saved(ExportKind::Png.label()),
             Err(e) => ExportOutcome::Failed(e.to_string()),
@@ -142,10 +152,11 @@ fn save_svg(svg: String, suggested_name: String) -> ExportOutcome {
 async fn save_png(
     cfg: Config,
     width: u32,
+    height: u32,
     camera: Camera,
     suggested_name: String,
 ) -> ExportOutcome {
-    match lsystem_renderer::png_export::render_png_standalone(&cfg, width, &camera).await {
+    match lsystem_renderer::png_export::render_png_standalone(&cfg, width, height, &camera).await {
         Ok(png) => {
             let blob = gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/png"));
             download_blob(blob, suggested_name);
