@@ -3,7 +3,7 @@
 An interactive [L-System](https://en.wikipedia.org/wiki/L-system) (Lindenmayer
 system) visualizer built with Rust, wgpu, and WebAssembly. The browser app uses
 Leptos DOM controls and a GPU canvas with WebGPU rendering and a WebGL2
-fallback.
+fallback. A native desktop app built with Iced is also available.
 
 ## Try it
 
@@ -12,11 +12,11 @@ The browser app is available on
 
 ## Features
 
-- Fast GPU-accelerated rendering in the browser.
+- Fast GPU-accelerated rendering.
 - Built-in 2D and 3D presets with editable TOML configs.
 - Open and save custom configs.
 - Pan and zoom 2D fractals; orbit, roll, and auto-rotate 3D fractals.
-- Solid, gradient, topological-depth gradient, and hue-cycle line colors.
+- Solid, gradient (including topological-depth mode), and hue-cycle line colors (with animatable hue rotation).
 - Save still images as SVG (2D) or PNG, and animations as APNG.
 
 ## What are L-Systems?
@@ -25,7 +25,7 @@ L-Systems are formal string-rewriting grammars originally developed to model
 plant growth. You define a starting string (the *axiom*) and a set of
 *production rules*. The axiom is expanded iteratively — each character that has
 a rule is replaced by the rule's right-hand side, and characters without a rule
-are kept unchanged. After the requested number of iterations the resulting
+are kept unchanged. After the requested number of iterations, the resulting
 string is read by a *turtle* that moves around a canvas, drawing line segments.
 
 **Example** — Koch Snowflake, one iteration:
@@ -63,7 +63,7 @@ following:
 | Symbol | Name | Effect |
 |--------|------|--------|
 | `&` | Pitch down | Rotate the heading downward by `angle` (around the left axis). |
-| `^` | Pitch up | Rotate the heading upward by `angle`. |
+| `^` | Pitch up | Rotate the heading upward by `angle` (around the left axis). |
 | `/` | Roll right | Roll clockwise by `angle` (around the heading axis). |
 | `\` | Roll left | Roll counter-clockwise by `angle`. |
 
@@ -92,11 +92,10 @@ F = "F-F++F-F"          # each F is replaced by this string each iteration
 [colors]
 background = "#000000"   # optional hex color
 
+# Choose exactly one line color mode: solid, gradient, or hue_cycle.
+# Omit [colors.line] entirely to use the built-in solid line color.
 [colors.line]
 solid = "#00e680"        # solid line color
-
-# Omit [colors.line] entirely to use the built-in solid line color.
-# Choose exactly one line color mode: solid, gradient, or hue_cycle.
 
 # gradient example:
 # [colors.line.gradient]
@@ -108,8 +107,8 @@ solid = "#00e680"        # solid line color
 # [colors.line.hue_cycle]
 # initial = "#e60000"
 
-# Topological-depth gradient example (branching fractals only; same as
-# traversal gradient otherwise):
+# Topological-depth gradient example (branching fractals only, i.e. those using
+# `[` / `]` brackets; same as traversal gradient otherwise):
 # [colors.line.gradient]
 # start = "#ff6600"
 # end = "#9900ff"
@@ -129,9 +128,6 @@ you can break long rules across lines for readability.
 | Scroll wheel | Zoom in / out toward the cursor |
 | `F` | Reset view to fit the fractal |
 
-Hue-cycle colors can also be animated from the controls without changing the
-config text.
-
 **3D** (when `dimensions = "3D"`)
 
 | Input | Action |
@@ -148,7 +144,7 @@ config text.
 | File | Name | Description |
 |------|------|-------------|
 | `presets/box_fractal.toml` | Box Fractal | Square-grid fractal built by replacing each edge with a five-segment box pattern. |
-| `presets/dragon_curve.toml` | Harter-Heightway Dragon | Self-similar curve obtained by repeatedly folding a strip of paper in half. |
+| `presets/dragon_curve.toml` | Harter-Heighway Dragon | Self-similar curve obtained by repeatedly folding a strip of paper in half. |
 | `presets/gosper_curve.toml` | Gosper Curve | Space-filling curve that tiles the plane with hexagonal regions; also known as the flowsnake. |
 | `presets/hilbert_curve.toml` | Hilbert Curve | Space-filling curve that maps a line continuously to a 2D square while preserving locality. |
 | `presets/hilbert_curve_3d.toml` | 3D Hilbert Curve | Three-dimensional Hilbert-style space-filling curve using pitch and roll turns. |
