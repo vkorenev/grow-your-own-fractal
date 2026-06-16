@@ -159,3 +159,47 @@ mod tests {
         assert_eq!(&png[20..24], &1u32.to_be_bytes());
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod gpu_tests {
+    use super::*;
+    use lsystem_core::{Dimensions, GenerationConfig};
+    use std::collections::BTreeMap;
+
+    fn trivial_config() -> lsystem_core::Config {
+        lsystem_core::Config {
+            name: "test".to_string(),
+            generation: GenerationConfig {
+                dimensions: Dimensions::TwoD,
+                axiom: "F".to_string(),
+                iterations: 0,
+                angle: 90.0,
+                step: 1.0,
+                initial_heading: 0.0,
+                rules: BTreeMap::new(),
+            },
+            colors: lsystem_core::ColorConfig {
+                background: lsystem_core::Rgb::new(0, 0, 0),
+                line: lsystem_core::LineColorConfig::Solid(lsystem_core::Rgb::new(255, 255, 255)),
+            },
+        }
+    }
+
+    #[test]
+    fn png_standalone_non_square_dimensions() {
+        let export = pollster::block_on(render_png_standalone(
+            &trivial_config(),
+            256,
+            128,
+            &crate::camera::Camera::default(),
+        ))
+        .expect("render_png_standalone failed");
+
+        assert_eq!(export.width, 256);
+        assert_eq!(export.height, 128);
+        let decoder = png::Decoder::new(std::io::Cursor::new(export.bytes.as_slice()));
+        let reader = decoder.read_info().unwrap();
+        let info = reader.info();
+        assert_eq!((info.width, info.height), (256, 128));
+    }
+}
