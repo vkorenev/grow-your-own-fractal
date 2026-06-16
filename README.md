@@ -1,10 +1,23 @@
 # Grow Your Own Fractal
 
 An interactive [L-System](https://en.wikipedia.org/wiki/L-system) (Lindenmayer
-system) visualizer built with Rust, wgpu, and WebAssembly. The workspace
-includes an Iced native/wasm app and a browser-first Leptos app with DOM
-controls and a GPU canvas that uses WebGPU with a WebGL2 fallback on browser
-wasm targets.
+system) visualizer built with Rust, wgpu, and WebAssembly. The browser app uses
+Leptos DOM controls and a GPU canvas with WebGPU rendering and a WebGL2
+fallback. A native desktop app built with Iced is also available.
+
+## Try it
+
+The browser app is available on
+[GitHub Pages](https://vkorenev.github.io/grow-your-own-fractal/).
+
+## Features
+
+- Fast GPU-accelerated rendering.
+- Built-in 2D and 3D presets with editable TOML configs.
+- Open and save custom configs.
+- Pan and zoom 2D fractals; orbit, roll, and auto-rotate 3D fractals.
+- Solid, gradient (including topological-depth mode), and hue-cycle line colors (with animatable hue rotation).
+- Save still images as SVG (2D) or PNG, and animations as APNG.
 
 ## What are L-Systems?
 
@@ -12,7 +25,7 @@ L-Systems are formal string-rewriting grammars originally developed to model
 plant growth. You define a starting string (the *axiom*) and a set of
 *production rules*. The axiom is expanded iteratively — each character that has
 a rule is replaced by the rule's right-hand side, and characters without a rule
-are kept unchanged. After the requested number of iterations the resulting
+are kept unchanged. After the requested number of iterations, the resulting
 string is read by a *turtle* that moves around a canvas, drawing line segments.
 
 **Example** — Koch Snowflake, one iteration:
@@ -50,7 +63,7 @@ following:
 | Symbol | Name | Effect |
 |--------|------|--------|
 | `&` | Pitch down | Rotate the heading downward by `angle` (around the left axis). |
-| `^` | Pitch up | Rotate the heading upward by `angle`. |
+| `^` | Pitch up | Rotate the heading upward by `angle` (around the left axis). |
 | `/` | Roll right | Roll clockwise by `angle` (around the heading axis). |
 | `\` | Roll left | Roll counter-clockwise by `angle`. |
 
@@ -79,10 +92,10 @@ F = "F-F++F-F"          # each F is replaced by this string each iteration
 [colors]
 background = "#000000"   # optional hex color
 
-[colors.line]
-solid = "#00e680"  # scalar solid line color
-
+# Choose exactly one line color mode: solid, gradient, or hue_cycle.
 # Omit [colors.line] entirely to use the built-in solid line color.
+[colors.line]
+solid = "#00e680"        # solid line color
 
 # gradient example:
 # [colors.line.gradient]
@@ -94,43 +107,16 @@ solid = "#00e680"  # scalar solid line color
 # [colors.line.hue_cycle]
 # initial = "#e60000"
 
-# Topological-depth gradient example (branching fractals only; same as
-# traversal gradient otherwise):
+# Topological-depth gradient example (branching fractals only, i.e. those using
+# `[` / `]` brackets; same as traversal gradient otherwise):
 # [colors.line.gradient]
 # start = "#ff6600"
 # end = "#9900ff"
 # topological_depth = true
 ```
 
-Configuration uses the nested v2 field paths: `metadata.name`, `l-system.*`,
-`l-system.rules`, `colors.*`, and mode-specific `colors.line.*` paths such as
-`colors.line.solid`, `colors.line.gradient.start`, and
-`colors.line.hue_cycle.initial`. Those paths may be written with explicit
-tables, dotted keys, or implicit parent tables. Older flat TOML with top-level
-`name`, `axiom`, `[rules]`, `background_color`, or `[line_color]` is rejected.
-The old `colors.line.mode` shape is also rejected. `l-system.step`,
-`l-system.initial_heading`, `colors.background`, `colors.line`, and
-mode-specific line color fields are optional and resolve through built-in
-defaults. All present colors are hex color strings in `"#rrggbb"` format,
-including `hue_cycle`'s `initial` color.
-
-Built-in defaults use the same property paths as config TOML for
-`l-system.step`, `l-system.initial_heading`, `colors.background`,
-`colors.line.solid`, `colors.line.gradient.*`, and
-`colors.line.hue_cycle.initial`. Regular L-System configs still select exactly
-one `colors.line` mode. Omitting `colors.line` always uses the built-in solid
-line color. See `crates/lsystem-app-model/src/defaults.toml` for the default
-values.
-Unknown keys are rejected.
-
 Whitespace inside `axiom` and rule strings is stripped before processing, so
 you can break long rules across lines for readability.
-
-Hue rotation is a playback control in the UI for `hue_cycle` line colors. It
-temporarily offsets the rendered hue start while it is enabled; it is not a TOML
-field and does not change the stored `initial` color. If another line color mode
-is active, the saved rotation state is ignored until `hue_cycle` is selected
-again.
 
 ## Controls
 
@@ -141,10 +127,6 @@ again.
 | Drag (left button) | Pan |
 | Scroll wheel | Zoom in / out toward the cursor |
 | `F` | Reset view to fit the fractal |
-
-When the line color mode is **Hue cycle**, the control panel also shows a hue
-rotation toggle, direction selector, and speed slider. This shifts the visible
-hue cycle over time without changing the config text.
 
 **3D** (when `dimensions = "3D"`)
 
@@ -157,28 +139,12 @@ hue cycle over time without changing the config text.
 | `F` | Reset camera to fit the fractal |
 | Auto-rotate toggle | Continuously orbit around the Y axis at the configured speed |
 
-## Sharing configs
-
-The **Save** button saves the current editor text to a `.toml` file, including any
-unapplied draft. The **Open** button loads a `.toml` file from disk and adds it as a
-new custom config entry without affecting any existing entries.
-
-## Exporting
-
-The **Export SVG** button saves the current fractal as a resolution-independent
-SVG file. SVG export is only available for 2D fractals.
-The **Export PNG** button renders the fractal to a raster PNG using the selected
-PNG width and height. For 3D fractals, PNG captures the current camera
-orientation.
-Exports use the static colors from the active config, not any transient hue
-rotation phase currently visible in the UI.
-
 ## Bundled presets
 
 | File | Name | Description |
 |------|------|-------------|
 | `presets/box_fractal.toml` | Box Fractal | Square-grid fractal built by replacing each edge with a five-segment box pattern. |
-| `presets/dragon_curve.toml` | Harter-Heightway Dragon | Self-similar curve obtained by repeatedly folding a strip of paper in half. |
+| `presets/dragon_curve.toml` | Harter-Heighway Dragon | Self-similar curve obtained by repeatedly folding a strip of paper in half. |
 | `presets/gosper_curve.toml` | Gosper Curve | Space-filling curve that tiles the plane with hexagonal regions; also known as the flowsnake. |
 | `presets/hilbert_curve.toml` | Hilbert Curve | Space-filling curve that maps a line continuously to a 2D square while preserving locality. |
 | `presets/hilbert_curve_3d.toml` | 3D Hilbert Curve | Three-dimensional Hilbert-style space-filling curve using pitch and roll turns. |
