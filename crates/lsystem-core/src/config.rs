@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use crate::grammar;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("rule key {key:?} must be a single ASCII letter")]
@@ -208,6 +210,11 @@ impl GenerationConfig {
     /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
     pub fn has_stack_directives(&self) -> bool {
         has_stack_directives(&self.axiom, &self.rules)
+    }
+
+    /// Returns the symbols of rules that are never reached during expansion.
+    pub fn unused_rules(&self) -> Vec<char> {
+        grammar::unused_rules(&self.axiom, &self.rules)
     }
 }
 

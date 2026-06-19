@@ -10,7 +10,7 @@ pub use alphabet::{contains_3d_symbols, validate_bracket_balance, validate_symbo
 pub use config::{
     ColorConfig, Config, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb, RgbError,
 };
-pub use grammar::max_safe_iterations;
+pub use grammar::{max_safe_iterations, unused_rules};
 
 use glam::{Vec2, Vec3};
 

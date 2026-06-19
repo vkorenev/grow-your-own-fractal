@@ -65,6 +65,8 @@ pub(crate) fn App() -> impl IntoView {
     let editor_generation_config = Memo::new(move |_| {
         config_workspace.with(|ws| ws.selected().editor_config().generation.clone())
     });
+    let unused_rule_symbols =
+        Memo::new(move |_| editor_generation_config.with(|generation| generation.unused_rules()));
     let max_iterations =
         Memo::new(move |_| editor_generation_config.with(max_iterations_for_editor_config));
     let generation_config = Memo::new(move |_| {
@@ -952,6 +954,17 @@ pub(crate) fn App() -> impl IntoView {
                     {move || grammar_error.get().map(|msg| view! {
                         <span class="inline-status error">{msg}</span>
                     })}
+                    {move || {
+                        let unused = unused_rule_symbols.get();
+                        (!unused.is_empty()).then(|| {
+                            let symbols = unused.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ");
+                            view! {
+                                <span class="inline-status warning">
+                                    {format!("Unused rules: {symbols} (never used during expansion)")}
+                                </span>
+                            }
+                        })
+                    }}
 
                     <hr class="section-divider" />
 

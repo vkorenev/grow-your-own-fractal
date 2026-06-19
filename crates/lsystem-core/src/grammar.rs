@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct ExpandIter<'a> {
     stack: Vec<(std::str::Chars<'a>, u32)>,
@@ -84,6 +84,28 @@ pub fn max_safe_iterations(axiom: &str, rules: &BTreeMap<char, String>, max_segm
     HARD_MAX
 }
 
+/// Returns the rule symbols that are never reached during expansion of `axiom`.
+///
+/// A rule is reachable if its symbol appears in `axiom`, or in the RHS of any
+/// other reachable rule. Unreachable rules are dead: `expand` never invokes them,
+/// no matter the iteration count.
+pub fn unused_rules(axiom: &str, rules: &BTreeMap<char, String>) -> Vec<char> {
+    let mut reachable = BTreeSet::new();
+    let mut stack: Vec<char> = axiom.chars().collect();
+    while let Some(c) = stack.pop() {
+        if reachable.insert(c)
+            && let Some(rhs) = rules.get(&c)
+        {
+            stack.extend(rhs.chars());
+        }
+    }
+    rules
+        .keys()
+        .filter(|k| !reachable.contains(k))
+        .copied()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +186,33 @@ mod tests {
             [('A', "aA".to_string()), ('B', "Bb".to_string())].into();
         let result: String = expand("AB", &rules, 2).collect();
         assert_eq!(result, "aaABbb");
+    }
+
+    #[test]
+    fn unused_rules_empty_when_all_reachable() {
+        let rules = koch_rules();
+        assert_eq!(unused_rules("F++F++F", &rules), Vec::<char>::new());
+    }
+
+    #[test]
+    fn unused_rules_finds_symbol_never_referenced() {
+        // 'X' has a rule but never appears in the axiom or any reachable RHS.
+        let rules: BTreeMap<char, String> =
+            [('F', "F-F".to_string()), ('X', "FF".to_string())].into();
+        assert_eq!(unused_rules("F", &rules), vec!['X']);
+    }
+
+    #[test]
+    fn unused_rules_finds_self_referencing_cycle_disconnected_from_axiom() {
+        // 'X' only ever refers to itself; it's never reachable from the axiom.
+        let rules: BTreeMap<char, String> =
+            [('F', "F-F".to_string()), ('X', "XX".to_string())].into();
+        assert_eq!(unused_rules("F", &rules), vec!['X']);
+    }
+
+    #[test]
+    fn unused_rules_empty_for_no_rules() {
+        let rules: BTreeMap<char, String> = BTreeMap::new();
+        assert_eq!(unused_rules("F", &rules), Vec::<char>::new());
     }
 }

@@ -56,6 +56,11 @@ impl EditorGenerationConfig {
         has_stack_directives(&self.axiom, &self.rules)
     }
 
+    /// Returns the symbols of rules that are never reached during expansion.
+    pub fn unused_rules(&self) -> Vec<char> {
+        lsystem_core::unused_rules(&self.axiom, &self.rules)
+    }
+
     /// Resolves authored generation fields with defaults into a runtime `GenerationConfig`.
     ///
     /// Fills omitted `step` and `initial_heading` from `defaults`, and clamps
@@ -1915,6 +1920,39 @@ solid = "#00e680"
         let toml = test_toml(Dimensions::TwoD, "F[+F]F", 1, "25.0", "1.0", "0.0", "");
         let cfg = parse_config(&toml).unwrap();
         assert!(cfg.generation.has_stack_directives());
+    }
+
+    #[test]
+    fn unused_rules_empty_when_all_reachable() {
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "60.0",
+            "1.0",
+            "0.0",
+            "F = \"F-F++F-F\"",
+        );
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        assert_eq!(
+            doc.editor_config().generation.unused_rules(),
+            Vec::<char>::new()
+        );
+    }
+
+    #[test]
+    fn unused_rules_finds_symbol_never_referenced() {
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "F",
+            1,
+            "60.0",
+            "1.0",
+            "0.0",
+            "F = \"F-F\"\nX = \"FF\"",
+        );
+        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        assert_eq!(doc.editor_config().generation.unused_rules(), vec!['X']);
     }
 
     #[test]
