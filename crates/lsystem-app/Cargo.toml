@@ -12,6 +12,7 @@ lsystem-core = { workspace = true, features = ["svg"] }
 lsystem-app-model = { workspace = true }
 lsystem-renderer = { workspace = true, features = ["png"] }
 log.workspace = true
+web-time.workspace = true
 wgpu.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
