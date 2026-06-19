@@ -1,4 +1,7 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use web_time::{Duration, Instant};
 
 use lsystem_core::{Config, Dimensions};
 use lsystem_renderer::camera::Camera;
@@ -125,6 +128,7 @@ impl CanvasRenderer {
     }
 
     fn rebuild_scene(&mut self, config: &Config) {
+        let started = Instant::now();
         match config.generation.dimensions {
             Dimensions::ThreeD => {
                 if config.generation.has_stack_directives() {
@@ -177,6 +181,13 @@ impl CanvasRenderer {
                 }
             }
         }
+
+        let elapsed = started.elapsed();
+        log::info!(
+            "generation_wall_ms={:.2} segments={}",
+            elapsed.as_secs_f64() * 1000.0,
+            self.scene.total_segments(),
+        );
 
         let colors = config.colors;
         self.color_params = color_params_from_config(
@@ -393,6 +404,8 @@ impl CanvasRenderer {
             reconfigure_after_present,
         } = frame;
 
+        let started = self.needs_upload.then(Instant::now);
+
         match &self.scene {
             ActiveScene::TwoD {
                 segments,
@@ -523,6 +536,35 @@ impl CanvasRenderer {
 
         self.gpu
             .end_frame(*frame, encoder, reconfigure_after_present);
+
+        if let Some(started) = started {
+            let segment_count = self.scene.total_segments();
+            let device = Arc::clone(&self.gpu.device);
+            let done = Arc::new(AtomicBool::new(false));
+            let done_for_callback = Arc::clone(&done);
+            // Registered synchronously, right after the submit it tracks, so no later
+            // submission can be folded into "previously submitted work" by the time a
+            // deferred async task gets around to registering it.
+            self.gpu.queue.on_submitted_work_done(move || {
+                done_for_callback.store(true, Ordering::Release);
+            });
+            wasm_bindgen_futures::spawn_local(async move {
+                if !await_submitted_work_done(&device, &done).await {
+                    log::warn!(
+                        "geometry_upload_frame_gpu_ms: gave up waiting for GPU completion \
+                         after {SUBMITTED_WORK_DONE_TIMEOUT:?}; segments={segment_count}"
+                    );
+                    return;
+                }
+                let elapsed = started.elapsed();
+                log::info!(
+                    "geometry_upload_frame_gpu_ms={:.2} segments={segment_count} \
+                     scope=\"submitted command buffer (upload + draw pass) GPU completion; \
+                     excludes present\"",
+                    elapsed.as_secs_f64() * 1000.0,
+                );
+            });
+        }
     }
 
     fn set_hue_offset_degrees(&mut self, offset: f32) {
@@ -553,6 +595,27 @@ impl CanvasRenderer {
             }
         }
     }
+}
+
+/// Bounds how long a `geometry_upload_frame_gpu_ms` wait can run. `Device::poll` with
+/// `PollType::Poll` cannot report device/context loss (its `Result` only ever carries
+/// `PollError::Timeout`/`WrongSubmissionIndex`, which don't apply here), so a dead device
+/// after, e.g., a lost WebGL context would otherwise spin this loop forever. This timeout
+/// is the only backstop against that.
+const SUBMITTED_WORK_DONE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Polls `device` until `done` is set by an already-registered `on_submitted_work_done`
+/// callback, or `SUBMITTED_WORK_DONE_TIMEOUT` elapses. Returns `false` on timeout.
+async fn await_submitted_work_done(device: &wgpu::Device, done: &AtomicBool) -> bool {
+    let started = Instant::now();
+    while !done.load(Ordering::Acquire) {
+        if started.elapsed() > SUBMITTED_WORK_DONE_TIMEOUT {
+            return false;
+        }
+        let _ = device.poll(wgpu::PollType::Poll);
+        gloo_timers::future::TimeoutFuture::new(0).await;
+    }
+    true
 }
 
 fn sync_canvas_size(canvas: &web_sys::HtmlCanvasElement) -> (u32, u32, f32) {

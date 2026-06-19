@@ -18,6 +18,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
+use web_time::Instant;
 
 use super::app_state::{FractalApp, Message};
 
@@ -338,6 +339,7 @@ pub(super) async fn build_scene(
     let mut camera = prev_camera;
     camera.reset_position();
     let colors = config.colors;
+    let started = Instant::now();
 
     match config.generation.dimensions {
         Dimensions::ThreeD => {
@@ -367,6 +369,8 @@ pub(super) async fn build_scene(
                     return SceneBuildResult::Cancelled;
                 }
 
+                log_generation_duration(started, segments_seen);
+
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_depth_segment_data_3d(
@@ -395,6 +399,8 @@ pub(super) async fn build_scene(
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;
                 }
+
+                log_generation_duration(started, segments_seen);
 
                 SceneBuildResult::Ready {
                     generation,
@@ -433,6 +439,8 @@ pub(super) async fn build_scene(
                     return SceneBuildResult::Cancelled;
                 }
 
+                log_generation_duration(started, segments_seen);
+
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_depth_segment_data_2d(
@@ -462,6 +470,8 @@ pub(super) async fn build_scene(
                     return SceneBuildResult::Cancelled;
                 }
 
+                log_generation_duration(started, segments_seen);
+
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_segment_data_2d(
@@ -474,6 +484,14 @@ pub(super) async fn build_scene(
             }
         }
     }
+}
+
+fn log_generation_duration(started: Instant, segment_count: usize) {
+    let elapsed = started.elapsed();
+    log::info!(
+        "generation_wall_ms={:.2} segments={segment_count}",
+        elapsed.as_secs_f64() * 1000.0,
+    );
 }
 
 fn is_cancelled(generation: u64, current_generation: &AtomicU64) -> bool {
