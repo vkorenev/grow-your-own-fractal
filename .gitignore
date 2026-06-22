@@ -12,3 +12,4 @@ mise.local.toml
 # AI editors
 .cursor/
 .claude/settings.local.json
+.claude/worktrees/
