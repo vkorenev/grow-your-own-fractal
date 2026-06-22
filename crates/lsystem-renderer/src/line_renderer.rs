@@ -59,25 +59,23 @@ impl Default for Mvp {
     }
 }
 
-const GUARANTEED_VERTEX_BUFFER_BYTES: u64 = 268_435_456;
-
-/// Maximum number of line segments that fit in a 256 MiB vertex buffer (wgpu's guaranteed limit).
+/// Maximum number of line segments that fit in the platform-selected wgpu max buffer size.
 /// Each 2D segment occupies one `Segment2D` instance record.
 const MAX_SEGMENTS_2D: u64 =
-    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<Segment2D>() as u64;
+    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<Segment2D>() as u64;
 
-/// Maximum number of topological-depth 2D line segments that fit in a 256 MiB vertex buffer.
+/// Maximum number of topological-depth 2D line segments that fit in the max buffer size.
 const MAX_DEPTH_SEGMENTS_2D: u64 =
-    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<TopologicalDepthSegment2D>() as u64;
+    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<TopologicalDepthSegment2D>() as u64;
 
-/// Maximum number of 3D line segments that fit in a 256 MiB vertex buffer.
+/// Maximum number of 3D line segments that fit in the platform-selected wgpu max buffer size.
 /// Each 3D segment occupies one `Segment3D` instance record.
 const MAX_SEGMENTS_3D: u64 =
-    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<Segment3D>() as u64;
+    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<Segment3D>() as u64;
 
-/// Maximum number of topological-depth 3D line segments that fit in a 256 MiB vertex buffer.
+/// Maximum number of topological-depth 3D line segments that fit in the max buffer size.
 const MAX_DEPTH_SEGMENTS_3D: u64 =
-    GUARANTEED_VERTEX_BUFFER_BYTES / std::mem::size_of::<TopologicalDepthSegment3D>() as u64;
+    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<TopologicalDepthSegment3D>() as u64;
 
 /// Returns the segment cap appropriate for the given dimensions.
 pub fn max_segments_for(dimensions: Dimensions) -> u64 {
@@ -1008,15 +1006,27 @@ mod tests {
     }
 
     #[test]
+    fn segment_caps_use_platform_selected_max_buffer_size() {
+        assert_eq!(
+            max_segments_for(Dimensions::TwoD),
+            wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<Segment2D>() as u64
+        );
+        assert_eq!(
+            max_segments_for(Dimensions::ThreeD),
+            wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<Segment3D>() as u64
+        );
+    }
+
+    #[test]
     fn depth_gradient_segment_caps_use_depth_record_sizes() {
         assert_eq!(
             max_segments_for_line_color(Dimensions::TwoD, true),
-            GUARANTEED_VERTEX_BUFFER_BYTES
+            wgpu_util::MAX_BUFFER_SIZE_BYTES
                 / std::mem::size_of::<TopologicalDepthSegment2D>() as u64
         );
         assert_eq!(
             max_segments_for_line_color(Dimensions::ThreeD, true),
-            GUARANTEED_VERTEX_BUFFER_BYTES
+            wgpu_util::MAX_BUFFER_SIZE_BYTES
                 / std::mem::size_of::<TopologicalDepthSegment3D>() as u64
         );
         assert_eq!(

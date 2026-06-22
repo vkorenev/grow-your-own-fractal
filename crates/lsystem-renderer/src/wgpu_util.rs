@@ -5,7 +5,7 @@ use browser_wasm as platform;
 #[cfg(any(not(target_arch = "wasm32"), target_os = "emscripten"))]
 use non_browser_wasm as platform;
 
-pub(crate) use platform::new_instance;
+pub(crate) use platform::{MAX_BUFFER_SIZE_BYTES, new_instance};
 
 pub(crate) fn device_descriptor(
     label: &'static str,
@@ -20,6 +20,9 @@ pub(crate) fn device_descriptor(
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))]
 mod browser_wasm {
+    pub(crate) const MAX_BUFFER_SIZE_BYTES: u64 =
+        wgpu::Limits::downlevel_webgl2_defaults().max_buffer_size;
+
     pub(crate) async fn new_instance() -> wgpu::Instance {
         let descriptor = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(WebDisplay));
         wgpu::util::new_instance_with_webgpu_detection(descriptor).await
@@ -41,6 +44,8 @@ mod browser_wasm {
 
 #[cfg(any(not(target_arch = "wasm32"), target_os = "emscripten"))]
 mod non_browser_wasm {
+    pub(crate) const MAX_BUFFER_SIZE_BYTES: u64 = wgpu::Limits::defaults().max_buffer_size;
+
     pub(crate) async fn new_instance() -> wgpu::Instance {
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle())
     }
