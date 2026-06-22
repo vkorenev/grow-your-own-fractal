@@ -16,17 +16,21 @@ use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
     pub(super) fn controls(&self) -> Element<'_, Message> {
-        let preset_names: Vec<String> = self.config_workspace.names().map(str::to_string).collect();
+        let preset_options = self.config_workspace.display_options();
         let selected_entry = self.config_workspace.selected();
-        let selected_preset = Some(selected_entry.name().to_string());
+        let selected_id = self.config_workspace.selected_id();
+        let selected_preset = preset_options
+            .iter()
+            .find(|(id, _)| *id == selected_id)
+            .cloned();
         let is_dirty = selected_entry.is_dirty();
         let can_reset = !is_dirty && self.config_workspace.can_reset();
 
         let mut controls = column![
             text(TITLE).size(24),
             text("Config").size(13),
-            pick_list(selected_preset, preset_names, String::clone)
-                .on_select(Message::PresetSelected)
+            pick_list(selected_preset, preset_options, |(_, label)| label.clone())
+                .on_select(|(id, _)| Message::PresetSelected(id))
                 .width(Length::Fill),
             button("Copy").on_press(Message::CopyConfig),
             text("Config (TOML)").size(13),

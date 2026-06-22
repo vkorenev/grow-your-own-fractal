@@ -86,8 +86,10 @@ the generated grammar.
 - `editor_config.rs` parses strict TOML, validates symbols and value domains,
   preserves optional authored fields, and resolves defaults at runtime
   boundaries.
-- `config_workspace.rs` tracks preset/custom entries, dirty drafts,
-  last-applied documents, copy/apply/revert/reset operations, and derived names.
+- `config_workspace.rs` tracks preset/custom entries identified by opaque
+  `ConfigEntryId`s, dirty drafts, last-applied documents, copy/apply/revert/reset
+  operations, and derived display labels for entries with duplicate authored
+  names.
 - `presets.rs` embeds and sorts the `presets/` directory.
 - `color.rs` centralizes line-color mode selection and per-mode picker memory.
 - `animation.rs` contains hue-rotation state and phase advancement.

@@ -2,7 +2,7 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorConfig,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorConfig,
     EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection, LineColorMode,
     ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
@@ -32,7 +32,7 @@ pub(super) enum ColorDefaultField {
 
 #[derive(Debug, Clone)]
 pub(super) enum Message {
-    PresetSelected(String),
+    PresetSelected(ConfigEntryId),
     CopyConfig,
     TomlEdited(iced::widget::text_editor::Action),
     ApplyConfig,
@@ -141,15 +141,12 @@ impl FractalApp {
 
     pub(super) fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::PresetSelected(name) => {
-                if let Some(index) = self.config_workspace.index_by_name(&name) {
-                    if let Err(error) = self.config_workspace.select(index) {
-                        self.error = Some(error.to_string());
-                        return Task::none();
-                    }
-                    return self.refresh_from_workspace();
+            Message::PresetSelected(id) => {
+                if let Err(error) = self.config_workspace.select_by_id(id) {
+                    self.error = Some(error.to_string());
+                    return Task::none();
                 }
-                Task::none()
+                self.refresh_from_workspace()
             }
             Message::CopyConfig => match self.config_workspace.copy() {
                 Ok(_) => self.refresh_from_workspace(),
@@ -809,6 +806,19 @@ mod tests {
         assert_eq!(app.png_width_text, "800");
         assert_eq!(app.png_height, 800);
         assert_eq!(app.png_height_text, "800");
+    }
+
+    #[test]
+    fn preset_selected_message_selects_by_id() {
+        let (mut app, _) = FractalApp::new();
+        let first_id = app.config_workspace.selected_id();
+        let _ = app.update(Message::CopyConfig);
+        let copied_id = app.config_workspace.selected_id();
+        assert_ne!(first_id, copied_id);
+
+        let _ = app.update(Message::PresetSelected(first_id));
+
+        assert_eq!(app.config_workspace.selected_id(), first_id);
     }
 
     #[test]

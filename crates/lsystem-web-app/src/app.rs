@@ -4,9 +4,9 @@ use crate::renderer::{CanvasRenderer, RenderStatus};
 use leptos::html::{Canvas, Input};
 use leptos::prelude::*;
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorLineColorConfig,
-    EntryViewMut, HueRotation, HueRotationDirection, LineColorMode, ParseConfigError,
-    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace,
+    EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection, LineColorMode,
+    ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
     selected_line_color_mode,
 };
 use lsystem_core::{
@@ -567,18 +567,28 @@ pub(crate) fn App() -> impl IntoView {
                 <div class="preset-row">
                     <select
                         class:hidden=move || rename_mode.get()
-                        prop:value=move || config_workspace.with(|ws| ws.selected_index().to_string())
+                        prop:value=move || config_workspace.with(|ws| ws.selected_id().to_string())
                         on:change:target=move |ev| {
-                            let idx = ev.target().value().parse::<usize>().unwrap_or(0);
+                            let raw = ev.target().value();
+                            let Ok(id) = raw.parse::<ConfigEntryId>() else {
+                                log::error!("select preset: invalid id in option value: {raw:?}");
+                                workspace_error.set(Some(
+                                    "Internal error: could not select config.".to_string(),
+                                ));
+                                return;
+                            };
                             let selected = config_workspace.try_update(|workspace| {
-                                workspace.select(idx).map(|_| ()).map_err(|e| e.to_string())
+                                workspace
+                                    .select_by_id(id)
+                                    .map(|_| ())
+                                    .map_err(|e| e.to_string())
                             });
                             match selected {
                                 Some(Ok(())) => {
                                     select_current_config();
                                 }
                                 Some(Err(err)) => {
-                                    log::error!("select preset: rejected index {idx}: {err}");
+                                    log::error!("select preset: rejected id {id}: {err}");
                                     workspace_error.set(Some(err));
                                 }
                                 None => {
@@ -595,12 +605,11 @@ pub(crate) fn App() -> impl IntoView {
                         {move || {
                             config_workspace.with(|workspace| {
                                 workspace
-                                    .entries()
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(idx, entry)| {
+                                    .display_options()
+                                    .into_iter()
+                                    .map(|(id, label)| {
                                         view! {
-                                            <option value=idx.to_string()>{entry.name().to_string()}</option>
+                                            <option value=id.to_string()>{label}</option>
                                         }
                                     })
                                     .collect_view()
@@ -627,14 +636,7 @@ pub(crate) fn App() -> impl IntoView {
                             <div class="btn-row">
                                 <button
                                     type="button"
-                                    disabled=move || {
-                                        let d = rename_draft.get();
-                                        d.trim().is_empty()
-                                            || config_workspace.with(|ws| {
-                                                ws.index_by_name(d.trim())
-                                                    .is_some_and(|i| i != ws.selected_index())
-                                            })
-                                    }
+                                    disabled=move || rename_draft.get().trim().is_empty()
                                     on:click=move |_| commit_rename()
                                 >"Save"</button>
                                 <button type="button" on:click=move |_| rename_mode.set(false)>"Cancel"</button>
