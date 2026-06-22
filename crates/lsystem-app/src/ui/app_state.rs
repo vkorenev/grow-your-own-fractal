@@ -178,13 +178,10 @@ impl FractalApp {
                 if self.config_workspace.selected().is_dirty() {
                     return Task::none();
                 }
-                match self.config_workspace.reset() {
-                    Ok(Some(_)) => self.refresh_from_workspace(),
-                    Ok(None) => Task::none(),
-                    Err(error) => {
-                        self.error = Some(error.to_string());
-                        Task::none()
-                    }
+                if self.config_workspace.selected_mut().reset_to_default() {
+                    self.refresh_from_workspace()
+                } else {
+                    Task::none()
                 }
             }
             Message::IterationsChanged(iterations) => {
@@ -462,8 +459,8 @@ impl FractalApp {
         if !self.config_workspace.selected().is_dirty() {
             return Task::none();
         }
-        match self.config_workspace.apply() {
-            Ok(_) => {
+        match self.config_workspace.selected_mut().apply_draft() {
+            Ok(()) => {
                 self.reset_color_memory_from_workspace();
                 self.sync_controls_from_workspace();
                 self.error = None;

@@ -13,9 +13,6 @@ pub enum ConfigWorkspaceError {
     #[error("at least one config entry is required")]
     Empty,
 
-    #[error("invalid config entry index `{0}`")]
-    InvalidIndex(usize),
-
     #[error("unknown config entry id `{0}`")]
     UnknownId(ConfigEntryId),
 
@@ -27,9 +24,10 @@ pub enum ConfigWorkspaceError {
 pub struct ConfigWorkspace {
     entries: Vec<ConfigEntry>,
     // INVARIANT: `selected < entries.len()`. Upheld by `from_presets` (rejects empty),
-    // `select` (bounds-checks), and `copy` (assigns `len() - 1` after a push). Any future
-    // method that removes or reorders entries must re-anchor `selected` to preserve it,
-    // because `selected()`/`selected_mut()` index into `entries` directly.
+    // `select_by_id` (derives the index via `entries.iter().position`), and `copy`
+    // (assigns `len() - 1` after a push). Any future method that removes or reorders
+    // entries must re-anchor `selected` to preserve it, because `selected()`/
+    // `selected_mut()` index into `entries` directly.
     selected: usize,
     next_id: u64,
 }
@@ -123,11 +121,13 @@ impl ConfigWorkspace {
         })
     }
 
-    pub fn entries(&self) -> &[ConfigEntry] {
+    #[cfg(test)]
+    fn entries(&self) -> &[ConfigEntry] {
         &self.entries
     }
 
-    pub fn names(&self) -> impl Iterator<Item = &str> {
+    #[cfg(test)]
+    fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(ConfigEntry::name)
     }
 
@@ -158,24 +158,12 @@ impl ConfigWorkspace {
             .collect()
     }
 
-    pub fn selected_index(&self) -> usize {
-        self.selected
-    }
-
     pub fn selected(&self) -> &ConfigEntry {
         &self.entries[self.selected]
     }
 
     pub fn selected_mut(&mut self) -> &mut ConfigEntry {
         &mut self.entries[self.selected]
-    }
-
-    pub fn select(&mut self, index: usize) -> Result<(), ConfigWorkspaceError> {
-        if index >= self.entries.len() {
-            return Err(ConfigWorkspaceError::InvalidIndex(index));
-        }
-        self.selected = index;
-        Ok(())
     }
 
     /// Selects the entry with the given id. Returns
@@ -189,10 +177,6 @@ impl ConfigWorkspace {
             .ok_or(ConfigWorkspaceError::UnknownId(id))?;
         self.selected = index;
         Ok(())
-    }
-
-    pub fn can_reset(&self) -> bool {
-        self.selected().has_default_changes()
     }
 
     /// Creates a renamed copy of the selected entry, auto-selects the new entry, and
@@ -210,58 +194,20 @@ impl ConfigWorkspace {
         Ok(&self.entries[self.selected])
     }
 
-    pub fn rename(&mut self, index: usize, new_name: &str) -> Result<(), ConfigWorkspaceError> {
-        if index >= self.entries.len() {
-            return Err(ConfigWorkspaceError::InvalidIndex(index));
-        }
-        self.entries[index].rename_in_place(new_name)?;
-        Ok(())
-    }
-
-    /// Validates the selected entry's draft text and commits it as the new applied
-    /// document. Returns a borrow of the selected entry on success; the returned entry
-    /// is always clean (`is_dirty() == false`). If the entry has no pending draft, this
-    /// is a no-op and returns the unchanged entry. Returns
-    /// [`ConfigWorkspaceError::ParseConfig`] on parse or validation failure; duplicate
-    /// names are allowed, so applying a draft renamed to match another entry succeeds.
-    /// Failure leaves workspace state untouched.
-    pub fn apply(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
-        let idx = self.selected;
-        let Some(applied) = self.entries[idx].pending_apply()? else {
-            return Ok(&self.entries[idx]);
-        };
-        self.entries[idx].commit_apply(applied);
-        Ok(&self.entries[idx])
-    }
-
-    /// Restores the selected entry to its bundled default document. On `Ok(Some(_))`
-    /// the returned entry is clean and its applied text equals the bundled default.
-    /// Returns `Ok(None)` only when the entry has no bundled default (e.g. custom copies).
-    /// Callers should gate user-visible resets on [`ConfigWorkspace::can_reset`] to avoid
-    /// no-op resets when the applied document already matches the default.
-    pub fn reset(&mut self) -> Result<Option<&ConfigEntry>, ConfigWorkspaceError> {
-        let Some(default) = self.selected().reset_candidate() else {
-            return Ok(None);
-        };
-        let idx = self.selected;
-        self.entries[idx].commit_reset(default);
-        Ok(Some(&self.entries[idx]))
-    }
-
     /// Parses and validates `text` as a config document, creates a new custom entry from it
-    /// (no bundled default), auto-selects the new entry, and returns its index.
+    /// (no bundled default), auto-selects the new entry, and returns a borrow of it.
     ///
     /// The imported document's `metadata.name` is preserved unchanged, even if it collides
     /// with an existing entry's name — duplicate names are allowed. Returns
     /// [`ConfigWorkspaceError::ParseConfig`] if `text` fails to parse or validate. On error
     /// the workspace state is unchanged: no entry is added and the selection is not moved.
-    pub fn import_toml(&mut self, text: &str) -> Result<usize, ConfigWorkspaceError> {
+    pub fn import_toml(&mut self, text: &str) -> Result<&ConfigEntry, ConfigWorkspaceError> {
         let source = ConfigSource::parse(text)?;
         let doc = ConfigDocument::try_from(source)?;
         let id = self.allocate_id();
         self.entries.push(ConfigEntry::custom(doc, id));
         self.selected = self.entries.len() - 1;
-        Ok(self.selected)
+        Ok(&self.entries[self.selected])
     }
 
     fn unique_name(&self, base: &str) -> String {
@@ -367,27 +313,34 @@ impl ConfigEntry {
         })
     }
 
-    fn pending_apply(&self) -> Result<Option<ConfigDocument>, ConfigWorkspaceError> {
+    /// Validates this entry's draft text and commits it as the new applied document.
+    /// A no-op if there is no pending draft. Returns an error on parse or validation
+    /// failure; the entry is left unchanged in that case. Duplicate names with other
+    /// entries in the workspace are allowed, so applying a draft renamed to match
+    /// another entry succeeds.
+    pub fn apply_draft(&mut self) -> Result<(), ParseConfigError> {
         let Some(draft) = &self.draft else {
-            return Ok(None);
+            return Ok(());
         };
         let source = ConfigSource::parse(draft)?;
         let doc = ConfigDocument::try_from(source)?;
-        Ok(Some(doc))
-    }
-
-    fn commit_apply(&mut self, applied: ConfigDocument) {
-        self.last_applied = applied;
+        self.last_applied = doc;
         self.draft = None;
+        Ok(())
     }
 
-    fn reset_candidate(&self) -> Option<ConfigDocument> {
-        self.default.clone()
-    }
-
-    fn commit_reset(&mut self, default: ConfigDocument) {
+    /// Restores this entry to its bundled default document, discarding any draft.
+    /// Returns `false` without changing anything if the entry has no bundled default
+    /// (e.g. a custom copy or import). Callers should gate user-visible resets on
+    /// [`ConfigEntry::differs_from_default`] to avoid no-op resets when the applied
+    /// document already matches the default.
+    pub fn reset_to_default(&mut self) -> bool {
+        let Some(default) = self.default.clone() else {
+            return false;
+        };
         self.last_applied = default;
         self.draft = None;
+        true
     }
 
     /// Mutates the applied TOML source via `update`. Only reachable through [`CleanMut`],
@@ -403,23 +356,31 @@ impl ConfigEntry {
         Ok(())
     }
 
-    fn rename_in_place(&mut self, new_name: &str) -> Result<(), ParseConfigError> {
+    /// Renames this entry, updating both the applied document and any pending draft
+    /// (so applying the draft later does not silently revert the rename).
+    pub fn rename(&mut self, new_name: &str) -> Result<(), ParseConfigError> {
         let mut source = self.last_applied.source().clone();
         source.set_name(new_name);
         self.last_applied = ConfigDocument::try_from(source)?;
         // Update the draft name too so applying the draft later does not silently
         // revert the rename. If the draft is unparseable TOML, leave it verbatim —
-        // the apply path will surface the parse error to the user.
+        // the apply path will surface the parse error to the user. Re-derive dirtiness
+        // the same way `set_draft_text` does: a rename can make the draft collapse back
+        // to exactly the applied text (e.g. the draft already had this name), in which
+        // case the entry should become clean rather than staying spuriously dirty.
         if let Some(draft_text) = &self.draft
             && let Ok(mut draft_source) = ConfigSource::parse(draft_text)
         {
             draft_source.set_name(new_name);
-            self.draft = Some(draft_source.to_toml_string());
+            let rewritten = draft_source.to_toml_string();
+            self.draft = (rewritten != self.applied_text()).then_some(rewritten);
         }
         Ok(())
     }
 
-    fn has_default_changes(&self) -> bool {
+    /// Whether this entry's applied document differs from its bundled default.
+    /// Always `false` for entries without a bundled default (e.g. custom copies).
+    pub fn differs_from_default(&self) -> bool {
         self.default
             .as_ref()
             .is_some_and(|default| self.applied_text() != default.to_toml_string())
@@ -582,21 +543,22 @@ solid = "#00e680"
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
+        let first_id = workspace.entries()[0].id();
+        let second_id = workspace.entries()[1].id();
 
-        workspace.select(0).unwrap();
         workspace
             .selected_mut()
             .set_draft_text("edited first".to_string());
-        workspace.select(1).unwrap();
+        workspace.select_by_id(second_id).unwrap();
         workspace
             .selected_mut()
             .set_draft_text("edited second".to_string());
 
-        workspace.select(0).unwrap();
+        workspace.select_by_id(first_id).unwrap();
         assert_eq!(workspace.selected().draft_text(), "edited first");
         assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_err());
         assert!(workspace.selected().is_dirty());
-        workspace.select(1).unwrap();
+        workspace.select_by_id(second_id).unwrap();
         assert_eq!(workspace.selected().draft_text(), "edited second");
     }
 
@@ -609,11 +571,8 @@ solid = "#00e680"
         workspace
             .selected_mut()
             .set_draft_text("not valid toml".to_string());
-        let error = workspace.apply().unwrap_err();
-        assert!(matches!(
-            error,
-            ConfigWorkspaceError::ParseConfig(ParseConfigError::TomlParse(_))
-        ));
+        let error = workspace.selected_mut().apply_draft().unwrap_err();
+        assert!(matches!(error, ParseConfigError::TomlParse(_)));
 
         assert_eq!(runtime_config(workspace.selected()), previous_config);
         assert!(workspace.selected().is_dirty());
@@ -627,13 +586,11 @@ solid = "#00e680"
         workspace
             .selected_mut()
             .set_draft_text(first.replace("axiom = \"F\"", "axiom = \"[\""));
-        let error = workspace.apply().unwrap_err();
+        let error = workspace.selected_mut().apply_draft().unwrap_err();
 
         assert!(matches!(
             error,
-            ConfigWorkspaceError::ParseConfig(ParseConfigError::Validation(
-                ConfigError::UnmatchedOpen { .. }
-            ))
+            ParseConfigError::Validation(ConfigError::UnmatchedOpen { .. })
         ));
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(workspace.selected().is_dirty());
@@ -650,11 +607,9 @@ solid = "#00e680"
         workspace
             .selected_mut()
             .set_draft_text(config_text_renamed(&first, "Renamed"));
-        let entry = workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
 
-        assert_eq!(entry.name(), "Renamed");
-        let entry_ptr = entry as *const _;
-        assert!(std::ptr::eq(entry_ptr, workspace.selected()));
+        assert_eq!(workspace.selected().name(), "Renamed");
         assert_eq!(workspace.names().collect::<Vec<_>>(), ["Renamed", "Second"]);
         assert!(!workspace.selected().is_dirty());
     }
@@ -664,13 +619,12 @@ solid = "#00e680"
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
 
-        let entry = workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
+        let entry = workspace.selected();
 
         assert_eq!(entry.name(), "First");
         assert_eq!(entry.applied_text(), first);
         assert!(!entry.is_dirty());
-        let entry_ptr = entry as *const _;
-        assert!(std::ptr::eq(entry_ptr, workspace.selected()));
     }
 
     #[test]
@@ -684,9 +638,9 @@ solid = "#00e680"
         workspace
             .selected_mut()
             .set_draft_text(config_text_renamed(&first, "Second"));
-        let entry = workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
 
-        assert_eq!(entry.name(), "Second");
+        assert_eq!(workspace.selected().name(), "Second");
         assert!(!workspace.selected().is_dirty());
         assert_eq!(workspace.names().collect::<Vec<_>>(), ["Second", "Second"]);
     }
@@ -699,7 +653,7 @@ solid = "#00e680"
         workspace
             .selected_mut()
             .set_draft_text(first.replace("angle = 60", "angle = 45"));
-        workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
         let applied = workspace.selected().draft_text().into_owned();
         workspace
             .selected_mut()
@@ -718,26 +672,22 @@ solid = "#00e680"
     fn reset_preset_restores_default_and_applies_it() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
 
         workspace
             .selected_mut()
             .set_draft_text(first.replace("angle = 60", "angle = 45"));
-        workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
         assert_eq!(workspace.selected().editor_config().generation.angle, 45.0);
-        assert!(workspace.can_reset());
+        assert!(workspace.selected().differs_from_default());
 
-        let reset_entry = workspace
-            .reset()
-            .unwrap()
-            .expect("expected reset to apply default");
+        assert!(workspace.selected_mut().reset_to_default());
+        let reset_entry = workspace.selected();
         assert!(!reset_entry.is_dirty());
         assert_eq!(reset_entry.editor_config().generation.angle, 60.0);
         assert_eq!(reset_entry.draft_text(), first);
         assert_eq!(reset_entry.applied_text(), first);
-        let reset_entry_ptr = reset_entry as *const _;
-        assert!(std::ptr::eq(reset_entry_ptr, workspace.selected()));
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
     }
 
     #[test]
@@ -746,16 +696,44 @@ solid = "#00e680"
         let mut workspace = ConfigWorkspace::from_presets(vec![("Custom", first.clone())]).unwrap();
         workspace.copy().unwrap();
 
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
         let draft = workspace
             .selected()
             .draft_text()
             .replace("angle = 60", "angle = 45");
         workspace.selected_mut().set_draft_text(draft);
-        workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
 
-        assert!(workspace.reset().unwrap().is_none());
+        assert!(!workspace.selected_mut().reset_to_default());
         assert_eq!(workspace.selected().editor_config().generation.angle, 45.0);
+    }
+
+    #[test]
+    fn reset_to_default_discards_pending_draft() {
+        // The web UI gates its Reset button on `differs_from_default()` alone, with no
+        // `is_dirty()` check (unlike the native app), so resetting a dirty entry is a
+        // real reachable path, not just a theoretical one.
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
+
+        workspace
+            .selected_mut()
+            .set_draft_text(first.replace("angle = 60", "angle = 45"));
+        workspace.selected_mut().apply_draft().unwrap();
+        assert!(workspace.selected().differs_from_default());
+
+        // Leave a pending, unapplied draft in place before resetting.
+        workspace
+            .selected_mut()
+            .set_draft_text(first.replace("angle = 60", "angle = 30"));
+        assert!(workspace.selected().is_dirty());
+
+        assert!(workspace.selected_mut().reset_to_default());
+
+        let reset_entry = workspace.selected();
+        assert!(!reset_entry.is_dirty());
+        assert_eq!(reset_entry.editor_config().generation.angle, 60.0);
+        assert_eq!(reset_entry.draft_text(), first);
     }
 
     #[test]
@@ -767,26 +745,24 @@ solid = "#00e680"
             ("Second", second.clone()),
         ])
         .unwrap();
+        let first_id = workspace.entries()[0].id();
+        let second_id = workspace.entries()[1].id();
 
-        workspace.select(0).unwrap();
         workspace
             .selected_mut()
             .set_draft_text(config_text_renamed(&first, "Third"));
-        workspace.apply().unwrap();
-        workspace.select(1).unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
+        workspace.select_by_id(second_id).unwrap();
         workspace
             .selected_mut()
             .set_draft_text(config_text_renamed(&second, "First"));
-        workspace.apply().unwrap();
+        workspace.selected_mut().apply_draft().unwrap();
 
-        workspace.select(0).unwrap();
-        assert!(workspace.can_reset());
-        let reset_entry = workspace
-            .reset()
-            .unwrap()
-            .expect("expected reset to apply default");
+        workspace.select_by_id(first_id).unwrap();
+        assert!(workspace.selected().differs_from_default());
+        assert!(workspace.selected_mut().reset_to_default());
 
-        assert_eq!(reset_entry.name(), "First");
+        assert_eq!(workspace.selected().name(), "First");
         assert_eq!(workspace.names().collect::<Vec<_>>(), ["First", "First"]);
     }
 
@@ -798,7 +774,6 @@ solid = "#00e680"
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("Plant", first.clone()), ("Plant copy", second)])
                 .unwrap();
-        workspace.select(0).unwrap();
         workspace.selected_mut().set_draft_text(draft.clone());
 
         let entry = workspace.copy().unwrap();
@@ -814,7 +789,7 @@ solid = "#00e680"
         assert_eq!(workspace.selected().editor_config().name, "Plant copy 2");
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(workspace.selected().is_dirty());
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
     }
 
     #[test]
@@ -832,19 +807,19 @@ solid = "#00e680"
         assert_eq!(entry.draft_text(), expected_draft);
         assert!(entry.is_dirty());
 
-        assert_eq!(workspace.selected_index(), 1);
+        assert_eq!(entry.id(), workspace.selected_id());
         assert_eq!(workspace.selected().applied_text(), expected_applied);
         assert_eq!(workspace.selected().editor_config().name, "Plant copy");
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_ok());
         assert!(matches!(
-            workspace.apply(),
-            Err(ConfigWorkspaceError::ParseConfig(
-                ParseConfigError::Validation(ConfigError::UnmatchedOpen { .. })
+            workspace.selected_mut().apply_draft(),
+            Err(ParseConfigError::Validation(
+                ConfigError::UnmatchedOpen { .. }
             ))
         ));
         assert!(workspace.selected().is_dirty());
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
     }
 
     #[test]
@@ -862,13 +837,13 @@ solid = "#00e680"
         assert_eq!(entry.draft_text(), "not valid toml");
         assert!(entry.is_dirty());
 
-        assert_eq!(workspace.selected_index(), 1);
+        assert_eq!(entry.id(), workspace.selected_id());
         assert_eq!(workspace.selected().applied_text(), expected_applied);
         assert_eq!(workspace.selected().editor_config().name, "Plant copy");
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
         assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_err());
         assert!(workspace.selected().is_dirty());
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
     }
 
     #[test]
@@ -926,7 +901,7 @@ solid = "#00e680"
         let first = config_text("First", "F", 60.0);
         let workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
-        assert_eq!(workspace.selected_index(), 0);
+        assert_eq!(workspace.selected().name(), "First");
         assert!(!workspace.selected().is_dirty());
     }
 
@@ -941,10 +916,10 @@ solid = "#00e680"
         let second_id = workspace.entries()[1].id();
         assert_ne!(first_id, second_id);
 
-        workspace.select(1).unwrap();
+        workspace.select_by_id(second_id).unwrap();
         assert_eq!(workspace.selected_id(), second_id);
 
-        workspace.select(0).unwrap();
+        workspace.select_by_id(first_id).unwrap();
         assert_eq!(workspace.selected_id(), first_id);
     }
 
@@ -999,8 +974,7 @@ solid = "#00e680"
         assert_ne!(copied_id, original_id);
 
         let imported = config_text("Imported", "F+F", 90.0);
-        let imported_idx = workspace.import_toml(&imported).unwrap();
-        let imported_id = workspace.entries()[imported_idx].id();
+        let imported_id = workspace.import_toml(&imported).unwrap().id();
         assert_ne!(imported_id, original_id);
         assert_ne!(imported_id, copied_id);
     }
@@ -1350,16 +1324,16 @@ end = "#ffffff"
     fn color_mutation_on_preset_entry_makes_it_resettable() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
 
         clean_mut(&mut workspace)
             .set_background(Some(Rgb::new(0x1a, 0x33, 0x4d)))
             .unwrap();
 
-        assert!(workspace.can_reset());
+        assert!(workspace.selected().differs_from_default());
 
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
 
         clean_mut(&mut workspace)
             .set_line_color(Some(EditorLineColorConfig::Solid(Rgb::new(
@@ -1367,7 +1341,7 @@ end = "#ffffff"
             ))))
             .unwrap();
 
-        assert!(workspace.can_reset());
+        assert!(workspace.selected().differs_from_default());
     }
 
     #[test]
@@ -1470,11 +1444,11 @@ end = "#ffffff"
     fn control_mutation_on_preset_entry_makes_it_resettable() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        assert!(!workspace.can_reset());
+        assert!(!workspace.selected().differs_from_default());
 
         clean_mut(&mut workspace).set_iterations(5).unwrap();
 
-        assert!(workspace.can_reset());
+        assert!(workspace.selected().differs_from_default());
     }
 
     #[test]
@@ -1539,19 +1513,8 @@ end = "#ffffff"
         assert_eq!(entry.name(), "Plant copy");
         let entry_ptr = entry as *const _;
 
-        assert_eq!(workspace.selected_index(), 1);
         assert!(std::ptr::eq(entry_ptr, workspace.selected()));
         assert_eq!(workspace.entries()[0].name(), "Plant");
-    }
-
-    #[test]
-    fn select_rejects_out_of_bounds_index() {
-        let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-
-        let error = workspace.select(1).unwrap_err();
-        assert!(matches!(error, ConfigWorkspaceError::InvalidIndex(1)));
-        assert_eq!(workspace.selected_index(), 0);
     }
 
     #[test]
@@ -1564,7 +1527,6 @@ end = "#ffffff"
 
         workspace.select_by_id(second_id).unwrap();
 
-        assert_eq!(workspace.selected_index(), 1);
         assert_eq!(workspace.selected_id(), second_id);
     }
 
@@ -1572,6 +1534,7 @@ end = "#ffffff"
     fn select_by_id_rejects_unknown_id() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let original_id = workspace.selected_id();
         let unknown_id = {
             let mut other =
                 ConfigWorkspace::from_presets(vec![("Other", config_text("Other", "F", 60.0))])
@@ -1584,7 +1547,7 @@ end = "#ffffff"
         let error = workspace.select_by_id(unknown_id).unwrap_err();
 
         assert!(matches!(error, ConfigWorkspaceError::UnknownId(id) if id == unknown_id));
-        assert_eq!(workspace.selected_index(), 0);
+        assert_eq!(workspace.selected_id(), original_id);
     }
 
     #[test]
@@ -1607,7 +1570,7 @@ end = "#ffffff"
     fn rename_updates_entry_name() {
         let first = config_text("Plant", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
-        workspace.rename(0, "My Plant").unwrap();
+        workspace.selected_mut().rename("My Plant").unwrap();
         assert_eq!(workspace.selected().name(), "My Plant");
         assert!(workspace.selected().draft_text().contains("\"My Plant\""));
     }
@@ -1619,7 +1582,7 @@ end = "#ffffff"
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
 
-        workspace.rename(0, "Second").unwrap();
+        workspace.selected_mut().rename("Second").unwrap();
 
         assert_eq!(workspace.selected().name(), "Second");
         assert_eq!(workspace.names().collect::<Vec<_>>(), ["Second", "Second"]);
@@ -1690,28 +1653,17 @@ end = "#ffffff"
     }
 
     #[test]
-    fn rename_rejects_invalid_index() {
-        let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        assert!(matches!(
-            workspace.rename(1, "Y").unwrap_err(),
-            ConfigWorkspaceError::InvalidIndex(1)
-        ));
-    }
-
-    #[test]
     fn import_toml_creates_new_selected_entry_with_no_default() {
         let first = config_text("First", "F", 60.0);
         let imported = config_text("Imported", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
-        let idx = workspace.import_toml(&imported).unwrap();
+        let entry = workspace.import_toml(&imported).unwrap();
 
-        assert_eq!(idx, 1);
-        assert_eq!(workspace.selected_index(), 1);
+        assert_eq!(entry.id(), workspace.selected_id());
         assert_eq!(workspace.selected().name(), "Imported");
         assert!(!workspace.selected().is_dirty());
-        assert!(!workspace.can_reset()); // custom entries have no bundled default
+        assert!(!workspace.selected().differs_from_default()); // custom entries have no bundled default
         assert_eq!(workspace.entries().len(), 2);
     }
 
@@ -1721,9 +1673,9 @@ end = "#ffffff"
         let duplicate = config_text("First", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
 
-        let idx = workspace.import_toml(&duplicate).unwrap();
+        let entry = workspace.import_toml(&duplicate).unwrap();
 
-        assert_eq!(idx, 1);
+        assert_eq!(entry.id(), workspace.selected_id());
         assert_eq!(workspace.selected().name(), "First");
         assert!(!workspace.selected().is_dirty());
         assert_eq!(workspace.selected().editor_config().generation.angle, 90.0);
@@ -1742,7 +1694,6 @@ end = "#ffffff"
             ConfigWorkspaceError::ParseConfig(ParseConfigError::TomlParse(_))
         ));
         assert_eq!(workspace.entries().len(), 1);
-        assert_eq!(workspace.selected_index(), 0);
     }
 
     #[test]
@@ -1760,7 +1711,6 @@ end = "#ffffff"
             ))
         ));
         assert_eq!(workspace.entries().len(), 1);
-        assert_eq!(workspace.selected_index(), 0);
     }
 
     #[test]
@@ -1770,8 +1720,49 @@ end = "#ffffff"
         workspace
             .selected_mut()
             .set_draft_text("dirty draft".to_string());
-        workspace.rename(0, "Renamed Plant").unwrap();
+        workspace.selected_mut().rename("Renamed Plant").unwrap();
         assert_eq!(workspace.selected().name(), "Renamed Plant");
         assert!(workspace.selected().is_dirty()); // draft preserved
+    }
+
+    #[test]
+    fn rename_rewrites_parseable_draft_so_apply_does_not_revert_the_rename() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first.clone())]).unwrap();
+        // A parseable draft that still differs from the applied document (different
+        // angle), so it stays dirty across the rename.
+        workspace
+            .selected_mut()
+            .set_draft_text(first.replace("angle = 60", "angle = 90"));
+
+        workspace.selected_mut().rename("Renamed Plant").unwrap();
+        assert!(workspace.selected().is_dirty());
+        assert!(
+            workspace
+                .selected()
+                .draft_text()
+                .contains("name = \"Renamed Plant\"")
+        );
+
+        workspace.selected_mut().apply_draft().unwrap();
+        assert_eq!(workspace.selected().name(), "Renamed Plant");
+        assert_eq!(workspace.selected().editor_config().generation.angle, 90.0);
+    }
+
+    #[test]
+    fn rename_clears_draft_that_becomes_identical_to_applied() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first.clone())]).unwrap();
+        // Hand-edit the draft so it differs from the applied document only by name.
+        let draft = config_text_renamed(&first, "Renamed Plant");
+        workspace.selected_mut().set_draft_text(draft);
+        assert!(workspace.selected().is_dirty());
+
+        // Renaming the entry to match makes the draft and the applied document
+        // identical again — the entry should become clean, not stay spuriously dirty.
+        workspace.selected_mut().rename("Renamed Plant").unwrap();
+
+        assert_eq!(workspace.selected().name(), "Renamed Plant");
+        assert!(!workspace.selected().is_dirty());
     }
 }

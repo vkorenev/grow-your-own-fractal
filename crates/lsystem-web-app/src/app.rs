@@ -343,8 +343,12 @@ pub(crate) fn App() -> impl IntoView {
         if !config_workspace.with_untracked(|ws| ws.selected().is_dirty()) {
             return;
         }
-        let result = config_workspace
-            .try_update(|workspace| workspace.apply().map(|_| ()).map_err(|e| e.to_string()));
+        let result = config_workspace.try_update(|workspace| {
+            workspace
+                .selected_mut()
+                .apply_draft()
+                .map_err(|e| e.to_string())
+        });
         match result {
             Some(Ok(())) => select_current_config(),
             Some(Err(msg)) => toml_error.set(Some(msg)),
@@ -379,8 +383,7 @@ pub(crate) fn App() -> impl IntoView {
 
     let commit_rename = move || {
         let name = rename_draft.get_untracked().trim().to_string();
-        let idx = config_workspace.with_untracked(|ws| ws.selected_index());
-        match config_workspace.try_update(|ws| ws.rename(idx, &name)) {
+        match config_workspace.try_update(|ws| ws.selected_mut().rename(&name)) {
             Some(Ok(())) => {
                 workspace_error.set(None);
                 rename_mode.set(false);
@@ -391,19 +394,14 @@ pub(crate) fn App() -> impl IntoView {
     };
 
     let do_reset = move || {
-        let result = config_workspace.try_update(|ws| {
-            ws.reset()
-                .map(|opt| opt.is_some())
-                .map_err(|e| e.to_string())
-        });
+        let result = config_workspace.try_update(|ws| ws.selected_mut().reset_to_default());
         match result {
-            Some(Ok(true)) => select_current_config(),
-            Some(Ok(false)) => {
+            Some(true) => select_current_config(),
+            Some(false) => {
                 log::warn!(
                     "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
                 );
             }
-            Some(Err(msg)) => workspace_error.set(Some(msg)),
             None => workspace_error.set(Some("Internal error: could not reset.".to_string())),
         }
     };
@@ -675,7 +673,7 @@ pub(crate) fn App() -> impl IntoView {
                                     >"Rename"</button>
                                     <button
                                         type="button"
-                                        disabled=move || config_workspace.with(|ws| !ws.can_reset())
+                                        disabled=move || config_workspace.with(|ws| !ws.selected().differs_from_default())
                                         on:click=move |_| do_reset()
                                     >"Reset"</button>
                                 </div>
@@ -735,7 +733,7 @@ pub(crate) fn App() -> impl IntoView {
                             match gloo_file::futures::read_as_text(&file).await {
                                 Ok(text) => {
                                     let result = config_workspace
-                                        .try_update(|ws| ws.import_toml(&text));
+                                        .try_update(|ws| ws.import_toml(&text).map(|_| ()));
                                     match result {
                                         Some(Ok(_)) => select_current_config(),
                                         Some(Err(e)) => {

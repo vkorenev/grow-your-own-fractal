@@ -24,7 +24,7 @@ impl FractalApp {
             .find(|(id, _)| *id == selected_id)
             .cloned();
         let is_dirty = selected_entry.is_dirty();
-        let can_reset = !is_dirty && self.config_workspace.can_reset();
+        let can_reset = !is_dirty && selected_entry.differs_from_default();
 
         let mut controls = column![
             text(TITLE).size(24),
