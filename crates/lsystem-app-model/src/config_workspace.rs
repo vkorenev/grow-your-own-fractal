@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 
 use thiserror::Error;
 
@@ -16,8 +16,8 @@ pub enum ConfigWorkspaceError {
     #[error("invalid config entry index `{0}`")]
     InvalidIndex(usize),
 
-    #[error("duplicate config entry name `{0}`")]
-    DuplicateName(String),
+    #[error("unknown config entry id `{0}`")]
+    UnknownId(ConfigEntryId),
 
     #[error(transparent)]
     ParseConfig(#[from] ParseConfigError),
@@ -31,13 +31,45 @@ pub struct ConfigWorkspace {
     // method that removes or reorders entries must re-anchor `selected` to preserve it,
     // because `selected()`/`selected_mut()` index into `entries` directly.
     selected: usize,
+    next_id: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConfigEntry {
+    id: ConfigEntryId,
     default: Option<ConfigDocument>,
     draft: Option<String>,
     last_applied: ConfigDocument,
+}
+
+/// Opaque, stable identifier for a `ConfigEntry` within a `ConfigWorkspace`.
+///
+/// Assigned when an entry is created and never reused, reordered, or persisted to a
+/// config document. It exists so UI code and workspace methods can identify an entry
+/// without depending on its (possibly duplicated) authored display name. Ids are only
+/// meaningful relative to the `ConfigWorkspace` instance that allocated them — do not
+/// compare ids minted by separate workspace instances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConfigEntryId(u64);
+
+/// Renders the id as a plain integer string, for round-tripping through string-typed
+/// UI widgets (e.g. an HTML `<option value>`). Not used for persistence.
+impl std::fmt::Display for ConfigEntryId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Parses an id previously rendered by [`ConfigEntryId`]'s `Display` impl, for
+/// round-tripping through string-typed UI widgets. Not a general-purpose constructor:
+/// parsing succeeds for any well-formed integer, regardless of whether it names a real
+/// entry in any workspace — callers must still validate via [`ConfigWorkspace::select_by_id`].
+impl std::str::FromStr for ConfigEntryId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.parse()?))
+    }
 }
 
 /// Typed view over a `ConfigEntry` whose variant reflects whether the entry has a draft.
@@ -60,29 +92,24 @@ impl ConfigWorkspace {
     /// Presets that fail to parse or fail config validation are skipped with a `log::warn!`
     /// naming the offending label — they do not cause an error. Returns
     /// [`ConfigWorkspaceError::Empty`] only if every preset is invalid (or the iterator is
-    /// empty). Duplicate names among the valid presets still return
-    /// [`ConfigWorkspaceError::DuplicateName`].
+    /// empty). Duplicate names among the valid presets are allowed.
     ///
     /// The returned workspace has its selection pointed at the first entry.
     pub fn from_presets<L: std::fmt::Display>(
         presets: impl IntoIterator<Item = (L, String)>,
     ) -> Result<Self, ConfigWorkspaceError> {
-        let mut names = BTreeSet::new();
         let mut entries_out = Vec::new();
+        let mut next_id = 0u64;
 
         for (label, text) in presets {
-            let entry = match ConfigEntry::preset(text) {
+            let entry = match ConfigEntry::preset(text, ConfigEntryId(next_id)) {
                 Ok(entry) => entry,
                 Err(err) => {
                     log::warn!("Skipping invalid preset {label}: {err}");
                     continue;
                 }
             };
-            if !names.insert(entry.name().to_string()) {
-                return Err(ConfigWorkspaceError::DuplicateName(
-                    entry.name().to_string(),
-                ));
-            }
+            next_id += 1;
             entries_out.push(entry);
         }
 
@@ -92,6 +119,7 @@ impl ConfigWorkspace {
         Ok(Self {
             entries: entries_out,
             selected: 0,
+            next_id,
         })
     }
 
@@ -103,8 +131,31 @@ impl ConfigWorkspace {
         self.entries.iter().map(ConfigEntry::name)
     }
 
-    pub fn index_by_name(&self, name: &str) -> Option<usize> {
-        self.entries.iter().position(|entry| entry.name() == name)
+    /// Derives a display label per entry, in current workspace order, disambiguating
+    /// entries that share an authored `metadata.name`. A unique name is returned as-is;
+    /// a name shared by N entries is suffixed `" (1)"` through `" (N)"` in workspace
+    /// order. Display-only — never used as identity and never written to any document.
+    pub fn display_options(&self) -> Vec<(ConfigEntryId, String)> {
+        // (total occurrences of this name, occurrences assigned a label so far)
+        let mut counts: HashMap<&str, (usize, usize)> = HashMap::new();
+        for entry in &self.entries {
+            counts.entry(entry.name()).or_insert((0, 0)).0 += 1;
+        }
+
+        self.entries
+            .iter()
+            .map(|entry| {
+                let name = entry.name();
+                let (total, seen) = counts.get_mut(name).expect("counted above");
+                let label = if *total == 1 {
+                    name.to_string()
+                } else {
+                    *seen += 1;
+                    format!("{name} ({seen})")
+                };
+                (entry.id(), label)
+            })
+            .collect()
     }
 
     pub fn selected_index(&self) -> usize {
@@ -127,22 +178,32 @@ impl ConfigWorkspace {
         Ok(())
     }
 
+    /// Selects the entry with the given id. Returns
+    /// [`ConfigWorkspaceError::UnknownId`] if no entry in this workspace has that id —
+    /// in particular, an id from a different `ConfigWorkspace` instance is rejected.
+    pub fn select_by_id(&mut self, id: ConfigEntryId) -> Result<(), ConfigWorkspaceError> {
+        let index = self
+            .entries
+            .iter()
+            .position(|entry| entry.id() == id)
+            .ok_or(ConfigWorkspaceError::UnknownId(id))?;
+        self.selected = index;
+        Ok(())
+    }
+
     pub fn can_reset(&self) -> bool {
-        let entry = self.selected();
-        let Some(name) = entry.default_name() else {
-            return false;
-        };
-        entry.has_default_changes() && !self.name_exists_except(name, self.selected)
+        self.selected().has_default_changes()
     }
 
     /// Creates a renamed copy of the selected entry, auto-selects the new entry, and
     /// returns a borrow of it. After the borrow drops, the same entry remains accessible
     /// via [`ConfigWorkspace::selected`].
     pub fn copy(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
+        let id = self.allocate_id();
         let new_entry = {
             let entry = self.selected();
             let name = self.unique_name(&format!("{} copy", entry.name()));
-            entry.copy_as(&name)?
+            entry.copy_as(&name, id)?
         };
         self.entries.push(new_entry);
         self.selected = self.entries.len() - 1;
@@ -153,9 +214,6 @@ impl ConfigWorkspace {
         if index >= self.entries.len() {
             return Err(ConfigWorkspaceError::InvalidIndex(index));
         }
-        if self.name_exists_except(new_name, index) {
-            return Err(ConfigWorkspaceError::DuplicateName(new_name.to_string()));
-        }
         self.entries[index].rename_in_place(new_name)?;
         Ok(())
     }
@@ -164,19 +222,14 @@ impl ConfigWorkspace {
     /// document. Returns a borrow of the selected entry on success; the returned entry
     /// is always clean (`is_dirty() == false`). If the entry has no pending draft, this
     /// is a no-op and returns the unchanged entry. Returns
-    /// [`ConfigWorkspaceError::ParseConfig`] on parse or validation failure and
-    /// [`ConfigWorkspaceError::DuplicateName`] if the draft renames the entry to a name
-    /// already used elsewhere in the workspace. Failure leaves workspace state untouched.
+    /// [`ConfigWorkspaceError::ParseConfig`] on parse or validation failure; duplicate
+    /// names are allowed, so applying a draft renamed to match another entry succeeds.
+    /// Failure leaves workspace state untouched.
     pub fn apply(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
         let idx = self.selected;
         let Some(applied) = self.entries[idx].pending_apply()? else {
             return Ok(&self.entries[idx]);
         };
-        if self.name_exists_except(applied.name(), idx) {
-            return Err(ConfigWorkspaceError::DuplicateName(
-                applied.name().to_string(),
-            ));
-        }
         self.entries[idx].commit_apply(applied);
         Ok(&self.entries[idx])
     }
@@ -190,10 +243,6 @@ impl ConfigWorkspace {
         let Some(default) = self.selected().reset_candidate() else {
             return Ok(None);
         };
-        let name = default.name().to_string();
-        if self.name_exists_except(&name, self.selected) {
-            return Err(ConfigWorkspaceError::DuplicateName(name));
-        }
         let idx = self.selected;
         self.entries[idx].commit_reset(default);
         Ok(Some(&self.entries[idx]))
@@ -202,23 +251,15 @@ impl ConfigWorkspace {
     /// Parses and validates `text` as a config document, creates a new custom entry from it
     /// (no bundled default), auto-selects the new entry, and returns its index.
     ///
-    /// If the parsed name collides with an existing entry name, ` 2`, ` 3`, … is appended
-    /// until the name is unique. Returns [`ConfigWorkspaceError::ParseConfig`] if `text` fails
-    /// to parse or validate. On error the workspace state is unchanged: no entry is added and
-    /// the selection is not moved.
+    /// The imported document's `metadata.name` is preserved unchanged, even if it collides
+    /// with an existing entry's name — duplicate names are allowed. Returns
+    /// [`ConfigWorkspaceError::ParseConfig`] if `text` fails to parse or validate. On error
+    /// the workspace state is unchanged: no entry is added and the selection is not moved.
     pub fn import_toml(&mut self, text: &str) -> Result<usize, ConfigWorkspaceError> {
         let source = ConfigSource::parse(text)?;
         let doc = ConfigDocument::try_from(source)?;
-        let base_name = doc.name().to_string();
-        let unique = self.unique_name(&base_name);
-        let doc = if unique != base_name {
-            let mut source = doc.source().clone();
-            source.set_name(&unique);
-            ConfigDocument::try_from(source)?
-        } else {
-            doc
-        };
-        self.entries.push(ConfigEntry::custom(doc));
+        let id = self.allocate_id();
+        self.entries.push(ConfigEntry::custom(doc, id));
         self.selected = self.entries.len() - 1;
         Ok(self.selected)
     }
@@ -230,31 +271,42 @@ impl ConfigWorkspace {
             .expect("suffix search should find a unique name")
     }
 
-    fn name_exists_except(&self, name: &str, index: usize) -> bool {
-        self.entries
-            .iter()
-            .enumerate()
-            .any(|(entry_index, entry)| entry_index != index && entry.name() == name)
+    /// Returns the stable id of the currently selected entry.
+    pub fn selected_id(&self) -> ConfigEntryId {
+        self.selected().id()
+    }
+
+    fn allocate_id(&mut self) -> ConfigEntryId {
+        let id = ConfigEntryId(self.next_id);
+        self.next_id += 1;
+        id
     }
 }
 
 impl ConfigEntry {
-    fn preset(text: String) -> Result<Self, ConfigWorkspaceError> {
+    fn preset(text: String, id: ConfigEntryId) -> Result<Self, ConfigWorkspaceError> {
         let source = ConfigSource::parse(&text)?;
         let doc = ConfigDocument::try_from(source)?;
         Ok(Self {
+            id,
             default: Some(doc.clone()),
             draft: None,
             last_applied: doc,
         })
     }
 
-    fn custom(last_applied: ConfigDocument) -> Self {
+    fn custom(last_applied: ConfigDocument, id: ConfigEntryId) -> Self {
         Self {
+            id,
             default: None,
             draft: None,
             last_applied,
         }
+    }
+
+    /// This entry's stable identity. See [`ConfigEntryId`] for its guarantees.
+    pub fn id(&self) -> ConfigEntryId {
+        self.id
     }
 
     pub fn name(&self) -> &str {
@@ -293,7 +345,7 @@ impl ConfigEntry {
         }
     }
 
-    fn copy_as(&self, name: &str) -> Result<Self, ConfigWorkspaceError> {
+    fn copy_as(&self, name: &str, id: ConfigEntryId) -> Result<Self, ConfigWorkspaceError> {
         let draft = self.draft.as_ref().map(|draft_text| {
             ConfigSource::parse(draft_text).map_or_else(
                 |_| draft_text.clone(), // draft is unparseable TOML; keep verbatim so the user can fix it
@@ -308,6 +360,7 @@ impl ConfigEntry {
         source.set_name(name);
         let last_applied = ConfigDocument::try_from(source)?;
         Ok(Self {
+            id,
             default: None,
             draft,
             last_applied,
@@ -364,10 +417,6 @@ impl ConfigEntry {
             self.draft = Some(draft_source.to_toml_string());
         }
         Ok(())
-    }
-
-    fn default_name(&self) -> Option<&str> {
-        self.default.as_ref().map(ConfigDocument::name)
     }
 
     fn has_default_changes(&self) -> bool {
@@ -625,7 +674,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn apply_rejects_duplicate_renamed_draft() {
+    fn apply_accepts_duplicate_renamed_draft() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace =
@@ -635,15 +684,11 @@ solid = "#00e680"
         workspace
             .selected_mut()
             .set_draft_text(config_text_renamed(&first, "Second"));
-        let error = workspace.apply().unwrap_err();
+        let entry = workspace.apply().unwrap();
 
-        assert!(matches!(
-            error,
-            ConfigWorkspaceError::DuplicateName(ref name) if name == "Second"
-        ));
-        assert_eq!(workspace.selected().name(), "First");
-        assert_eq!(workspace.selected().applied_text(), first);
-        assert!(workspace.selected().is_dirty());
+        assert_eq!(entry.name(), "Second");
+        assert!(!workspace.selected().is_dirty());
+        assert_eq!(workspace.names().collect::<Vec<_>>(), ["Second", "Second"]);
     }
 
     #[test]
@@ -714,7 +759,7 @@ solid = "#00e680"
     }
 
     #[test]
-    fn reset_rejects_default_name_collision() {
+    fn reset_restores_default_name_despite_collision() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![
@@ -735,14 +780,14 @@ solid = "#00e680"
         workspace.apply().unwrap();
 
         workspace.select(0).unwrap();
-        let error = workspace.reset().unwrap_err();
+        assert!(workspace.can_reset());
+        let reset_entry = workspace
+            .reset()
+            .unwrap()
+            .expect("expected reset to apply default");
 
-        assert!(matches!(
-            error,
-            ConfigWorkspaceError::DuplicateName(ref name) if name == "First"
-        ));
-        assert!(!workspace.can_reset());
-        assert_eq!(workspace.selected().name(), "Third");
+        assert_eq!(reset_entry.name(), "First");
+        assert_eq!(workspace.names().collect::<Vec<_>>(), ["First", "First"]);
     }
 
     #[test]
@@ -834,16 +879,17 @@ solid = "#00e680"
     }
 
     #[test]
-    fn from_presets_rejects_duplicate_names() {
+    fn from_presets_accepts_duplicate_names() {
         let first = config_text("Duplicate", "F", 60.0);
         let second = config_text("Duplicate", "F+F", 90.0);
-        let error =
-            ConfigWorkspace::from_presets(vec![("dup1", first), ("dup2", second)]).unwrap_err();
+        let workspace =
+            ConfigWorkspace::from_presets(vec![("dup1", first), ("dup2", second)]).unwrap();
 
-        assert!(matches!(
-            error,
-            ConfigWorkspaceError::DuplicateName(ref name) if name == "Duplicate"
-        ));
+        assert_eq!(workspace.entries().len(), 2);
+        assert_eq!(
+            workspace.names().collect::<Vec<_>>(),
+            ["Duplicate", "Duplicate"]
+        );
     }
 
     #[test]
@@ -882,6 +928,81 @@ solid = "#00e680"
 
         assert_eq!(workspace.selected_index(), 0);
         assert!(!workspace.selected().is_dirty());
+    }
+
+    #[test]
+    fn entries_get_distinct_stable_ids() {
+        let first = config_text("First", "F", 60.0);
+        let second = config_text("Second", "F+F", 90.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
+
+        let first_id = workspace.entries()[0].id();
+        let second_id = workspace.entries()[1].id();
+        assert_ne!(first_id, second_id);
+
+        workspace.select(1).unwrap();
+        assert_eq!(workspace.selected_id(), second_id);
+
+        workspace.select(0).unwrap();
+        assert_eq!(workspace.selected_id(), first_id);
+    }
+
+    #[test]
+    fn display_options_returns_plain_name_when_unique() {
+        let first = config_text("Plant", "F", 60.0);
+        let workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
+
+        let labels: Vec<String> = workspace
+            .display_options()
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect();
+        assert_eq!(labels, ["Plant"]);
+    }
+
+    #[test]
+    fn display_options_disambiguates_duplicate_names_in_workspace_order() {
+        let first = config_text("Plant", "F", 60.0);
+        let second = config_text("Plant", "F+F", 90.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("a", first), ("b", second)]).unwrap();
+        let third = config_text("Other", "F", 60.0);
+        workspace.import_toml(&third).unwrap();
+
+        let labels: Vec<String> = workspace
+            .display_options()
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect();
+        assert_eq!(labels, ["Plant (1)", "Plant (2)", "Other"]);
+    }
+
+    #[test]
+    fn display_options_pairs_each_label_with_its_entry_id() {
+        let first = config_text("Plant", "F", 60.0);
+        let second = config_text("Plant", "F+F", 90.0);
+        let workspace = ConfigWorkspace::from_presets(vec![("a", first), ("b", second)]).unwrap();
+
+        let options = workspace.display_options();
+        assert_eq!(options[0].0, workspace.entries()[0].id());
+        assert_eq!(options[1].0, workspace.entries()[1].id());
+    }
+
+    #[test]
+    fn copy_and_import_assign_fresh_ids() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
+        let original_id = workspace.entries()[0].id();
+
+        let copied_id = workspace.copy().unwrap().id();
+        assert_ne!(copied_id, original_id);
+
+        let imported = config_text("Imported", "F+F", 90.0);
+        let imported_idx = workspace.import_toml(&imported).unwrap();
+        let imported_id = workspace.entries()[imported_idx].id();
+        assert_ne!(imported_id, original_id);
+        assert_ne!(imported_id, copied_id);
     }
 
     #[test]
@@ -1434,12 +1555,52 @@ end = "#ffffff"
     }
 
     #[test]
-    fn index_by_name_returns_none_for_unknown_name() {
+    fn select_by_id_selects_matching_entry() {
         let first = config_text("First", "F", 60.0);
-        let workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let second = config_text("Second", "F+F", 90.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
+        let second_id = workspace.entries()[1].id();
 
-        assert_eq!(workspace.index_by_name("Missing"), None);
-        assert_eq!(workspace.index_by_name("First"), Some(0));
+        workspace.select_by_id(second_id).unwrap();
+
+        assert_eq!(workspace.selected_index(), 1);
+        assert_eq!(workspace.selected_id(), second_id);
+    }
+
+    #[test]
+    fn select_by_id_rejects_unknown_id() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
+        let unknown_id = {
+            let mut other =
+                ConfigWorkspace::from_presets(vec![("Other", config_text("Other", "F", 60.0))])
+                    .unwrap();
+            // `workspace` only ever allocates id 0; `other.copy()` allocates id 1, which is
+            // guaranteed absent from `workspace`.
+            other.copy().unwrap().id()
+        };
+
+        let error = workspace.select_by_id(unknown_id).unwrap_err();
+
+        assert!(matches!(error, ConfigWorkspaceError::UnknownId(id) if id == unknown_id));
+        assert_eq!(workspace.selected_index(), 0);
+    }
+
+    #[test]
+    fn select_by_id_works_independently_of_duplicate_names() {
+        let first = config_text("Plant", "F", 60.0);
+        let second = config_text("Plant", "F+F", 90.0);
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("a", first), ("b", second)]).unwrap();
+        let first_id = workspace.entries()[0].id();
+        let second_id = workspace.entries()[1].id();
+
+        workspace.select_by_id(second_id).unwrap();
+        assert_eq!(workspace.selected().editor_config().generation.angle, 90.0);
+
+        workspace.select_by_id(first_id).unwrap();
+        assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
     }
 
     #[test]
@@ -1452,14 +1613,16 @@ end = "#ffffff"
     }
 
     #[test]
-    fn rename_rejects_duplicate_name() {
+    fn rename_accepts_duplicate_name() {
         let first = config_text("First", "F", 60.0);
         let second = config_text("Second", "F+F", 90.0);
         let mut workspace =
             ConfigWorkspace::from_presets(vec![("First", first), ("Second", second)]).unwrap();
-        let err = workspace.rename(0, "Second").unwrap_err();
-        assert!(matches!(err, ConfigWorkspaceError::DuplicateName(ref n) if n == "Second"));
-        assert_eq!(workspace.selected().name(), "First");
+
+        workspace.rename(0, "Second").unwrap();
+
+        assert_eq!(workspace.selected().name(), "Second");
+        assert_eq!(workspace.names().collect::<Vec<_>>(), ["Second", "Second"]);
     }
 
     #[test]
@@ -1553,7 +1716,7 @@ end = "#ffffff"
     }
 
     #[test]
-    fn import_toml_deduplicates_name_with_suffix() {
+    fn import_toml_preserves_duplicate_name() {
         let first = config_text("First", "F", 60.0);
         let duplicate = config_text("First", "F+F", 90.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
@@ -1561,9 +1724,10 @@ end = "#ffffff"
         let idx = workspace.import_toml(&duplicate).unwrap();
 
         assert_eq!(idx, 1);
-        assert_eq!(workspace.selected().name(), "First 2");
+        assert_eq!(workspace.selected().name(), "First");
         assert!(!workspace.selected().is_dirty());
         assert_eq!(workspace.selected().editor_config().generation.angle, 90.0);
+        assert_eq!(workspace.names().collect::<Vec<_>>(), ["First", "First"]);
     }
 
     #[test]
