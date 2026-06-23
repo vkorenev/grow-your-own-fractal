@@ -186,13 +186,30 @@ mod gpu_tests {
     }
 
     fn assert_png_renders(config: lsystem_core::Config) {
-        let export = pollster::block_on(render_png_standalone(
-            &config,
-            256,
-            128,
-            &crate::camera::Camera::default(),
-        ))
-        .expect("render_png_standalone failed");
+        let (render_result, validation_error) = pollster::block_on(async {
+            let (device, queue) =
+                crate::wgpu_util::create_headless_device("png_export_test_device", "PNG export")
+                    .await
+                    .expect("failed to create headless test device");
+
+            let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let render_result = render_png(
+                &device,
+                &queue,
+                &config,
+                256,
+                128,
+                &crate::camera::Camera::default(),
+            )
+            .await;
+            let validation_error = error_scope.pop().await;
+            (render_result, validation_error)
+        });
+        assert!(
+            validation_error.is_none(),
+            "wgpu validation error: {validation_error:?}"
+        );
+        let export = render_result.expect("render_png failed");
 
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);

@@ -9,6 +9,7 @@ use wgpu::util::DeviceExt;
 
 use crate::wgpu_util;
 
+/// Mirrors the `Segment2D` WGSL vertex input struct in `shader.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Segment2D {
@@ -16,6 +17,7 @@ pub struct Segment2D {
     pub end: [f32; 2],
 }
 
+/// Mirrors the `Segment3D` WGSL vertex input struct in `shader3d.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Segment3D {
@@ -23,6 +25,7 @@ pub struct Segment3D {
     pub end: [f32; 3],
 }
 
+/// Mirrors the `TopologicalDepthSegment2D` WGSL vertex input struct in `shader.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct TopologicalDepthSegment2D {
@@ -31,6 +34,7 @@ pub struct TopologicalDepthSegment2D {
     pub topological_depth: u32,
 }
 
+/// Mirrors the `TopologicalDepthSegment3D` WGSL vertex input struct in `shader3d.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct TopologicalDepthSegment3D {
@@ -400,7 +404,6 @@ impl LinePipeline2D {
             immediate_size: 0,
         });
 
-        // These interleaved Rust records intentionally mirror the WGSL vertex input structs.
         let normal_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
         let depth_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
         let pipeline = create_line_pipeline(
@@ -577,7 +580,6 @@ impl LinePipeline3D {
             immediate_size: 0,
         });
 
-        // These interleaved Rust records intentionally mirror the WGSL vertex input structs.
         let normal_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         let depth_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32];
         let pipeline = create_line_pipeline(
