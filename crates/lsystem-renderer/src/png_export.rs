@@ -163,7 +163,7 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod gpu_tests {
     use super::*;
-    use lsystem_core::{Dimensions, GenerationConfig};
+    use lsystem_core::{Dimensions, GenerationConfig, LineColorConfig, Rgb};
     use std::collections::BTreeMap;
 
     fn trivial_config() -> lsystem_core::Config {
@@ -179,21 +179,37 @@ mod gpu_tests {
                 rules: BTreeMap::new(),
             },
             colors: lsystem_core::ColorConfig {
-                background: lsystem_core::Rgb::new(0, 0, 0),
-                line: lsystem_core::LineColorConfig::Solid(lsystem_core::Rgb::new(255, 255, 255)),
+                background: Rgb::new(0, 0, 0),
+                line: LineColorConfig::Solid(Rgb::new(255, 255, 255)),
             },
         }
     }
 
-    #[test]
-    fn png_standalone_non_square_dimensions() {
-        let export = pollster::block_on(render_png_standalone(
-            &trivial_config(),
-            256,
-            128,
-            &crate::camera::Camera::default(),
-        ))
-        .expect("render_png_standalone failed");
+    fn assert_png_renders(config: lsystem_core::Config) {
+        let (render_result, validation_error) = pollster::block_on(async {
+            let (device, queue) =
+                crate::wgpu_util::create_headless_device("png_export_test_device", "PNG export")
+                    .await
+                    .expect("failed to create headless test device");
+
+            let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let render_result = render_png(
+                &device,
+                &queue,
+                &config,
+                256,
+                128,
+                &crate::camera::Camera::default(),
+            )
+            .await;
+            let validation_error = error_scope.pop().await;
+            (render_result, validation_error)
+        });
+        assert!(
+            validation_error.is_none(),
+            "wgpu validation error: {validation_error:?}"
+        );
+        let export = render_result.expect("render_png failed");
 
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);
@@ -201,5 +217,39 @@ mod gpu_tests {
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (256, 128));
+    }
+
+    fn depth_gradient_config(dimensions: Dimensions) -> lsystem_core::Config {
+        let mut config = trivial_config();
+        config.generation.dimensions = dimensions;
+        config.generation.axiom = "F[+F]F".to_string();
+        config.colors.line = LineColorConfig::Gradient {
+            start: Rgb::new(255, 0, 0),
+            end: Rgb::new(0, 0, 255),
+            topological_depth: true,
+        };
+        config
+    }
+
+    #[test]
+    fn png_standalone_non_square_dimensions() {
+        assert_png_renders(trivial_config());
+    }
+
+    #[test]
+    fn png_standalone_compiles_3d_solid_shader() {
+        let mut config = trivial_config();
+        config.generation.dimensions = Dimensions::ThreeD;
+        assert_png_renders(config);
+    }
+
+    #[test]
+    fn png_standalone_compiles_2d_depth_shader() {
+        assert_png_renders(depth_gradient_config(Dimensions::TwoD));
+    }
+
+    #[test]
+    fn png_standalone_compiles_3d_depth_shader() {
+        assert_png_renders(depth_gradient_config(Dimensions::ThreeD));
     }
 }

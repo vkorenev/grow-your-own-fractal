@@ -9,6 +9,7 @@ use wgpu::util::DeviceExt;
 
 use crate::wgpu_util;
 
+/// Mirrors the `Segment2D` WGSL vertex input struct in `shader.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Segment2D {
@@ -16,6 +17,7 @@ pub struct Segment2D {
     pub end: [f32; 2],
 }
 
+/// Mirrors the `Segment3D` WGSL vertex input struct in `shader3d.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct Segment3D {
@@ -23,6 +25,7 @@ pub struct Segment3D {
     pub end: [f32; 3],
 }
 
+/// Mirrors the `TopologicalDepthSegment2D` WGSL vertex input struct in `shader.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct TopologicalDepthSegment2D {
@@ -31,6 +34,7 @@ pub struct TopologicalDepthSegment2D {
     pub topological_depth: u32,
 }
 
+/// Mirrors the `TopologicalDepthSegment3D` WGSL vertex input struct in `shader3d.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct TopologicalDepthSegment3D {
