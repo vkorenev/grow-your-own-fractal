@@ -1,8 +1,3 @@
-struct Transform {
-    scale: vec2<f32>,
-    offset: vec2<f32>,
-}
-
 struct ColorParams {
     mode: u32,
     total_segments: u32,
@@ -16,22 +11,23 @@ struct ColorParams {
     _pad2: f32,
 }
 
-struct Segment2D {
-    @location(0) start: vec2<f32>,
-    @location(1) end: vec2<f32>,
-}
-
-struct TopologicalDepthSegment2D {
-    @location(0) start: vec2<f32>,
-    @location(1) end: vec2<f32>,
-    @location(2) topological_depth: u32,
-}
-
 @group(0) @binding(0)
+var<uniform> color_params: ColorParams;
+
+struct Transform {
+    scale: vec2<f32>,
+    offset: vec2<f32>,
+}
+
+@group(1) @binding(0)
 var<uniform> transform: Transform;
 
-@group(0) @binding(1)
-var<uniform> color_params: ColorParams;
+struct Mvp {
+    matrix: mat4x4<f32>,
+}
+
+@group(2) @binding(0)
+var<uniform> mvp: Mvp;
 
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3<f32> {
     let h6 = (h % 360.0) / 60.0;
@@ -84,7 +80,36 @@ fn color_for_depth(topological_depth: u32) -> vec4<f32> {
     return mix(color_params.color_start, color_params.color_end, t);
 }
 
-fn segment_position(vi: u32, start: vec2<f32>, end: vec2<f32>) -> vec2<f32> {
+struct Segment2D {
+    @location(0) start: vec2<f32>,
+    @location(1) end: vec2<f32>,
+}
+
+struct TopologicalDepthSegment2D {
+    @location(0) start: vec2<f32>,
+    @location(1) end: vec2<f32>,
+    @location(2) topological_depth: u32,
+}
+
+struct Segment3D {
+    @location(0) start: vec3<f32>,
+    @location(1) end: vec3<f32>,
+}
+
+struct TopologicalDepthSegment3D {
+    @location(0) start: vec3<f32>,
+    @location(1) end: vec3<f32>,
+    @location(2) topological_depth: u32,
+}
+
+fn segment_position_2d(vi: u32, start: vec2<f32>, end: vec2<f32>) -> vec2<f32> {
+    if vi == 0u {
+        return start;
+    }
+    return end;
+}
+
+fn segment_position_3d(vi: u32, start: vec3<f32>, end: vec3<f32>) -> vec3<f32> {
     if vi == 0u {
         return start;
     }
@@ -92,12 +117,12 @@ fn segment_position(vi: u32, start: vec2<f32>, end: vec2<f32>) -> vec2<f32> {
 }
 
 @vertex
-fn vs_main(
+fn vs_main_2d(
     @builtin(vertex_index) vi: u32,
     @builtin(instance_index) ii: u32,
     segment: Segment2D,
 ) -> VertexOutput {
-    let position = segment_position(vi, segment.start, segment.end);
+    let position = segment_position_2d(vi, segment.start, segment.end);
 
     var out: VertexOutput;
     out.clip_position = vec4<f32>(
@@ -110,12 +135,12 @@ fn vs_main(
 }
 
 @vertex
-fn vs_depth_main(
+fn vs_depth_main_2d(
     @builtin(vertex_index) vi: u32,
     @builtin(instance_index) ii: u32,
     segment: TopologicalDepthSegment2D,
 ) -> VertexOutput {
-    let position = segment_position(vi, segment.start, segment.end);
+    let position = segment_position_2d(vi, segment.start, segment.end);
 
     var out: VertexOutput;
     out.clip_position = vec4<f32>(
@@ -123,6 +148,38 @@ fn vs_depth_main(
         0.0,
         1.0,
     );
+    if color_params.mode == 3u {
+        out.color = color_for_depth(segment.topological_depth);
+    } else {
+        out.color = color_for_traversal(ii);
+    }
+    return out;
+}
+
+@vertex
+fn vs_main_3d(
+    @builtin(vertex_index) vi: u32,
+    @builtin(instance_index) ii: u32,
+    segment: Segment3D,
+) -> VertexOutput {
+    let position = segment_position_3d(vi, segment.start, segment.end);
+
+    var out: VertexOutput;
+    out.clip_position = mvp.matrix * vec4<f32>(position, 1.0);
+    out.color = color_for_traversal(ii);
+    return out;
+}
+
+@vertex
+fn vs_depth_main_3d(
+    @builtin(vertex_index) vi: u32,
+    @builtin(instance_index) ii: u32,
+    segment: TopologicalDepthSegment3D,
+) -> VertexOutput {
+    let position = segment_position_3d(vi, segment.start, segment.end);
+
+    var out: VertexOutput;
+    out.clip_position = mvp.matrix * vec4<f32>(position, 1.0);
     if color_params.mode == 3u {
         out.color = color_for_depth(segment.topological_depth);
     } else {
