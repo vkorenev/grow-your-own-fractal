@@ -400,6 +400,7 @@ impl LinePipeline2D {
             immediate_size: 0,
         });
 
+        // These interleaved Rust records intentionally mirror the WGSL vertex input structs.
         let normal_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
         let depth_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
         let pipeline = create_line_pipeline(
@@ -576,6 +577,7 @@ impl LinePipeline3D {
             immediate_size: 0,
         });
 
+        // These interleaved Rust records intentionally mirror the WGSL vertex input structs.
         let normal_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         let depth_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32];
         let pipeline = create_line_pipeline(
