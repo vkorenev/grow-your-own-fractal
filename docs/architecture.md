@@ -110,11 +110,10 @@ offscreen exports.
   from these generated bindings rather than hand-mirroring them, so most
   field, binding, and entry-point renames in `shader.wgsl` now fail the Rust
   build instead of only surfacing as a runtime wgpu validation error. Bind
-  group layouts and bind groups are built from the generated per-group
-  helpers, but pipeline layouts are still assembled by hand because the 2D
-  and 3D pipelines bind different, sparse subsets of the shader's three bind
-  groups. Vertex instance records (`Segment2D`/`Segment3D` and their
-  topological-depth variants) remain hand-mirrored.
+  group layouts, bind groups, vertex instance records, vertex buffer layouts,
+  and shader entry states are built from generated helpers. Pipeline layouts
+  are still assembled by hand because the 2D and 3D pipelines bind different,
+  sparse subsets of the shader's three bind groups.
 - `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   2D/3D line pipelines, color uniforms, and surface frame handling.
