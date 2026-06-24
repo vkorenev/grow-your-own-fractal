@@ -36,10 +36,7 @@ impl SegmentDataBuilder {
         self.min_y = self.min_y.min(a.y).min(b.y);
         self.max_x = self.max_x.max(a.x).max(b.x);
         self.max_y = self.max_y.max(a.y).max(b.y);
-        self.segments.push(Segment2D {
-            start: [a.x, a.y],
-            end: [b.x, b.y],
-        });
+        self.segments.push(Segment2D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData {
@@ -113,8 +110,8 @@ impl TopologicalDepthSegmentDataBuilder {
         self.max_y = self.max_y.max(a.y).max(b.y);
         self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
         self.segments.push(TopologicalDepthSegment2D {
-            start: [a.x, a.y],
-            end: [b.x, b.y],
+            start: a,
+            end: b,
             topological_depth: segment.topological_depth,
         });
     }
@@ -187,10 +184,7 @@ impl SegmentDataBuilder3D {
         self.max_x = self.max_x.max(a.x).max(b.x);
         self.max_y = self.max_y.max(a.y).max(b.y);
         self.max_z = self.max_z.max(a.z).max(b.z);
-        self.segments.push(Segment3D {
-            start: [a.x, a.y, a.z],
-            end: [b.x, b.y, b.z],
-        });
+        self.segments.push(Segment3D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData3D {
@@ -273,8 +267,8 @@ impl TopologicalDepthSegmentDataBuilder3D {
         self.max_z = self.max_z.max(a.z).max(b.z);
         self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
         self.segments.push(TopologicalDepthSegment3D {
-            start: [a.x, a.y, a.z],
-            end: [b.x, b.y, b.z],
+            start: a,
+            end: b,
             topological_depth: segment.topological_depth,
         });
     }

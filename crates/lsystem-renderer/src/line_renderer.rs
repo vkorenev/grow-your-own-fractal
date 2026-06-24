@@ -2,12 +2,14 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use bytemuck::{Pod, Zeroable};
 use encase::UniformBuffer;
 use lsystem_core::Dimensions;
 use wgpu::util::DeviceExt;
 
-pub use crate::generated_shader::{ColorParams, Mvp, Transform};
+pub use crate::generated_shader::{
+    ColorParams, Mvp, Segment2D, Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D,
+    Transform,
+};
 
 use crate::generated_shader::{
     self,
@@ -16,40 +18,6 @@ use crate::generated_shader::{
     },
 };
 use crate::wgpu_util;
-
-/// Mirrors the `Segment2D` WGSL vertex input struct in `shader.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct Segment2D {
-    pub start: [f32; 2],
-    pub end: [f32; 2],
-}
-
-/// Mirrors the `Segment3D` WGSL vertex input struct in `shader.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct Segment3D {
-    pub start: [f32; 3],
-    pub end: [f32; 3],
-}
-
-/// Mirrors the `TopologicalDepthSegment2D` WGSL vertex input struct in `shader.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct TopologicalDepthSegment2D {
-    pub start: [f32; 2],
-    pub end: [f32; 2],
-    pub topological_depth: u32,
-}
-
-/// Mirrors the `TopologicalDepthSegment3D` WGSL vertex input struct in `shader.wgsl`.
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct TopologicalDepthSegment3D {
-    pub start: [f32; 3],
-    pub end: [f32; 3],
-    pub topological_depth: u32,
-}
 
 impl Default for Mvp {
     fn default() -> Self {
@@ -260,43 +228,22 @@ fn draw_line_list(
     render_pass.pop_debug_group();
 }
 
-struct LinePipelineDescriptor<'a> {
-    format: wgpu::TextureFormat,
-    label: &'static str,
-    vertex_entry_point: &'static str,
-    array_stride: wgpu::BufferAddress,
-    attributes: &'a [wgpu::VertexAttribute],
-}
-
 fn create_line_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    descriptor: LinePipelineDescriptor<'_>,
+    label: &'static str,
+    vertex_entry: &generated_shader::VertexEntry<1>,
+    fragment_entry: &generated_shader::FragmentEntry<1>,
 ) -> wgpu::RenderPipeline {
+    let vertex = generated_shader::vertex_state(shader, vertex_entry);
+    let fragment = generated_shader::fragment_state(shader, fragment_entry);
+
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(descriptor.label),
+        label: Some(label),
         layout: Some(pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some(descriptor.vertex_entry_point),
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: descriptor.array_stride,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: descriptor.attributes,
-            }],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(generated_shader::ENTRY_FS_MAIN),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: descriptor.format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: Default::default(),
-        }),
+        vertex,
+        fragment: Some(fragment),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::LineList,
             ..Default::default()
@@ -366,32 +313,29 @@ impl LinePipeline2D {
             immediate_size: 0,
         });
 
-        let normal_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2];
-        let depth_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+        let fragment_entry = generated_shader::fs_main_entry([Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })]);
+        let vertex_entry = generated_shader::vs_main_2d_entry(wgpu::VertexStepMode::Instance);
+        let depth_vertex_entry =
+            generated_shader::vs_depth_main_2d_entry(wgpu::VertexStepMode::Instance);
         let pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
             &shader,
-            LinePipelineDescriptor {
-                format,
-                label: "lsystem_2d_pipeline",
-                vertex_entry_point: generated_shader::ENTRY_VS_MAIN_2D,
-                array_stride: std::mem::size_of::<Segment2D>() as wgpu::BufferAddress,
-                attributes: &normal_attrs,
-            },
+            "lsystem_2d_pipeline",
+            &vertex_entry,
+            &fragment_entry,
         );
         let depth_pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
             &shader,
-            LinePipelineDescriptor {
-                format,
-                label: "lsystem_2d_depth_pipeline",
-                vertex_entry_point: generated_shader::ENTRY_VS_DEPTH_MAIN_2D,
-                array_stride: std::mem::size_of::<TopologicalDepthSegment2D>()
-                    as wgpu::BufferAddress,
-                attributes: &depth_attrs,
-            },
+            "lsystem_2d_depth_pipeline",
+            &depth_vertex_entry,
+            &fragment_entry,
         );
 
         Self {
@@ -524,32 +468,29 @@ impl LinePipeline3D {
             immediate_size: 0,
         });
 
-        let normal_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-        let depth_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32];
+        let fragment_entry = generated_shader::fs_main_entry([Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })]);
+        let vertex_entry = generated_shader::vs_main_3d_entry(wgpu::VertexStepMode::Instance);
+        let depth_vertex_entry =
+            generated_shader::vs_depth_main_3d_entry(wgpu::VertexStepMode::Instance);
         let pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
             &shader,
-            LinePipelineDescriptor {
-                format,
-                label: "lsystem_3d_pipeline",
-                vertex_entry_point: generated_shader::ENTRY_VS_MAIN_3D,
-                array_stride: std::mem::size_of::<Segment3D>() as wgpu::BufferAddress,
-                attributes: &normal_attrs,
-            },
+            "lsystem_3d_pipeline",
+            &vertex_entry,
+            &fragment_entry,
         );
         let depth_pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
             &shader,
-            LinePipelineDescriptor {
-                format,
-                label: "lsystem_3d_depth_pipeline",
-                vertex_entry_point: generated_shader::ENTRY_VS_DEPTH_MAIN_3D,
-                array_stride: std::mem::size_of::<TopologicalDepthSegment3D>()
-                    as wgpu::BufferAddress,
-                attributes: &depth_attrs,
-            },
+            "lsystem_3d_depth_pipeline",
+            &depth_vertex_entry,
+            &fragment_entry,
         );
 
         Self {
