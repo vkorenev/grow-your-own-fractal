@@ -3,6 +3,7 @@ use std::sync::Arc;
 use lsystem_app_model::sanitize_filename;
 use lsystem_core::Config;
 use lsystem_renderer::animation_export::AnimationParams;
+use lsystem_renderer::bounds_compute::BoundsComputeSupport;
 use lsystem_renderer::camera::Camera;
 use wasm_bindgen::JsCast;
 
@@ -13,9 +14,11 @@ pub(crate) fn export_svg(config: Config) {
     download_blob(blob, filename);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn export_png(
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    bounds_support: BoundsComputeSupport,
     camera: Camera,
     config: Config,
     width: u32,
@@ -25,7 +28,13 @@ pub(crate) fn export_png(
     let filename = sanitize_filename(&config.name, "png");
     wasm_bindgen_futures::spawn_local(async move {
         match lsystem_renderer::png_export::render_png(
-            &device, &queue, &config, width, height, &camera,
+            &device,
+            &queue,
+            bounds_support,
+            &config,
+            width,
+            height,
+            &camera,
         )
         .await
         {
@@ -47,6 +56,7 @@ pub(crate) fn export_png(
 pub(crate) fn export_animation(
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
+    bounds_support: BoundsComputeSupport,
     camera: Camera,
     config: Config,
     width: u32,
@@ -60,6 +70,7 @@ pub(crate) fn export_animation(
         match lsystem_renderer::animation_export::render_animation(
             &device,
             &queue,
+            bounds_support,
             &config,
             width,
             height,

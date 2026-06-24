@@ -1751,11 +1751,11 @@ pub(crate) fn App() -> impl IntoView {
                             if fmt == "svg" {
                                 export_svg(config);
                             } else if fmt == "png" {
-                                let Some(Some((device, queue, camera))) =
+                                let Some(Some((device, queue, bounds_support, camera))) =
                                     renderer.try_with_value(|opt| {
                                         opt.as_ref().map(|r| {
-                                            let (d, q) = r.device_queue();
-                                            (d, q, r.camera())
+                                            let (d, q, support) = r.device_queue();
+                                            (d, q, support, r.camera())
                                         })
                                     })
                                 else {
@@ -1765,6 +1765,7 @@ pub(crate) fn App() -> impl IntoView {
                                 export_png(
                                     device,
                                     queue,
+                                    bounds_support,
                                     camera,
                                     config,
                                     png_width.get_untracked(),
@@ -1772,11 +1773,11 @@ pub(crate) fn App() -> impl IntoView {
                                     move |e| export_error.set(Some(e)),
                                 );
                             } else {
-                                let Some(Some((device, queue, camera))) =
+                                let Some(Some((device, queue, bounds_support, camera))) =
                                     renderer.try_with_value(|opt| {
                                         opt.as_ref().map(|r| {
-                                            let (d, q) = r.device_queue();
-                                            (d, q, r.camera())
+                                            let (d, q, support) = r.device_queue();
+                                            (d, q, support, r.camera())
                                         })
                                     })
                                 else {
@@ -1813,6 +1814,7 @@ pub(crate) fn App() -> impl IntoView {
                                 crate::export::export_animation(
                                     device,
                                     queue,
+                                    bounds_support,
                                     camera,
                                     config,
                                     width,
@@ -2089,10 +2091,33 @@ fn with_renderer<F, H>(
     render: F,
 ) where
     F: FnOnce(&mut CanvasRenderer, &web_sys::HtmlCanvasElement) -> RenderStatus,
-    H: Fn(RenderStatus, web_sys::HtmlCanvasElement),
+    H: Fn(RenderStatus, web_sys::HtmlCanvasElement) + Copy + 'static,
 {
-    let status = renderer.try_update_value(|opt| opt.as_mut().map(|r| render(r, &canvas)));
-    if let Some(Some(status)) = status {
+    let outcome = renderer.try_update_value(|opt| {
+        opt.as_mut().map(|r| {
+            let status = render(r, &canvas);
+            let bounds_request = r.take_pending_bounds_request();
+            (status, bounds_request)
+        })
+    });
+    if let Some(Some((status, bounds_request))) = outcome {
+        if let Some(bounds_request) = bounds_request {
+            let canvas_for_bounds = canvas.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(update) = bounds_request.resolve().await else {
+                    return;
+                };
+                let status = renderer.try_update_value(|opt| {
+                    opt.as_mut().and_then(|r| {
+                        r.apply_bounds_update(update)
+                            .then(|| r.render(&canvas_for_bounds))
+                    })
+                });
+                if let Some(Some(status)) = status {
+                    recover_after_render(status, canvas_for_bounds);
+                }
+            });
+        }
         recover_after_render(status, canvas);
     }
 }

@@ -55,18 +55,23 @@ mod non_browser_wasm {
     }
 }
 
-#[cfg(feature = "png")]
 #[derive(Debug)]
 pub(crate) enum CreateDeviceError {
     NoAdapter,
     RequestDevice(wgpu::RequestDeviceError),
 }
 
-#[cfg(feature = "png")]
 pub(crate) async fn create_headless_device(
     label: &'static str,
     context: &'static str,
-) -> Result<(wgpu::Device, wgpu::Queue), CreateDeviceError> {
+) -> Result<
+    (
+        wgpu::Device,
+        wgpu::Queue,
+        crate::bounds_compute::BoundsComputeSupport,
+    ),
+    CreateDeviceError,
+> {
     let instance = new_instance().await;
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -82,12 +87,14 @@ pub(crate) async fn create_headless_device(
         adapter_info.name,
         adapter_info.backend
     );
+    let bounds_compute_support =
+        crate::bounds_compute::BoundsComputeSupport::from_adapter(&adapter);
     let (device, queue) = adapter
         .request_device(&device_descriptor(label, &adapter))
         .await
         .map_err(CreateDeviceError::RequestDevice)?;
     install_uncaptured_error_handler(&device, context);
-    Ok((device, queue))
+    Ok((device, queue, bounds_compute_support))
 }
 
 pub(crate) fn install_uncaptured_error_handler(device: &wgpu::Device, context: &'static str) {

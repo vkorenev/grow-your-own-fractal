@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 
 use lsystem_core::Config;
 
+use crate::bounds_compute::BoundsComputeSupport;
 use crate::camera::Camera;
 use crate::offscreen::{ExportScene, RenderTarget, validate_height, validate_width};
 use crate::png_export::{ExportError, PngExport};
@@ -103,6 +104,7 @@ impl From<ExportError> for AnimationExportError {
 pub async fn render_animation(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    bounds_support: BoundsComputeSupport,
     config: &Config,
     width: u32,
     height: u32,
@@ -114,7 +116,9 @@ pub async fn render_animation(
     validate_width(width)?;
     validate_height(height)?;
 
-    let scene = ExportScene::new(device, queue, config);
+    let scene = ExportScene::new(device, queue, bounds_support, config)
+        .await
+        .map_err(ExportError::from)?;
     let target = RenderTarget::new(device, width, height);
     let background = config.colors.background.to_array();
     let base_color = scene.color_params();
@@ -176,13 +180,14 @@ pub async fn render_animation_standalone(
     params.validate()?;
     validate_width(width)?;
     validate_height(height)?;
-    let (device, queue) =
+    let (device, queue, bounds_support) =
         wgpu_util::create_headless_device("animation_export_device", "animation export")
             .await
             .map_err(ExportError::from)?;
     render_animation(
         &device,
         &queue,
+        bounds_support,
         config,
         width,
         height,

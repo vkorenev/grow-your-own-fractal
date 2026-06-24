@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use web_time::{Duration, Instant};
 
 use lsystem_core::{Config, Dimensions};
+use lsystem_renderer::bounds_compute::{self, BoundsComputeSupport};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
@@ -11,8 +12,8 @@ use lsystem_renderer::line_renderer::{
     TopologicalDepthSegment3D,
 };
 use lsystem_renderer::lsystem_bridge::{
-    SegmentData, SegmentData3D, color_params_from_config, geometry_to_depth_segments,
-    geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
+    color_params_from_config, geometry_to_depth_segments, geometry_to_depth_segments_3d,
+    geometry_to_segments, geometry_to_segments_3d,
 };
 
 enum ActiveScene {
@@ -76,6 +77,151 @@ pub struct CanvasRenderer {
     hue_offset_degrees: f32,
     background: wgpu::Color,
     needs_upload: bool,
+    scene_revision: u64,
+    pending_bounds_request: Option<PendingBoundsRequest>,
+}
+
+pub(crate) enum BoundsUpdate {
+    TwoD {
+        revision: u64,
+        bounds_min: [f32; 2],
+        bounds_max: [f32; 2],
+    },
+    ThreeD {
+        revision: u64,
+        bounds_min: [f32; 3],
+        bounds_max: [f32; 3],
+    },
+}
+
+pub(crate) enum PendingBoundsRequest {
+    TwoD {
+        revision: u64,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        support: BoundsComputeSupport,
+        segments: Vec<Segment2D>,
+        uploaded: lsystem_renderer::line_renderer::UploadedSegmentBuffer,
+    },
+    TwoDWithTopologicalDepth {
+        revision: u64,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        support: BoundsComputeSupport,
+        segments: Vec<TopologicalDepthSegment2D>,
+        uploaded: lsystem_renderer::line_renderer::UploadedSegmentBuffer,
+    },
+    ThreeD {
+        revision: u64,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        support: BoundsComputeSupport,
+        segments: Vec<Segment3D>,
+        uploaded: lsystem_renderer::line_renderer::UploadedSegmentBuffer,
+    },
+    ThreeDWithTopologicalDepth {
+        revision: u64,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        support: BoundsComputeSupport,
+        segments: Vec<TopologicalDepthSegment3D>,
+        uploaded: lsystem_renderer::line_renderer::UploadedSegmentBuffer,
+    },
+}
+
+impl PendingBoundsRequest {
+    pub(crate) async fn resolve(self) -> Option<BoundsUpdate> {
+        match self {
+            Self::TwoD {
+                revision,
+                device,
+                queue,
+                support,
+                segments,
+                uploaded,
+            } => bounds_compute::segment_bounds_2d(
+                &device,
+                &queue,
+                support,
+                &segments,
+                Some(uploaded),
+            )
+            .await
+            .map(|(bounds_min, bounds_max)| BoundsUpdate::TwoD {
+                revision,
+                bounds_min,
+                bounds_max,
+            })
+            .map_err(|error| log::warn!("GPU 2D bounds readback failed: {error}"))
+            .ok(),
+            Self::TwoDWithTopologicalDepth {
+                revision,
+                device,
+                queue,
+                support,
+                segments,
+                uploaded,
+            } => bounds_compute::depth_segment_bounds_2d(
+                &device,
+                &queue,
+                support,
+                &segments,
+                Some(uploaded),
+            )
+            .await
+            .map(|(bounds_min, bounds_max)| BoundsUpdate::TwoD {
+                revision,
+                bounds_min,
+                bounds_max,
+            })
+            .map_err(|error| log::warn!("GPU 2D depth bounds readback failed: {error}"))
+            .ok(),
+            Self::ThreeD {
+                revision,
+                device,
+                queue,
+                support,
+                segments,
+                uploaded,
+            } => bounds_compute::segment_bounds_3d(
+                &device,
+                &queue,
+                support,
+                &segments,
+                Some(uploaded),
+            )
+            .await
+            .map(|(bounds_min, bounds_max)| BoundsUpdate::ThreeD {
+                revision,
+                bounds_min,
+                bounds_max,
+            })
+            .map_err(|error| log::warn!("GPU 3D bounds readback failed: {error}"))
+            .ok(),
+            Self::ThreeDWithTopologicalDepth {
+                revision,
+                device,
+                queue,
+                support,
+                segments,
+                uploaded,
+            } => bounds_compute::depth_segment_bounds_3d(
+                &device,
+                &queue,
+                support,
+                &segments,
+                Some(uploaded),
+            )
+            .await
+            .map(|(bounds_min, bounds_max)| BoundsUpdate::ThreeD {
+                revision,
+                bounds_min,
+                bounds_max,
+            })
+            .map_err(|error| log::warn!("GPU 3D depth bounds readback failed: {error}"))
+            .ok(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +251,8 @@ impl CanvasRenderer {
             hue_offset_degrees: 0.0,
             background: wgpu::Color::BLACK,
             needs_upload: false,
+            scene_revision: 0,
+            pending_bounds_request: None,
         })
     }
 
@@ -129,6 +277,36 @@ impl CanvasRenderer {
 
     fn rebuild_scene(&mut self, config: &Config) {
         let started = Instant::now();
+        let previous_2d_bounds = match &self.scene {
+            ActiveScene::TwoD {
+                bounds_min,
+                bounds_max,
+                ..
+            }
+            | ActiveScene::TwoDWithTopologicalDepth {
+                bounds_min,
+                bounds_max,
+                ..
+            } => Some((*bounds_min, *bounds_max)),
+            _ => None,
+        };
+        let previous_3d_bounds = match &self.scene {
+            ActiveScene::ThreeD {
+                bounds_min,
+                bounds_max,
+                ..
+            }
+            | ActiveScene::ThreeDWithTopologicalDepth {
+                bounds_min,
+                bounds_max,
+                ..
+            } => Some((*bounds_min, *bounds_max)),
+            _ => None,
+        };
+        let bounds_2d = previous_2d_bounds.unwrap_or(([-1.0, -1.0], [1.0, 1.0]));
+        let bounds_3d = previous_3d_bounds.unwrap_or(([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]));
+        self.scene_revision = self.scene_revision.wrapping_add(1);
+        self.pending_bounds_request = None;
         match config.generation.dimensions {
             Dimensions::ThreeD => {
                 if config.generation.has_stack_directives() {
@@ -138,20 +316,17 @@ impl CanvasRenderer {
                     let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::ThreeDWithTopologicalDepth {
                         segments: data.segments,
-                        bounds_min: data.bounds_min,
-                        bounds_max: data.bounds_max,
+                        bounds_min: bounds_3d.0,
+                        bounds_max: bounds_3d.1,
                         max_topological_depth,
                     };
                 } else {
-                    let SegmentData3D {
-                        segments,
-                        bounds_min,
-                        bounds_max,
-                    } = geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
+                    let data =
+                        geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
                     self.scene = ActiveScene::ThreeD {
-                        segments,
-                        bounds_min,
-                        bounds_max,
+                        segments: data.segments,
+                        bounds_min: bounds_3d.0,
+                        bounds_max: bounds_3d.1,
                     };
                 }
             }
@@ -163,20 +338,16 @@ impl CanvasRenderer {
                     let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::TwoDWithTopologicalDepth {
                         segments: data.segments,
-                        bounds_min: data.bounds_min,
-                        bounds_max: data.bounds_max,
+                        bounds_min: bounds_2d.0,
+                        bounds_max: bounds_2d.1,
                         max_topological_depth,
                     };
                 } else {
-                    let SegmentData {
-                        segments,
-                        bounds_min,
-                        bounds_max,
-                    } = geometry_to_segments(lsystem_core::generate(&config.generation));
+                    let data = geometry_to_segments(lsystem_core::generate(&config.generation));
                     self.scene = ActiveScene::TwoD {
-                        segments,
-                        bounds_min,
-                        bounds_max,
+                        segments: data.segments,
+                        bounds_min: bounds_2d.0,
+                        bounds_max: bounds_2d.1,
                     };
                 }
             }
@@ -388,8 +559,64 @@ impl CanvasRenderer {
         Ok(())
     }
 
-    pub fn device_queue(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
-        (Arc::clone(&self.gpu.device), Arc::clone(&self.gpu.queue))
+    pub fn device_queue(&self) -> (Arc<wgpu::Device>, Arc<wgpu::Queue>, BoundsComputeSupport) {
+        (
+            Arc::clone(&self.gpu.device),
+            Arc::clone(&self.gpu.queue),
+            self.gpu.bounds_compute_support(),
+        )
+    }
+
+    pub(crate) fn take_pending_bounds_request(&mut self) -> Option<PendingBoundsRequest> {
+        self.pending_bounds_request.take()
+    }
+
+    pub(crate) fn apply_bounds_update(&mut self, update: BoundsUpdate) -> bool {
+        match (update, &mut self.scene) {
+            (
+                BoundsUpdate::TwoD {
+                    revision,
+                    bounds_min,
+                    bounds_max,
+                },
+                ActiveScene::TwoD {
+                    bounds_min: scene_min,
+                    bounds_max: scene_max,
+                    ..
+                }
+                | ActiveScene::TwoDWithTopologicalDepth {
+                    bounds_min: scene_min,
+                    bounds_max: scene_max,
+                    ..
+                },
+            ) if revision == self.scene_revision => {
+                *scene_min = bounds_min;
+                *scene_max = bounds_max;
+                true
+            }
+            (
+                BoundsUpdate::ThreeD {
+                    revision,
+                    bounds_min,
+                    bounds_max,
+                },
+                ActiveScene::ThreeD {
+                    bounds_min: scene_min,
+                    bounds_max: scene_max,
+                    ..
+                }
+                | ActiveScene::ThreeDWithTopologicalDepth {
+                    bounds_min: scene_min,
+                    bounds_max: scene_max,
+                    ..
+                },
+            ) if revision == self.scene_revision => {
+                *scene_min = bounds_min;
+                *scene_max = bounds_max;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn camera(&self) -> Camera {
@@ -405,6 +632,7 @@ impl CanvasRenderer {
         } = frame;
 
         let started = self.needs_upload.then(Instant::now);
+        let mut bounds_request = None;
 
         match &self.scene {
             ActiveScene::TwoD {
@@ -419,6 +647,16 @@ impl CanvasRenderer {
                         segments,
                         self.effective_color_params(),
                     );
+                    if let Some(uploaded) = self.pipeline_2d.active_uploaded_segment_buffer() {
+                        bounds_request = Some(PendingBoundsRequest::TwoD {
+                            revision: self.scene_revision,
+                            device: Arc::clone(&self.gpu.device),
+                            queue: Arc::clone(&self.gpu.queue),
+                            support: self.gpu.bounds_compute_support(),
+                            segments: segments.clone(),
+                            uploaded,
+                        });
+                    }
                     self.needs_upload = false;
                 }
                 self.pipeline_2d.write_transform(
@@ -444,6 +682,16 @@ impl CanvasRenderer {
                         segments,
                         self.effective_color_params(),
                     );
+                    if let Some(uploaded) = self.pipeline_2d.active_uploaded_segment_buffer() {
+                        bounds_request = Some(PendingBoundsRequest::TwoDWithTopologicalDepth {
+                            revision: self.scene_revision,
+                            device: Arc::clone(&self.gpu.device),
+                            queue: Arc::clone(&self.gpu.queue),
+                            support: self.gpu.bounds_compute_support(),
+                            segments: segments.clone(),
+                            uploaded,
+                        });
+                    }
                     self.needs_upload = false;
                 }
                 self.pipeline_2d.write_transform(
@@ -468,6 +716,16 @@ impl CanvasRenderer {
                         segments,
                         self.effective_color_params(),
                     );
+                    if let Some(uploaded) = self.pipeline_3d.active_uploaded_segment_buffer() {
+                        bounds_request = Some(PendingBoundsRequest::ThreeD {
+                            revision: self.scene_revision,
+                            device: Arc::clone(&self.gpu.device),
+                            queue: Arc::clone(&self.gpu.queue),
+                            support: self.gpu.bounds_compute_support(),
+                            segments: segments.clone(),
+                            uploaded,
+                        });
+                    }
                     self.needs_upload = false;
                 }
                 self.pipeline_3d.write_mvp(
@@ -493,6 +751,16 @@ impl CanvasRenderer {
                         segments,
                         self.effective_color_params(),
                     );
+                    if let Some(uploaded) = self.pipeline_3d.active_uploaded_segment_buffer() {
+                        bounds_request = Some(PendingBoundsRequest::ThreeDWithTopologicalDepth {
+                            revision: self.scene_revision,
+                            device: Arc::clone(&self.gpu.device),
+                            queue: Arc::clone(&self.gpu.queue),
+                            support: self.gpu.bounds_compute_support(),
+                            segments: segments.clone(),
+                            uploaded,
+                        });
+                    }
                     self.needs_upload = false;
                 }
                 self.pipeline_3d.write_mvp(
@@ -536,6 +804,7 @@ impl CanvasRenderer {
 
         self.gpu
             .end_frame(*frame, encoder, reconfigure_after_present);
+        self.pending_bounds_request = bounds_request;
 
         if let Some(started) = started {
             let segment_count = self.scene.total_segments();

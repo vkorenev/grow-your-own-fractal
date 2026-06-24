@@ -3,6 +3,7 @@ use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{ColorConfig, Config, Dimensions};
+use lsystem_renderer::bounds_compute;
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -91,13 +92,14 @@ impl Scene {
     fn from_segment_data_2d(
         colors: &ColorConfig,
         data: SegmentData,
+        bounds: bounds_compute::Bounds2D,
         camera: Camera,
         revision: u64,
     ) -> Self {
         let geometry = SceneGeometry::TwoD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: bounds.0,
+            bounds_max: bounds.1,
         };
         Self {
             color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
@@ -113,13 +115,14 @@ impl Scene {
     fn from_segment_data_3d(
         colors: &ColorConfig,
         data: SegmentData3D,
+        bounds: bounds_compute::Bounds3D,
         camera: Camera,
         revision: u64,
     ) -> Self {
         let geometry = SceneGeometry::ThreeD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: bounds.0,
+            bounds_max: bounds.1,
         };
         Self {
             color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
@@ -135,14 +138,15 @@ impl Scene {
     fn from_depth_segment_data_2d(
         colors: &ColorConfig,
         data: TopologicalDepthSegmentData,
+        bounds: bounds_compute::Bounds2D,
         camera: Camera,
         revision: u64,
     ) -> Self {
         let max_topological_depth = data.max_topological_depth();
         let geometry = SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: bounds.0,
+            bounds_max: bounds.1,
             max_topological_depth,
         };
         Self {
@@ -163,14 +167,15 @@ impl Scene {
     fn from_depth_segment_data_3d(
         colors: &ColorConfig,
         data: TopologicalDepthSegmentData3D,
+        bounds: bounds_compute::Bounds3D,
         camera: Camera,
         revision: u64,
     ) -> Self {
         let max_topological_depth = data.max_topological_depth();
         let geometry = SceneGeometry::ThreeDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: bounds.0,
+            bounds_max: bounds.1,
             max_topological_depth,
         };
         Self {
@@ -370,14 +375,17 @@ pub(super) async fn build_scene(
                 }
 
                 log_generation_duration(started, segments_seen);
+                let data = builder.finish();
+                let bounds =
+                    bounds_compute::standalone_depth_segment_bounds_3d(&data.segments).await;
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
 
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_depth_segment_data_3d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
+                        &colors, data, bounds, camera, generation,
                     ),
                 }
             } else {
@@ -401,15 +409,15 @@ pub(super) async fn build_scene(
                 }
 
                 log_generation_duration(started, segments_seen);
+                let data = builder.finish();
+                let bounds = bounds_compute::standalone_segment_bounds_3d(&data.segments).await;
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
 
                 SceneBuildResult::Ready {
                     generation,
-                    scene: Scene::from_segment_data_3d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
-                    ),
+                    scene: Scene::from_segment_data_3d(&colors, data, bounds, camera, generation),
                 }
             }
         }
@@ -440,14 +448,17 @@ pub(super) async fn build_scene(
                 }
 
                 log_generation_duration(started, segments_seen);
+                let data = builder.finish();
+                let bounds =
+                    bounds_compute::standalone_depth_segment_bounds_2d(&data.segments).await;
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
 
                 SceneBuildResult::Ready {
                     generation,
                     scene: Scene::from_depth_segment_data_2d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
+                        &colors, data, bounds, camera, generation,
                     ),
                 }
             } else {
@@ -471,15 +482,15 @@ pub(super) async fn build_scene(
                 }
 
                 log_generation_duration(started, segments_seen);
+                let data = builder.finish();
+                let bounds = bounds_compute::standalone_segment_bounds_2d(&data.segments).await;
+                if is_cancelled(generation, &current_generation) {
+                    return SceneBuildResult::Cancelled;
+                }
 
                 SceneBuildResult::Ready {
                     generation,
-                    scene: Scene::from_segment_data_2d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
-                    ),
+                    scene: Scene::from_segment_data_2d(&colors, data, bounds, camera, generation),
                 }
             }
         }

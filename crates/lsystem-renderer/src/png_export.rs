@@ -3,8 +3,10 @@ use std::fmt::{Display, Formatter};
 
 use lsystem_core::Config;
 
+use crate::bounds_compute::BoundsComputeSupport;
 use crate::camera::Camera;
-use crate::offscreen::{ExportScene, ReadbackError, RenderTarget, validate_height, validate_width};
+use crate::offscreen::{ExportScene, RenderTarget, validate_height, validate_width};
+use crate::readback::ReadbackError;
 use crate::wgpu_util::{self, CreateDeviceError};
 
 /// Minimum export width and height in pixels accepted by [`render_png`] and
@@ -96,6 +98,7 @@ impl From<CreateDeviceError> for ExportError {
 pub async fn render_png(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    bounds_support: BoundsComputeSupport,
     config: &Config,
     width: u32,
     height: u32,
@@ -104,7 +107,7 @@ pub async fn render_png(
     validate_width(width)?;
     validate_height(height)?;
 
-    let scene = ExportScene::new(device, queue, config);
+    let scene = ExportScene::new(device, queue, bounds_support, config).await?;
     scene.write_camera(queue, camera, width, height);
 
     let target = RenderTarget::new(device, width, height);
@@ -129,9 +132,18 @@ pub async fn render_png_standalone(
 ) -> Result<PngExport, ExportError> {
     validate_width(width)?;
     validate_height(height)?;
-    let (device, queue) =
+    let (device, queue, bounds_support) =
         wgpu_util::create_headless_device("png_export_device", "PNG export").await?;
-    render_png(&device, &queue, config, width, height, camera).await
+    render_png(
+        &device,
+        &queue,
+        bounds_support,
+        config,
+        width,
+        height,
+        camera,
+    )
+    .await
 }
 
 fn encode_png_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, ExportError> {
@@ -187,7 +199,7 @@ mod gpu_tests {
 
     fn assert_png_renders(config: lsystem_core::Config) {
         let (render_result, validation_error) = pollster::block_on(async {
-            let (device, queue) =
+            let (device, queue, bounds_support) =
                 crate::wgpu_util::create_headless_device("png_export_test_device", "PNG export")
                     .await
                     .expect("failed to create headless test device");
@@ -196,6 +208,7 @@ mod gpu_tests {
             let render_result = render_png(
                 &device,
                 &queue,
+                bounds_support,
                 &config,
                 256,
                 128,
