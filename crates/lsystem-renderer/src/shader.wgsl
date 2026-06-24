@@ -2,13 +2,11 @@ struct ColorParams {
     mode: u32,
     total_segments: u32,
     max_topological_depth: u32,
-    _pad1: u32,
     color_start: vec4<f32>,
     color_end: vec4<f32>,
     hue_start: f32,
     saturation: f32,
     value: f32,
-    _pad2: f32,
 }
 
 @group(0) @binding(0)

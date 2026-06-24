@@ -103,6 +103,18 @@ line colors use an externally tagged TOML shape (`solid`, `gradient`,
 `lsystem-renderer` owns the shared wgpu machinery used by both apps and by
 offscreen exports.
 
+- `build.rs` generates Rust bindings from `shader.wgsl` at build time via
+  `wgsl_to_wgpu`, validating `shader.wgsl` before compiling
+  `lsystem-renderer`'s Rust sources. `line_renderer.rs` sources its uniform
+  types (`ColorParams`, `Transform`, `Mvp`) and shader entry-point constants
+  from these generated bindings rather than hand-mirroring them, so most
+  field, binding, and entry-point renames in `shader.wgsl` now fail the Rust
+  build instead of only surfacing as a runtime wgpu validation error. Bind
+  group layouts and bind groups are built from the generated per-group
+  helpers, but pipeline layouts are still assembled by hand because the 2D
+  and 3D pipelines bind different, sparse subsets of the shader's three bind
+  groups. Vertex instance records (`Segment2D`/`Segment3D` and their
+  topological-depth variants) remain hand-mirrored.
 - `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   2D/3D line pipelines, color uniforms, and surface frame handling.
@@ -117,9 +129,10 @@ Line rendering is instanced: one GPU record represents one segment, and the
 shader selects the start or end point from `vertex_index`. Buffers grow to the
 next power-of-two capacity and are reused through `Queue::write_buffer`.
 
-The 2D and 3D line pipelines are separate because their transform uniforms and
-shaders differ. They share the same color uniform model and segment-buffer
-strategy.
+The 2D and 3D line pipelines are separate because they use different vertex
+entry points, vertex-buffer layouts, and transform uniforms within the shared
+`shader.wgsl` module. They share the same color uniform model and
+segment-buffer strategy.
 
 ## Color And Depth
 
@@ -170,3 +183,8 @@ widget passes `wgpu` types (device, queue, render pass) to the custom primitive
 at the crate boundary; mismatched major versions produce a compile-time type
 error. Update those two dependencies together and verify native plus wasm
 builds.
+
+`lsystem-renderer`'s `wgsl_to_wgpu` build-dependency generates code against
+`naga`/`wgpu-types` types that must match the workspace `wgpu` major version.
+When updating `wgpu`, also check whether `wgsl_to_wgpu` needs a matching
+version bump.

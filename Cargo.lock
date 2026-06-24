@@ -530,6 +530,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629a66d692cb9ff1a1c664e41771b3dcaf961985a9774c0eb0bd1b51cf60a48"
 
 [[package]]
+name = "case"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd6c0e7b807d60291f42f33f58480c0bfafe28ed08286446f45e463728cf9c1c"
+
+[[package]]
 name = "cc"
 version = "1.2.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2423,6 +2429,7 @@ dependencies = [
  "png",
  "pollster",
  "wgpu",
+ "wgsl_to_wgpu",
 ]
 
 [[package]]
@@ -4938,6 +4945,23 @@ dependencies = [
  "log",
  "raw-window-handle",
  "web-sys",
+]
+
+[[package]]
+name = "wgsl_to_wgpu"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b744c51f143c398cb2b197e60f77ec7bb54e7b9131be4894a166ff54cf417e4a"
+dependencies = [
+ "case",
+ "naga",
+ "pathdiff",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "thiserror 2.0.18",
+ "wgpu-types",
 ]
 
 [[package]]
