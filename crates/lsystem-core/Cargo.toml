@@ -10,3 +10,10 @@ svg = []
 [dependencies]
 glam = { workspace = true, features = ["bytemuck"] }
 thiserror.workspace = true
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "generation"
+harness = false

@@ -73,6 +73,23 @@ Run SVG export tests:
 cargo test -p lsystem-core --features svg svg_export
 ```
 
+## Benchmarking
+
+Run fractal generation microbenchmarks:
+
+```sh
+cargo bench -p lsystem-core --bench generation
+```
+
+Run offscreen renderer microbenchmarks:
+
+```sh
+cargo bench -p lsystem-renderer --features png --bench offscreen_render
+```
+
+The renderer benchmark measures offscreen RGBA rendering and GPU readback. It
+does not include PNG encoding time.
+
 ## Full Verification
 
 Run the same checks CI runs when a change affects code, build configuration,

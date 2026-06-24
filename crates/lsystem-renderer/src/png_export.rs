@@ -20,6 +20,15 @@ pub struct PngExport {
     pub bytes: Vec<u8>,
 }
 
+/// Raw RGBA pixels rendered offscreen, together with their pixel dimensions.
+///
+/// Pixels are tightly packed in row-major order, four bytes per pixel.
+pub struct RgbaExport {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 /// Failures shared by still-PNG and APNG export.
 #[derive(Debug)]
 pub enum ExportError {
@@ -101,6 +110,28 @@ pub async fn render_png(
     height: u32,
     camera: &Camera,
 ) -> Result<PngExport, ExportError> {
+    let rgba = render_rgba(device, queue, config, width, height, camera).await?;
+    let bytes = encode_png_rgba(width, height, &rgba.rgba)?;
+    Ok(PngExport {
+        width,
+        height,
+        bytes,
+    })
+}
+
+/// Renders `config` to tightly packed RGBA bytes of the given dimensions on
+/// `device`, without PNG encoding.
+///
+/// `camera` selects the 3D orientation; 2D export always fits the geometry
+/// bounds and ignores camera pan/zoom.
+pub async fn render_rgba(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    config: &Config,
+    width: u32,
+    height: u32,
+    camera: &Camera,
+) -> Result<RgbaExport, ExportError> {
     validate_width(width)?;
     validate_height(height)?;
 
@@ -112,12 +143,25 @@ pub async fn render_png(
         .render_frame(device, queue, config.colors.background.to_array(), &scene)
         .await?;
 
-    let bytes = encode_png_rgba(width, height, &rgba)?;
-    Ok(PngExport {
+    Ok(RgbaExport {
         width,
         height,
-        bytes,
+        rgba,
     })
+}
+
+/// Like [`render_rgba`], but creates its own headless GPU device.
+pub async fn render_rgba_standalone(
+    config: &Config,
+    width: u32,
+    height: u32,
+    camera: &Camera,
+) -> Result<RgbaExport, ExportError> {
+    validate_width(width)?;
+    validate_height(height)?;
+    let (device, queue) =
+        wgpu_util::create_headless_device("rgba_export_device", "RGBA export").await?;
+    render_rgba(&device, &queue, config, width, height, camera).await
 }
 
 /// Like [`render_png`], but creates its own headless GPU device.
@@ -219,6 +263,38 @@ mod gpu_tests {
         assert_eq!((info.width, info.height), (256, 128));
     }
 
+    fn assert_rgba_renders_without_png_encoding(config: lsystem_core::Config) {
+        let (render_result, validation_error) = pollster::block_on(async {
+            let (device, queue) =
+                crate::wgpu_util::create_headless_device("rgba_export_test_device", "RGBA export")
+                    .await
+                    .expect("failed to create headless test device");
+
+            let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let render_result = render_rgba(
+                &device,
+                &queue,
+                &config,
+                64,
+                32,
+                &crate::camera::Camera::default(),
+            )
+            .await;
+            let validation_error = error_scope.pop().await;
+            (render_result, validation_error)
+        });
+        assert!(
+            validation_error.is_none(),
+            "wgpu validation error: {validation_error:?}"
+        );
+        let export = render_result.expect("render_rgba failed");
+
+        assert_eq!(export.width, 64);
+        assert_eq!(export.height, 32);
+        assert_eq!(export.rgba.len(), 64 * 32 * 4);
+        assert_ne!(&export.rgba[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
     fn depth_gradient_config(dimensions: Dimensions) -> lsystem_core::Config {
         let mut config = trivial_config();
         config.generation.dimensions = dimensions;
@@ -234,6 +310,11 @@ mod gpu_tests {
     #[test]
     fn png_standalone_non_square_dimensions() {
         assert_png_renders(trivial_config());
+    }
+
+    #[test]
+    fn rgba_export_renders_trivial_2d_config_without_png_encoding() {
+        assert_rgba_renders_without_png_encoding(trivial_config());
     }
 
     #[test]

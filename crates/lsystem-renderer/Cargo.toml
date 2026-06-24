@@ -25,4 +25,10 @@ wgpu.workspace = true
 wgsl_to_wgpu = "0.18"
 
 [dev-dependencies]
+criterion = "0.8.2"
 pollster = "0.4"
+
+[[bench]]
+name = "offscreen_render"
+harness = false
+required-features = ["png"]
