@@ -8,48 +8,26 @@ use crate::line_renderer::{
 
 pub struct SegmentData {
     pub segments: Vec<Segment2D>,
-    pub bounds_min: [f32; 2],
-    pub bounds_max: [f32; 2],
 }
 
 pub struct SegmentDataBuilder {
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
     segments: Vec<Segment2D>,
 }
 
 impl SegmentDataBuilder {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
             segments: Vec::new(),
         }
     }
 
     pub fn push_segment(&mut self, [a, b]: [Vec2; 2]) {
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
         self.segments.push(Segment2D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0], [1.0, 1.0])
-        } else {
-            ([self.min_x, self.min_y], [self.max_x, self.max_y])
-        };
-
         SegmentData {
             segments: self.segments,
-            bounds_min,
-            bounds_max,
         }
     }
 }
@@ -70,8 +48,6 @@ pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> Segmen
 
 pub struct TopologicalDepthSegmentData {
     pub segments: Vec<TopologicalDepthSegment2D>,
-    pub bounds_min: [f32; 2],
-    pub bounds_max: [f32; 2],
     max_topological_depth: u32,
 }
 
@@ -82,10 +58,6 @@ impl TopologicalDepthSegmentData {
 }
 
 pub struct TopologicalDepthSegmentDataBuilder {
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
     max_topological_depth: u32,
     segments: Vec<TopologicalDepthSegment2D>,
 }
@@ -93,10 +65,6 @@ pub struct TopologicalDepthSegmentDataBuilder {
 impl TopologicalDepthSegmentDataBuilder {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
             max_topological_depth: 0,
             segments: Vec::new(),
         }
@@ -104,10 +72,6 @@ impl TopologicalDepthSegmentDataBuilder {
 
     pub fn push_segment(&mut self, segment: Segment2DWithTopologicalDepth) {
         let [a, b] = segment.points;
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
         self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
         self.segments.push(TopologicalDepthSegment2D {
             start: a,
@@ -117,16 +81,8 @@ impl TopologicalDepthSegmentDataBuilder {
     }
 
     pub fn finish(self) -> TopologicalDepthSegmentData {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0], [1.0, 1.0])
-        } else {
-            ([self.min_x, self.min_y], [self.max_x, self.max_y])
-        };
-
         TopologicalDepthSegmentData {
             segments: self.segments,
-            bounds_min,
-            bounds_max,
             max_topological_depth: self.max_topological_depth,
         }
     }
@@ -150,57 +106,26 @@ pub fn geometry_to_depth_segments(
 
 pub struct SegmentData3D {
     pub segments: Vec<Segment3D>,
-    pub bounds_min: [f32; 3],
-    pub bounds_max: [f32; 3],
 }
 
 pub struct SegmentDataBuilder3D {
-    min_x: f32,
-    min_y: f32,
-    min_z: f32,
-    max_x: f32,
-    max_y: f32,
-    max_z: f32,
     segments: Vec<Segment3D>,
 }
 
 impl SegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            min_z: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
-            max_z: f32::NEG_INFINITY,
             segments: Vec::new(),
         }
     }
 
     pub fn push_segment(&mut self, [a, b]: [Vec3; 2]) {
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.min_z = self.min_z.min(a.z).min(b.z);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
-        self.max_z = self.max_z.max(a.z).max(b.z);
         self.segments.push(Segment3D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData3D {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
-        } else {
-            (
-                [self.min_x, self.min_y, self.min_z],
-                [self.max_x, self.max_y, self.max_z],
-            )
-        };
-
         SegmentData3D {
             segments: self.segments,
-            bounds_min,
-            bounds_max,
         }
     }
 }
@@ -221,8 +146,6 @@ pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> Seg
 
 pub struct TopologicalDepthSegmentData3D {
     pub segments: Vec<TopologicalDepthSegment3D>,
-    pub bounds_min: [f32; 3],
-    pub bounds_max: [f32; 3],
     max_topological_depth: u32,
 }
 
@@ -233,12 +156,6 @@ impl TopologicalDepthSegmentData3D {
 }
 
 pub struct TopologicalDepthSegmentDataBuilder3D {
-    min_x: f32,
-    min_y: f32,
-    min_z: f32,
-    max_x: f32,
-    max_y: f32,
-    max_z: f32,
     max_topological_depth: u32,
     segments: Vec<TopologicalDepthSegment3D>,
 }
@@ -246,12 +163,6 @@ pub struct TopologicalDepthSegmentDataBuilder3D {
 impl TopologicalDepthSegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            min_z: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
-            max_z: f32::NEG_INFINITY,
             max_topological_depth: 0,
             segments: Vec::new(),
         }
@@ -259,12 +170,6 @@ impl TopologicalDepthSegmentDataBuilder3D {
 
     pub fn push_segment(&mut self, segment: Segment3DWithTopologicalDepth) {
         let [a, b] = segment.points;
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.min_z = self.min_z.min(a.z).min(b.z);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
-        self.max_z = self.max_z.max(a.z).max(b.z);
         self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
         self.segments.push(TopologicalDepthSegment3D {
             start: a,
@@ -274,19 +179,8 @@ impl TopologicalDepthSegmentDataBuilder3D {
     }
 
     pub fn finish(self) -> TopologicalDepthSegmentData3D {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
-        } else {
-            (
-                [self.min_x, self.min_y, self.min_z],
-                [self.max_x, self.max_y, self.max_z],
-            )
-        };
-
         TopologicalDepthSegmentData3D {
             segments: self.segments,
-            bounds_min,
-            bounds_max,
             max_topological_depth: self.max_topological_depth,
         }
     }
@@ -524,30 +418,22 @@ mod tests {
     }
 
     #[test]
-    fn empty_geometry_uses_fallback_bounds() {
-        let SegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-        } = geometry_to_segments(generate(&cfg("A")));
+    fn empty_geometry_collects_no_segments() {
+        let SegmentData { segments } = geometry_to_segments(generate(&cfg("A")));
         assert!(segments.is_empty());
-        assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
-        assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
     }
 
     #[test]
-    fn empty_depth_geometry_uses_fallback_bounds_and_zero_max_depth() {
+    fn empty_depth_geometry_collects_no_segments_and_zero_max_depth() {
         let data =
             geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(&cfg("A")));
 
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
-        assert!(close(data.bounds_min[0], -1.0) && close(data.bounds_min[1], -1.0));
-        assert!(close(data.bounds_max[0], 1.0) && close(data.bounds_max[1], 1.0));
     }
 
     #[test]
-    fn empty_depth_geometry_3d_uses_fallback_bounds_and_zero_max_depth() {
+    fn empty_depth_geometry_3d_collects_no_segments_and_zero_max_depth() {
         let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
             &GenerationConfig {
                 dimensions: Dimensions::ThreeD,
@@ -562,34 +448,20 @@ mod tests {
 
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
-        assert_eq!(data.bounds_min, [-1.0, -1.0, -1.0]);
-        assert_eq!(data.bounds_max, [1.0, 1.0, 1.0]);
     }
 
     #[test]
-    fn single_segment_produces_one_segment_record_and_tight_bounds() {
-        let SegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-        } = geometry_to_segments(generate(&cfg("F")));
+    fn single_segment_produces_one_segment_record() {
+        let SegmentData { segments } = geometry_to_segments(generate(&cfg("F")));
         assert_eq!(segments.len(), 1);
         assert!(close(segments[0].start[0], 0.0) && close(segments[0].start[1], 0.0));
         assert!(close(segments[0].end[0], 1.0) && close(segments[0].end[1], 0.0));
-        assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
-        assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 0.0));
     }
 
     #[test]
-    fn bounds_are_tight_over_all_segments() {
-        let SegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-        } = geometry_to_segments(generate(&cfg("F+F-F")));
+    fn geometry_collects_all_segments() {
+        let SegmentData { segments } = geometry_to_segments(generate(&cfg("F+F-F")));
         assert_eq!(segments.len(), 3);
-        assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
-        assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
     }
 
     #[test]
@@ -603,8 +475,6 @@ mod tests {
         assert_eq!(data.segments[1].topological_depth, 1);
         assert_eq!(data.segments[2].topological_depth, 1);
         assert_eq!(data.max_topological_depth(), 1);
-        assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
-        assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
     }
 
     #[test]
@@ -626,9 +496,6 @@ mod tests {
         assert_eq!(data.segments[1].topological_depth, 1);
         assert_eq!(data.segments[2].topological_depth, 1);
         assert_eq!(data.max_topological_depth(), 1);
-        assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
-        assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
-        assert!(close(data.bounds_min[2], 0.0) && close(data.bounds_max[2], 0.0));
     }
 
     #[test]

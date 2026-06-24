@@ -1,10 +1,8 @@
 //! Offscreen GPU rendering shared by the PNG and APNG export paths.
 
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-
 use lsystem_core::{Config, Dimensions};
 
+use crate::bounds_compute::{self, BoundsComputeSupport};
 use crate::camera::Camera;
 use crate::line_renderer::{ColorParams, LinePipeline2D, LinePipeline3D};
 use crate::lsystem_bridge::{
@@ -12,30 +10,10 @@ use crate::lsystem_bridge::{
     geometry_to_segments, geometry_to_segments_3d, viewport_transform,
 };
 use crate::png_export::{ExportError, MAX_DIMENSION, MIN_DIMENSION};
+use crate::readback::{ReadbackError, map_read_buffer};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const BYTES_PER_PIXEL: u32 = 4;
-
-#[derive(Debug)]
-pub(crate) enum ReadbackError {
-    Map(wgpu::BufferAsyncError),
-    ChannelClosed,
-    // Only constructed on non-wasm; wasm uses a polling loop that doesn't return PollError
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    Poll(wgpu::PollError),
-}
-
-impl Display for ReadbackError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Map(e) => write!(f, "failed to map readback buffer: {e}"),
-            Self::ChannelClosed => write!(f, "readback callback was dropped"),
-            Self::Poll(e) => write!(f, "failed to poll GPU device: {e}"),
-        }
-    }
-}
-
-impl Error for ReadbackError {}
 
 pub(crate) fn validate_width(width: u32) -> Result<(), ExportError> {
     if (MIN_DIMENSION..=MAX_DIMENSION).contains(&width) {
@@ -76,7 +54,12 @@ pub(crate) struct ExportScene {
 
 impl ExportScene {
     /// Generates the L-system geometry for `config` and uploads it to `device`.
-    pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue, config: &Config) -> Self {
+    pub(crate) async fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bounds_support: BoundsComputeSupport,
+        config: &Config,
+    ) -> Result<Self, ReadbackError> {
         let line = &config.colors.line;
         let needs_depth =
             line.needs_topological_depth() && config.generation.has_stack_directives();
@@ -93,21 +76,37 @@ impl ExportScene {
                         Some(data.max_topological_depth()),
                     );
                     pipeline.upload_with_topological_depth(device, queue, &data.segments, cp);
-                    (cp, data.bounds_min, data.bounds_max)
+                    let bounds = bounds_compute::depth_segment_bounds_2d(
+                        device,
+                        queue,
+                        bounds_support,
+                        &data.segments,
+                        pipeline.active_uploaded_segment_buffer(),
+                    )
+                    .await?;
+                    (cp, bounds.0, bounds.1)
                 } else {
                     let data = geometry_to_segments(lsystem_core::generate(&config.generation));
                     let cp = color_params_from_config(line, data.segments.len() as u32, None);
                     pipeline.upload(device, queue, &data.segments, cp);
-                    (cp, data.bounds_min, data.bounds_max)
+                    let bounds = bounds_compute::segment_bounds_2d(
+                        device,
+                        queue,
+                        bounds_support,
+                        &data.segments,
+                        pipeline.active_uploaded_segment_buffer(),
+                    )
+                    .await?;
+                    (cp, bounds.0, bounds.1)
                 };
-                Self {
+                Ok(Self {
                     geometry: SceneGeometry::TwoD {
                         pipeline,
                         bounds_min,
                         bounds_max,
                     },
                     color_params,
-                }
+                })
             }
             Dimensions::ThreeD => {
                 let mut pipeline = LinePipeline3D::new(device, FORMAT);
@@ -121,22 +120,38 @@ impl ExportScene {
                         Some(data.max_topological_depth()),
                     );
                     pipeline.upload_with_topological_depth(device, queue, &data.segments, cp);
-                    (cp, data.bounds_min, data.bounds_max)
+                    let bounds = bounds_compute::depth_segment_bounds_3d(
+                        device,
+                        queue,
+                        bounds_support,
+                        &data.segments,
+                        pipeline.active_uploaded_segment_buffer(),
+                    )
+                    .await?;
+                    (cp, bounds.0, bounds.1)
                 } else {
                     let data =
                         geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
                     let cp = color_params_from_config(line, data.segments.len() as u32, None);
                     pipeline.upload(device, queue, &data.segments, cp);
-                    (cp, data.bounds_min, data.bounds_max)
+                    let bounds = bounds_compute::segment_bounds_3d(
+                        device,
+                        queue,
+                        bounds_support,
+                        &data.segments,
+                        pipeline.active_uploaded_segment_buffer(),
+                    )
+                    .await?;
+                    (cp, bounds.0, bounds.1)
                 };
-                Self {
+                Ok(Self {
                     geometry: SceneGeometry::ThreeD {
                         pipeline,
                         bounds_min,
                         bounds_max,
                     },
                     color_params,
-                }
+                })
             }
         }
     }
@@ -288,42 +303,7 @@ impl RenderTarget {
         );
         queue.submit([encoder.finish()]);
 
-        let (sender, receiver) = futures_channel::oneshot::channel();
-        self.readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result);
-            });
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })
-                .map_err(ReadbackError::Poll)?;
-            receiver
-                .await
-                .map_err(|_| ReadbackError::ChannelClosed)?
-                .map_err(ReadbackError::Map)?;
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let mut receiver = receiver;
-            loop {
-                let _ = device.poll(wgpu::PollType::Poll);
-                match receiver.try_recv() {
-                    Ok(Some(result)) => {
-                        result.map_err(ReadbackError::Map)?;
-                        break;
-                    }
-                    Ok(None) => {
-                        gloo_timers::future::TimeoutFuture::new(0).await;
-                    }
-                    Err(_) => return Err(ReadbackError::ChannelClosed),
-                }
-            }
-        }
+        map_read_buffer(device, &self.readback).await?;
         let rgba = {
             let mapped = self.readback.slice(..).get_mapped_range();
             self.layout.strip_padding(&mapped)

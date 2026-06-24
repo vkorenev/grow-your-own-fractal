@@ -31,15 +31,18 @@ GenerationConfig
   -> Segments2D / Segments3D
   -> renderer bridge segment records
   -> wgpu instance buffer
+  -> GPU bounds reduction for camera/export fitting
 ```
 
 The expansion and turtle layers are streaming iterators. They do not build the
 full expanded string or an intermediate vertex list before yielding geometry.
-The renderer bridge collects only the GPU instance records needed for upload.
-Do not introduce another collection of expanded symbols, raw geometry, or
-vertices; the renderer bridge's segment-instance `Vec` is the intentional
-collection point before GPU upload. Adding another large collection breaks the
-memory-bounded property for high iteration counts.
+The renderer bridge collects only the GPU instance records needed for upload;
+renderer bounds are reduced from those records with GPU compute after upload,
+falling back to a CPU reduction only when the selected adapter lacks compute
+shader support. Do not introduce another collection of expanded symbols, raw
+geometry, or vertices; the renderer bridge's segment-instance `Vec` is the
+intentional collection point before GPU upload. Adding another large collection
+breaks the memory-bounded property for high iteration counts.
 
 Config editing has a separate parse/validate/resolve pipeline.
 
@@ -115,10 +118,14 @@ offscreen exports.
   are still assembled by hand because the 2D and 3D pipelines bind different,
   sparse subsets of the shader's three bind groups.
 - `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom.
-- `line_renderer.rs` defines GPU instance records, growable vertex buffers,
-  2D/3D line pipelines, color uniforms, and surface frame handling.
+- `line_renderer.rs` defines GPU instance records, growable storage-capable
+  vertex buffers, 2D/3D line pipelines, color uniforms, and surface frame
+  handling.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
   maps `LineColorConfig` into shader color parameters.
+- `bounds_compute.rs` reduces uploaded segment buffers to 2D/3D bounds with a
+  compute shader and async readback; SVG export keeps its separate CPU bounds
+  loop in `lsystem-core`.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature.
 - `wgpu_util.rs` centralizes instance/device setup and error logging for native

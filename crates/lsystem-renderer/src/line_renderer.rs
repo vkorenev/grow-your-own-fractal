@@ -151,6 +151,12 @@ struct GrowableVertexBuffer {
     count: u32,
 }
 
+#[derive(Clone)]
+pub struct UploadedSegmentBuffer {
+    pub buffer: wgpu::Buffer,
+    pub count: u32,
+}
+
 impl GrowableVertexBuffer {
     fn new() -> Self {
         Self {
@@ -174,7 +180,9 @@ impl GrowableVertexBuffer {
                 self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(label),
                     size: self.capacity,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    usage: wgpu::BufferUsages::VERTEX
+                        | wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }));
             }
@@ -183,6 +191,13 @@ impl GrowableVertexBuffer {
             }
         }
         self.count = segments.len() as u32;
+    }
+
+    fn uploaded(&self) -> Option<UploadedSegmentBuffer> {
+        Some(UploadedSegmentBuffer {
+            buffer: self.buffer.as_ref()?.clone(),
+            count: self.count,
+        })
     }
 }
 
@@ -381,6 +396,13 @@ impl LinePipeline2D {
         queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
+    pub fn active_uploaded_segment_buffer(&self) -> Option<UploadedSegmentBuffer> {
+        match self.active_segment_buffer {
+            ActiveSegmentBuffer::Normal => self.segment_buffer.uploaded(),
+            ActiveSegmentBuffer::TopologicalDepth => self.depth_segment_buffer.uploaded(),
+        }
+    }
+
     pub fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
         queue.write_buffer(&self.uniform_buffer, 0, &transform.uniform_bytes());
     }
@@ -536,6 +558,13 @@ impl LinePipeline3D {
         queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
+    pub fn active_uploaded_segment_buffer(&self) -> Option<UploadedSegmentBuffer> {
+        match self.active_segment_buffer {
+            ActiveSegmentBuffer::Normal => self.segment_buffer.uploaded(),
+            ActiveSegmentBuffer::TopologicalDepth => self.depth_segment_buffer.uploaded(),
+        }
+    }
+
     pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
         queue.write_buffer(&self.mvp_buffer, 0, &mvp.uniform_bytes());
     }
@@ -637,6 +666,7 @@ pub struct GpuContext {
     #[allow(clippy::arc_with_non_send_sync)]
     pub queue: Arc<wgpu::Queue>,
     surface_config: wgpu::SurfaceConfiguration,
+    bounds_compute_support: crate::bounds_compute::BoundsComputeSupport,
 }
 
 impl GpuContext {
@@ -658,6 +688,8 @@ impl GpuContext {
             .await
             .map_err(GpuInitError::RequestAdapter)?;
         let adapter_info = adapter.get_info();
+        let bounds_compute_support =
+            crate::bounds_compute::BoundsComputeSupport::from_adapter(&adapter);
         log::info!(
             "Selected surface GPU adapter: {} ({})",
             adapter_info.name,
@@ -703,7 +735,12 @@ impl GpuContext {
             device,
             queue,
             surface_config,
+            bounds_compute_support,
         })
+    }
+
+    pub fn bounds_compute_support(&self) -> crate::bounds_compute::BoundsComputeSupport {
+        self.bounds_compute_support
     }
 
     pub fn surface_format(&self) -> wgpu::TextureFormat {
