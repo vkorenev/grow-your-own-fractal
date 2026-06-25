@@ -41,47 +41,36 @@ fn bench_generation(c: &mut Criterion) {
 
     bench_generation_case(
         GenerationBenchCase {
-            fractal_name: "koch_2d",
-            iterations: 9..=11,
+            fractal_name: "harter_heighway_dragon",
+            iterations: 19..=21,
         },
         &|iterations| GenerationConfig {
             dimensions: Dimensions::TwoD,
-            axiom: "F++F++F".to_string(),
+            axiom: "FX".to_string(),
             iterations,
-            angle: 60.0,
+            angle: 90.0,
             step: 1.0,
             initial_heading: 0.0,
-            rules: BTreeMap::from([('F', "F-F++F-F".to_string())]),
-        },
-    );
-    bench_generation_case(
-        GenerationBenchCase {
-            fractal_name: "branching_2d",
-            iterations: 9..=11,
-        },
-        &|iterations| GenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: "F".to_string(),
-            iterations,
-            angle: 25.0,
-            step: 1.0,
-            initial_heading: 90.0,
-            rules: BTreeMap::from([('F', "F[+F]F[-F]F".to_string())]),
+            rules: BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
         },
     );
     bench_generation_case(
         GenerationBenchCase {
             fractal_name: "branching_3d",
-            iterations: 8..=10,
+            iterations: 9..=11,
         },
         &|iterations| GenerationConfig {
             dimensions: Dimensions::ThreeD,
-            axiom: "F".to_string(),
+            axiom: "X".to_string(),
             iterations,
-            angle: 22.5,
+            angle: 30.0,
             step: 1.0,
             initial_heading: 90.0,
-            rules: BTreeMap::from([('F', "F[+F][-F][&F][^F]F".to_string())]),
+            rules: BTreeMap::from([
+                ('X', "Y[+X][-X][&X][^X]".to_string()),
+                ('Y', "FFFZ".to_string()),
+                ('Z', "FZ".to_string()),
+            ]),
         },
     );
 }

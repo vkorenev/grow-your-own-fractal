@@ -62,8 +62,8 @@ fn bench_offscreen_render(c: &mut Criterion) {
 
     bench_render_case(
         RenderBenchCase {
-            fractal_name: "branching_2d",
-            iterations: 7..=9,
+            fractal_name: "harter_heighway_dragon",
+            iterations: 19..=21,
             image_size: (512, 512),
             colors: ColorConfig {
                 background: Rgb::new(0, 0, 0),
@@ -74,36 +74,40 @@ fn bench_offscreen_render(c: &mut Criterion) {
         },
         &|iterations| GenerationConfig {
             dimensions: Dimensions::TwoD,
-            axiom: "F".to_string(),
+            axiom: "FX".to_string(),
             iterations,
-            angle: 25.0,
+            angle: 90.0,
             step: 1.0,
-            initial_heading: 90.0,
-            rules: BTreeMap::from([('F', "F[+F]F[-F]F".to_string())]),
+            initial_heading: 0.0,
+            rules: BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
         },
     );
     bench_render_case(
         RenderBenchCase {
             fractal_name: "branching_3d",
-            iterations: 6..=8,
+            iterations: 9..=11,
             image_size: (512, 512),
             colors: ColorConfig {
                 background: Rgb::new(0, 0, 0),
                 line: LineColorConfig::Gradient {
-                    start: Rgb::new(255, 128, 0),
-                    end: Rgb::new(0, 192, 255),
-                    topological_depth: true,
+                    start: Rgb::new(89, 89, 13),
+                    end: Rgb::new(51, 217, 64),
+                    topological_depth: false,
                 },
             },
         },
         &|iterations| GenerationConfig {
             dimensions: Dimensions::ThreeD,
-            axiom: "F".to_string(),
+            axiom: "X".to_string(),
             iterations,
-            angle: 22.5,
+            angle: 30.0,
             step: 1.0,
             initial_heading: 90.0,
-            rules: BTreeMap::from([('F', "F[+F][-F][&F][^F]F".to_string())]),
+            rules: BTreeMap::from([
+                ('X', "Y[+X][-X][&X][^X]".to_string()),
+                ('Y', "FFFZ".to_string()),
+                ('Z', "FZ".to_string()),
+            ]),
         },
     );
 }
