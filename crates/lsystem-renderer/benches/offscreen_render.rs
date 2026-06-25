@@ -7,6 +7,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use lsystem_core::{ColorConfig, Config, Dimensions, GenerationConfig, LineColorConfig, Rgb};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::png_export::render_rgba;
+use lsystem_renderer::wgpu_util::create_headless_device;
 
 struct RenderBenchCase {
     fractal_name: &'static str,
@@ -15,27 +16,12 @@ struct RenderBenchCase {
     colors: ColorConfig,
 }
 
-async fn create_headless_device() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        })
-        .await
-        .expect("no GPU adapter available for offscreen render benchmark");
-    adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("offscreen_render_bench_device"),
-            ..Default::default()
-        })
-        .await
-        .expect("failed to create offscreen render benchmark device")
-}
-
 fn bench_offscreen_render(c: &mut Criterion) {
-    let (device, queue) = pollster::block_on(create_headless_device());
+    let (device, queue) = pollster::block_on(create_headless_device(
+        "offscreen_render_bench_device",
+        "offscreen render benchmark",
+    ))
+    .expect("no GPU adapter available for offscreen render benchmark");
     let camera = Camera::default();
 
     let mut bench_render_case =

@@ -215,23 +215,20 @@ mod gpu_tests {
         }
     }
 
-    fn assert_png_renders(config: lsystem_core::Config) {
+    /// Creates a headless device, runs `render` on it with wgpu validation
+    /// enabled, and asserts no validation error was raised.
+    fn render_with_validation_check<T>(
+        device_label: &'static str,
+        render: impl AsyncFnOnce(&wgpu::Device, &wgpu::Queue) -> Result<T, ExportError>,
+    ) -> T {
         let (render_result, validation_error) = pollster::block_on(async {
             let (device, queue) =
-                crate::wgpu_util::create_headless_device("png_export_test_device", "PNG export")
+                crate::wgpu_util::create_headless_device(device_label, device_label)
                     .await
                     .expect("failed to create headless test device");
 
             let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let render_result = render_png(
-                &device,
-                &queue,
-                &config,
-                256,
-                128,
-                &crate::camera::Camera::default(),
-            )
-            .await;
+            let render_result = render(&device, &queue).await;
             let validation_error = error_scope.pop().await;
             (render_result, validation_error)
         });
@@ -239,7 +236,22 @@ mod gpu_tests {
             validation_error.is_none(),
             "wgpu validation error: {validation_error:?}"
         );
-        let export = render_result.expect("render_png failed");
+        render_result.expect("render failed")
+    }
+
+    fn assert_png_renders(config: lsystem_core::Config) {
+        let export =
+            render_with_validation_check("png_export_test_device", async |device, queue| {
+                render_png(
+                    device,
+                    queue,
+                    &config,
+                    256,
+                    128,
+                    &crate::camera::Camera::default(),
+                )
+                .await
+            });
 
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);
@@ -250,30 +262,18 @@ mod gpu_tests {
     }
 
     fn assert_rgba_renders_without_png_encoding(config: lsystem_core::Config) {
-        let (render_result, validation_error) = pollster::block_on(async {
-            let (device, queue) =
-                crate::wgpu_util::create_headless_device("rgba_export_test_device", "RGBA export")
-                    .await
-                    .expect("failed to create headless test device");
-
-            let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let render_result = render_rgba(
-                &device,
-                &queue,
-                &config,
-                64,
-                32,
-                &crate::camera::Camera::default(),
-            )
-            .await;
-            let validation_error = error_scope.pop().await;
-            (render_result, validation_error)
-        });
-        assert!(
-            validation_error.is_none(),
-            "wgpu validation error: {validation_error:?}"
-        );
-        let export = render_result.expect("render_rgba failed");
+        let export =
+            render_with_validation_check("rgba_export_test_device", async |device, queue| {
+                render_rgba(
+                    device,
+                    queue,
+                    &config,
+                    64,
+                    32,
+                    &crate::camera::Camera::default(),
+                )
+                .await
+            });
 
         assert_eq!(export.width, 64);
         assert_eq!(export.height, 32);
