@@ -20,6 +20,15 @@ pub struct PngExport {
     pub bytes: Vec<u8>,
 }
 
+/// Raw RGBA pixels rendered offscreen, together with their pixel dimensions.
+///
+/// Pixels are tightly packed in row-major order, four bytes per pixel.
+pub struct RgbaExport {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 /// Failures shared by still-PNG and APNG export.
 #[derive(Debug)]
 pub enum ExportError {
@@ -101,6 +110,28 @@ pub async fn render_png(
     height: u32,
     camera: &Camera,
 ) -> Result<PngExport, ExportError> {
+    let rgba = render_rgba(device, queue, config, width, height, camera).await?;
+    let bytes = encode_png_rgba(width, height, &rgba.rgba)?;
+    Ok(PngExport {
+        width,
+        height,
+        bytes,
+    })
+}
+
+/// Renders `config` to tightly packed RGBA bytes of the given dimensions on
+/// `device`, without PNG encoding.
+///
+/// `camera` selects the 3D orientation; 2D export always fits the geometry
+/// bounds and ignores camera pan/zoom.
+pub async fn render_rgba(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    config: &Config,
+    width: u32,
+    height: u32,
+    camera: &Camera,
+) -> Result<RgbaExport, ExportError> {
     validate_width(width)?;
     validate_height(height)?;
 
@@ -112,11 +143,10 @@ pub async fn render_png(
         .render_frame(device, queue, config.colors.background.to_array(), &scene)
         .await?;
 
-    let bytes = encode_png_rgba(width, height, &rgba)?;
-    Ok(PngExport {
+    Ok(RgbaExport {
         width,
         height,
-        bytes,
+        rgba,
     })
 }
 
@@ -185,23 +215,20 @@ mod gpu_tests {
         }
     }
 
-    fn assert_png_renders(config: lsystem_core::Config) {
+    /// Creates a headless device, runs `render` on it with wgpu validation
+    /// enabled, and asserts no validation error was raised.
+    fn render_with_validation_check<T>(
+        device_label: &'static str,
+        render: impl AsyncFnOnce(&wgpu::Device, &wgpu::Queue) -> Result<T, ExportError>,
+    ) -> T {
         let (render_result, validation_error) = pollster::block_on(async {
             let (device, queue) =
-                crate::wgpu_util::create_headless_device("png_export_test_device", "PNG export")
+                crate::wgpu_util::create_headless_device(device_label, device_label)
                     .await
                     .expect("failed to create headless test device");
 
             let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let render_result = render_png(
-                &device,
-                &queue,
-                &config,
-                256,
-                128,
-                &crate::camera::Camera::default(),
-            )
-            .await;
+            let render_result = render(&device, &queue).await;
             let validation_error = error_scope.pop().await;
             (render_result, validation_error)
         });
@@ -209,7 +236,22 @@ mod gpu_tests {
             validation_error.is_none(),
             "wgpu validation error: {validation_error:?}"
         );
-        let export = render_result.expect("render_png failed");
+        render_result.expect("render failed")
+    }
+
+    fn assert_png_renders(config: lsystem_core::Config) {
+        let export =
+            render_with_validation_check("png_export_test_device", async |device, queue| {
+                render_png(
+                    device,
+                    queue,
+                    &config,
+                    256,
+                    128,
+                    &crate::camera::Camera::default(),
+                )
+                .await
+            });
 
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);
@@ -217,6 +259,26 @@ mod gpu_tests {
         let reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (256, 128));
+    }
+
+    fn assert_rgba_renders_without_png_encoding(config: lsystem_core::Config) {
+        let export =
+            render_with_validation_check("rgba_export_test_device", async |device, queue| {
+                render_rgba(
+                    device,
+                    queue,
+                    &config,
+                    64,
+                    32,
+                    &crate::camera::Camera::default(),
+                )
+                .await
+            });
+
+        assert_eq!(export.width, 64);
+        assert_eq!(export.height, 32);
+        assert_eq!(export.rgba.len(), 64 * 32 * 4);
+        assert_ne!(&export.rgba[..8], b"\x89PNG\r\n\x1a\n");
     }
 
     fn depth_gradient_config(dimensions: Dimensions) -> lsystem_core::Config {
@@ -234,6 +296,11 @@ mod gpu_tests {
     #[test]
     fn png_standalone_non_square_dimensions() {
         assert_png_renders(trivial_config());
+    }
+
+    #[test]
+    fn rgba_export_renders_trivial_2d_config_without_png_encoding() {
+        assert_rgba_renders_without_png_encoding(trivial_config());
     }
 
     #[test]

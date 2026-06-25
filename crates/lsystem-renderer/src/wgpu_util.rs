@@ -57,13 +57,13 @@ mod non_browser_wasm {
 
 #[cfg(feature = "png")]
 #[derive(Debug)]
-pub(crate) enum CreateDeviceError {
+pub enum CreateDeviceError {
     NoAdapter,
     RequestDevice(wgpu::RequestDeviceError),
 }
 
 #[cfg(feature = "png")]
-pub(crate) async fn create_headless_device(
+pub async fn create_headless_device(
     label: &'static str,
     context: &'static str,
 ) -> Result<(wgpu::Device, wgpu::Queue), CreateDeviceError> {
