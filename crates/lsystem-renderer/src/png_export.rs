@@ -150,20 +150,6 @@ pub async fn render_rgba(
     })
 }
 
-/// Like [`render_rgba`], but creates its own headless GPU device.
-pub async fn render_rgba_standalone(
-    config: &Config,
-    width: u32,
-    height: u32,
-    camera: &Camera,
-) -> Result<RgbaExport, ExportError> {
-    validate_width(width)?;
-    validate_height(height)?;
-    let (device, queue) =
-        wgpu_util::create_headless_device("rgba_export_device", "RGBA export").await?;
-    render_rgba(&device, &queue, config, width, height, camera).await
-}
-
 /// Like [`render_png`], but creates its own headless GPU device.
 pub async fn render_png_standalone(
     config: &Config,
