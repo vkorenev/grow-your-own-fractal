@@ -203,4 +203,34 @@ mod tests {
 
         assert_eq!(depths, [0, 1]);
     }
+
+    #[test]
+    fn pipe_u_turn_reverses_direction() {
+        let cfg = gen_config("F|F");
+        let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
+        assert_eq!(segments.len(), 2);
+        let [_, b0] = segments[0];
+        let [a1, b1] = segments[1];
+        assert!((b0 - Vec2::new(1.0, 0.0)).length() < 1e-5, "first segment ends at (1,0): {b0}");
+        assert!((a1 - Vec2::new(1.0, 0.0)).length() < 1e-5, "second segment starts at (1,0): {a1}");
+        assert!((b1 - Vec2::ZERO).length() < 1e-5, "U-turn returns to origin: {b1}");
+    }
+
+    #[test]
+    fn koch_snowflake_path_closes() {
+        // The Koch snowflake forms a closed curve at every iteration depth.
+        // Any significant drift in direction or step size breaks closure.
+        let config = GenerationConfig {
+            dimensions: Dimensions::TwoD,
+            axiom: "F++F++F".to_string(),
+            iterations: 4,
+            angle: 60.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::from([('F', "F-F++F-F".to_string())]),
+        };
+        let segments: Vec<[Vec2; 2]> = crate::generate(&config).collect();
+        let end = segments.last().expect("non-empty")[1];
+        assert!(end.length() < 1e-3, "Koch snowflake should close; end at {end}");
+    }
 }
