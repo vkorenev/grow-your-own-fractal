@@ -90,6 +90,26 @@ cargo bench -p lsystem-renderer --features png --bench offscreen_render
 The renderer benchmark measures offscreen RGBA rendering and GPU readback. It
 does not include PNG encoding time.
 
+## Profiling
+
+For Linux `perf`/`cargo flamegraph` profiling, pass `-Wl,--no-rosegment` through
+`RUSTFLAGS`. This matches flamegraph's Linux guidance for lld and mold,
+including Rust 1.90.0 and later where lld is the default, and keeps generated
+stack traces accurate.
+
+To improve release-profile flamegraphs, include debug info for the profiled run:
+
+```sh
+RUSTFLAGS="-C link-arg=-Wl,--no-rosegment" CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph -p lsystem-app
+```
+
+Benchmarks use Cargo's bench profile in release mode. Include bench-profile
+debug info when profiling benchmarks:
+
+```sh
+RUSTFLAGS="-C link-arg=-Wl,--no-rosegment" CARGO_PROFILE_BENCH_DEBUG=true cargo flamegraph --bench generation -p lsystem-core -- --bench
+```
+
 ## Full Verification
 
 Run the same checks CI runs when a change affects code, build configuration,

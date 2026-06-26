@@ -1,68 +1,90 @@
 use std::collections::BTreeMap;
 use std::hint::black_box;
-use std::ops::RangeInclusive;
-use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use lsystem_core::{Dimensions, GenerationConfig, generate, generate_3d};
+use criterion::{Criterion, criterion_group, criterion_main};
+use lsystem_core::{
+    Dimensions, GenerationConfig, generate, generate_3d, generate_3d_with_topological_depth,
+    generate_with_topological_depth,
+};
 
-struct GenerationBenchCase {
-    fractal_name: &'static str,
-    iterations: RangeInclusive<u32>,
+fn checksum_2d(config: &GenerationConfig) -> f32 {
+    generate(config).fold(0.0, |acc, [a, b]| acc + a.x + a.y + b.x + b.y)
+}
+
+fn checksum_2d_with_topological_depth(config: &GenerationConfig) -> f32 {
+    generate_with_topological_depth(config).fold(0.0, |acc, segment| {
+        let [a, b] = segment.points;
+        acc + a.x + a.y + b.x + b.y + segment.topological_depth as f32
+    })
+}
+
+fn checksum_3d(config: &GenerationConfig) -> f32 {
+    generate_3d(config).fold(0.0, |acc, [a, b]| acc + a.x + a.y + a.z + b.x + b.y + b.z)
+}
+
+fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
+    generate_3d_with_topological_depth(config).fold(0.0, |acc, segment| {
+        let [a, b] = segment.points;
+        acc + a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32
+    })
 }
 
 fn bench_generation(c: &mut Criterion) {
-    let mut bench_generation_case =
-        |case: GenerationBenchCase, generation_for_iterations: &dyn Fn(u32) -> GenerationConfig| {
-            let group_name = format!("generate_{}", case.fractal_name);
-            let mut group = c.benchmark_group(group_name);
-            group
-                .sample_size(50)
-                .measurement_time(Duration::from_secs(10));
-            for iterations in case.iterations {
-                group.bench_with_input(
-                    BenchmarkId::from_parameter(iterations),
-                    &iterations,
-                    |b, &iterations| {
-                        let config = generation_for_iterations(iterations);
-                        match config.dimensions {
-                            Dimensions::TwoD => {
-                                b.iter(|| black_box(generate(black_box(&config)).count()));
-                            }
-                            Dimensions::ThreeD => {
-                                b.iter(|| black_box(generate_3d(black_box(&config)).count()));
-                            }
-                        }
-                    },
-                );
-            }
-            group.finish();
-        };
+    {
+        let mut group = c.benchmark_group("generation_2d");
 
-    bench_generation_case(
-        GenerationBenchCase {
-            fractal_name: "harter_heighway_dragon",
-            iterations: 19..=21,
-        },
-        &|iterations| GenerationConfig {
+        let config = GenerationConfig {
             dimensions: Dimensions::TwoD,
             axiom: "FX".to_string(),
-            iterations,
+            iterations: 20,
             angle: 90.0,
             step: 1.0,
             initial_heading: 0.0,
             rules: BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
-        },
-    );
-    bench_generation_case(
-        GenerationBenchCase {
-            fractal_name: "branching_3d",
-            iterations: 9..=11,
-        },
-        &|iterations| GenerationConfig {
+        };
+        group.bench_function("dragon", |b| {
+            b.iter(|| black_box(checksum_2d(black_box(&config))));
+        });
+
+        let config = GenerationConfig {
+            dimensions: Dimensions::TwoD,
+            axiom: "X".to_string(),
+            iterations: 9,
+            angle: 23.0,
+            step: 1.0,
+            initial_heading: 90.0,
+            rules: BTreeMap::from([
+                ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        };
+        group.bench_function("plant_a", |b| {
+            b.iter(|| black_box(checksum_2d_with_topological_depth(black_box(&config))));
+        });
+
+        let config = GenerationConfig {
+            dimensions: Dimensions::TwoD,
+            axiom: "F".repeat(1_000_000),
+            iterations: 0,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        };
+        group.bench_function("synthetic_2d_forward_heavy", |b| {
+            b.iter(|| black_box(checksum_2d(black_box(&config))));
+        });
+
+        group.finish();
+    }
+
+    {
+        let mut group = c.benchmark_group("generation_3d");
+
+        let branching_config = GenerationConfig {
             dimensions: Dimensions::ThreeD,
             axiom: "X".to_string(),
-            iterations,
+            iterations: 10,
             angle: 30.0,
             step: 1.0,
             initial_heading: 90.0,
@@ -71,8 +93,55 @@ fn bench_generation(c: &mut Criterion) {
                 ('Y', "FFFZ".to_string()),
                 ('Z', "FZ".to_string()),
             ]),
-        },
-    );
+        };
+        group.bench_function("branching_rotation_heavy", |b| {
+            b.iter(|| black_box(checksum_3d(black_box(&branching_config))));
+        });
+
+        let hilbert_config = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "X".to_string(),
+            iterations: 6,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
+        };
+        group.bench_function("hilbert_3d", |b| {
+            b.iter(|| black_box(checksum_3d(black_box(&hilbert_config))));
+        });
+
+        let config = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "A".to_string(),
+            iterations: 9,
+            angle: 40.0,
+            step: 1.0,
+            initial_heading: 90.0,
+            rules: BTreeMap::from([
+                ('A', r"F[+/A]/[-/A]F[&/A]/[^/A]".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        };
+        group.bench_function("tree_roll_heavy", |b| {
+            b.iter(|| black_box(checksum_3d_with_topological_depth(black_box(&config))));
+        });
+
+        let config_3d = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "F".repeat(1_000_000),
+            iterations: 0,
+            angle: 30.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::new(),
+        };
+        group.bench_function("synthetic_3d_forward_heavy", |b| {
+            b.iter(|| black_box(checksum_3d(black_box(&config_3d))));
+        });
+
+        group.finish();
+    }
 }
 
 criterion_group!(benches, bench_generation);
