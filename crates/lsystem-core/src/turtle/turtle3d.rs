@@ -266,8 +266,14 @@ mod tests {
         let [_, b0] = segs[0];
         let [a1, b1] = segs[1];
         assert!(b0.distance(Vec3::X) < 1e-5, "first segment ends at X: {b0}");
-        assert!(a1.distance(Vec3::X) < 1e-5, "second segment starts at X: {a1}");
-        assert!(b1.distance(Vec3::ZERO) < 1e-5, "U-turn returns to origin: {b1}");
+        assert!(
+            a1.distance(Vec3::X) < 1e-5,
+            "second segment starts at X: {a1}"
+        );
+        assert!(
+            b1.distance(Vec3::ZERO) < 1e-5,
+            "U-turn returns to origin: {b1}"
+        );
     }
 
     #[test]
@@ -277,8 +283,14 @@ mod tests {
             let segs = make(axiom, 90.0);
             assert_eq!(segs.len(), 1, "axiom {axiom:?}");
             let [a, b] = segs[0];
-            assert!(a.distance(Vec3::ZERO) < 1e-5, "starts at origin ({axiom:?})");
-            assert!(b.distance(Vec3::X) < 1e-5, "roll should not change forward ({axiom:?}): {b}");
+            assert!(
+                a.distance(Vec3::ZERO) < 1e-5,
+                "starts at origin ({axiom:?})"
+            );
+            assert!(
+                b.distance(Vec3::X) < 1e-5,
+                "roll should not change forward ({axiom:?}): {b}"
+            );
         }
     }
 
@@ -291,7 +303,10 @@ mod tests {
         assert_eq!(segs.len(), 1);
         let [a, b] = segs[0];
         assert!(a.distance(Vec3::ZERO) < 1e-5);
-        assert!(b.distance(Vec3::Z) < 1e-5, "after /+, F should move along Z: {b}");
+        assert!(
+            b.distance(Vec3::Z) < 1e-5,
+            "after /+, F should move along Z: {b}"
+        );
     }
 
     #[test]
@@ -303,9 +318,85 @@ mod tests {
         assert_eq!(segs.len(), 2);
         let [a0, b0] = segs[0];
         let [a1, b1] = segs[1];
-        assert!(a0.distance(Vec3::ZERO) < 1e-5, "branch starts at origin: {a0}");
+        assert!(
+            a0.distance(Vec3::ZERO) < 1e-5,
+            "branch starts at origin: {a0}"
+        );
         assert!(b0.distance(Vec3::Z) < 1e-5, "branch F ends at Z: {b0}");
-        assert!(a1.distance(Vec3::ZERO) < 1e-5, "position restored to origin: {a1}");
-        assert!(b1.distance(Vec3::X) < 1e-5, "forward restored to X after branch: {b1}");
+        assert!(
+            a1.distance(Vec3::ZERO) < 1e-5,
+            "position restored to origin: {a1}"
+        );
+        assert!(
+            b1.distance(Vec3::X) < 1e-5,
+            "forward restored to X after branch: {b1}"
+        );
+    }
+
+    #[test]
+    fn roll_left_affects_subsequent_yaw_plane() {
+        // Without prior roll, +F draws along Y (see plus_yaws_left_into_y).
+        // After rolling 90° left, local up shifts from Z to Y, so a subsequent
+        // yaw left sweeps around the new local up and draws along -Z instead.
+        let segs = make(r"\+F", 90.0);
+        assert_eq!(segs.len(), 1);
+        let [_, b] = segs[0];
+        assert!(
+            b.distance(-Vec3::Z) < 1e-5,
+            r"after \+, F should move along -Z: {b}"
+        );
+    }
+
+    #[test]
+    fn minus_yaws_right() {
+        let segs = make("-F", 90.0);
+        assert_eq!(segs.len(), 1);
+        let [_, b] = segs[0];
+        assert!(b.distance(-Vec3::Y) < 1e-5, "-F should move along -Y: {b}");
+    }
+
+    #[test]
+    fn caret_pitches_up() {
+        let segs = make("^F", 90.0);
+        assert_eq!(segs.len(), 1);
+        let [_, b] = segs[0];
+        assert!(b.distance(Vec3::Z) < 1e-5, "^F should move along Z: {b}");
+    }
+
+    #[test]
+    fn non_drawing_forward_uses_cached_direction() {
+        // After +, f moves without drawing in the yawed direction.
+        // The subsequent F draws from that new position along the same direction.
+        // Confirms that f correctly uses (and does not skip) a dirty forward cache.
+        let segs = make("+fF", 90.0);
+        assert_eq!(segs.len(), 1);
+        let [a, b] = segs[0];
+        assert!(a.distance(Vec3::Y) < 1e-5, "f should move to Y: {a}");
+        assert!(b.distance(2.0 * Vec3::Y) < 1e-5, "F should draw to 2Y: {b}");
+    }
+
+    #[test]
+    fn branch_dirty_save_and_restore() {
+        // + yaws left, making the forward cache dirty. [ saves that dirty state.
+        // Inside the branch, F recomputes forward (Y) and draws from origin to Y.
+        // ] restores position to origin and the saved dirty state. The outer F
+        // also recomputes forward (Y) and draws from origin to Y.
+        let segs = make("+[F]F", 90.0);
+        assert_eq!(segs.len(), 2);
+        let [a0, b0] = segs[0];
+        let [a1, b1] = segs[1];
+        assert!(
+            a0.distance(Vec3::ZERO) < 1e-5,
+            "branch F starts at origin: {a0}"
+        );
+        assert!(b0.distance(Vec3::Y) < 1e-5, "branch F draws to Y: {b0}");
+        assert!(
+            a1.distance(Vec3::ZERO) < 1e-5,
+            "position restored to origin: {a1}"
+        );
+        assert!(
+            b1.distance(Vec3::Y) < 1e-5,
+            "outer F draws to Y after dirty restore: {b1}"
+        );
     }
 }
