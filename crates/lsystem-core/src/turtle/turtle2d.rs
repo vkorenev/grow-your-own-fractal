@@ -8,22 +8,23 @@ pub(crate) struct Segments2D<I: Iterator<Item = char>> {
 
 pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = char>> {
     chars: I,
-    angle_rad: f32,
-    step: f32,
+    rot_plus: Vec2,
+    rot_minus: Vec2,
+    delta: Vec2,
     position: Vec2,
-    heading: f32,
     topological_depth: u32,
-    stack: Vec<(Vec2, f32, u32)>,
+    stack: Vec<(Vec2, Vec2, u32)>,
 }
 
 impl<I: Iterator<Item = char>> Segments2DWithTopologicalDepth<I> {
     pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        let angle_rad = angle_deg.to_radians();
         Self {
             chars,
-            angle_rad: angle_deg.to_radians(),
-            step,
+            rot_plus: Vec2::from_angle(angle_rad),
+            rot_minus: Vec2::from_angle(-angle_rad),
+            delta: Vec2::from_angle(initial_heading_deg.to_radians()) * step,
             position: Vec2::ZERO,
-            heading: initial_heading_deg.to_radians(),
             topological_depth: 0,
             stack: Vec::new(),
         }
@@ -37,8 +38,7 @@ impl<I: Iterator<Item = char>> Iterator for Segments2DWithTopologicalDepth<I> {
         loop {
             match self.chars.next()? {
                 'F' => {
-                    let next = self.position
-                        + Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
+                    let next = self.position + self.delta;
                     let segment = Segment2DWithTopologicalDepth {
                         points: [self.position, next],
                         topological_depth: self.topological_depth,
@@ -48,20 +48,20 @@ impl<I: Iterator<Item = char>> Iterator for Segments2DWithTopologicalDepth<I> {
                     return Some(segment);
                 }
                 'f' => {
-                    self.position += Vec2::new(self.heading.cos(), self.heading.sin()) * self.step;
+                    self.position += self.delta;
                 }
-                '+' => self.heading += self.angle_rad,
-                '-' => self.heading -= self.angle_rad,
-                '|' => self.heading += std::f32::consts::PI,
+                '+' => self.delta = self.delta.rotate(self.rot_plus),
+                '-' => self.delta = self.delta.rotate(self.rot_minus),
+                '|' => self.delta = -self.delta,
                 '[' => self
                     .stack
-                    .push((self.position, self.heading, self.topological_depth)),
+                    .push((self.position, self.delta, self.topological_depth)),
                 ']' => {
                     let state = self.stack.pop();
                     debug_assert!(state.is_some(), "unmatched ] in validated program");
-                    if let Some((pos, head, topological_depth)) = state {
+                    if let Some((pos, delta, topological_depth)) = state {
                         self.position = pos;
-                        self.heading = head;
+                        self.delta = delta;
                         self.topological_depth = topological_depth;
                     }
                 }
