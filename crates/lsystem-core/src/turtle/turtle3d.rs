@@ -9,7 +9,13 @@ pub(crate) struct Segments3D<I: Iterator<Item = char>> {
 
 pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = char>> {
     chars: I,
-    angle_rad: f32,
+    rot_yaw_plus: Quat,
+    rot_yaw_minus: Quat,
+    rot_pitch_down: Quat,
+    rot_pitch_up: Quat,
+    rot_roll_right: Quat,
+    rot_roll_left: Quat,
+    rot_uturn: Quat,
     step: f32,
     position: Vec3,
     orientation: Quat,
@@ -19,9 +25,16 @@ pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = char>> {
 
 impl<I: Iterator<Item = char>> Segments3DWithTopologicalDepth<I> {
     pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        let angle_rad = angle_deg.to_radians();
         Self {
             chars,
-            angle_rad: angle_deg.to_radians(),
+            rot_yaw_plus: Quat::from_rotation_z(angle_rad),
+            rot_yaw_minus: Quat::from_rotation_z(-angle_rad),
+            rot_pitch_down: Quat::from_rotation_y(angle_rad),
+            rot_pitch_up: Quat::from_rotation_y(-angle_rad),
+            rot_roll_right: Quat::from_rotation_x(angle_rad),
+            rot_roll_left: Quat::from_rotation_x(-angle_rad),
+            rot_uturn: Quat::from_rotation_z(std::f32::consts::PI),
             step,
             position: Vec3::ZERO,
             orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
@@ -52,27 +65,13 @@ impl<I: Iterator<Item = char>> Iterator for Segments3DWithTopologicalDepth<I> {
                     let forward = self.orientation * Vec3::X;
                     self.position += forward * self.step;
                 }
-                '+' => {
-                    self.orientation *= Quat::from_rotation_z(self.angle_rad);
-                }
-                '-' => {
-                    self.orientation *= Quat::from_rotation_z(-self.angle_rad);
-                }
-                '&' => {
-                    self.orientation *= Quat::from_rotation_y(self.angle_rad);
-                }
-                '^' => {
-                    self.orientation *= Quat::from_rotation_y(-self.angle_rad);
-                }
-                '/' => {
-                    self.orientation *= Quat::from_rotation_x(self.angle_rad);
-                }
-                '\\' => {
-                    self.orientation *= Quat::from_rotation_x(-self.angle_rad);
-                }
-                '|' => {
-                    self.orientation *= Quat::from_rotation_z(std::f32::consts::PI);
-                }
+                '+' => self.orientation *= self.rot_yaw_plus,
+                '-' => self.orientation *= self.rot_yaw_minus,
+                '&' => self.orientation *= self.rot_pitch_down,
+                '^' => self.orientation *= self.rot_pitch_up,
+                '/' => self.orientation *= self.rot_roll_right,
+                '\\' => self.orientation *= self.rot_roll_left,
+                '|' => self.orientation *= self.rot_uturn,
                 '[' => self
                     .stack
                     .push((self.position, self.orientation, self.topological_depth)),
