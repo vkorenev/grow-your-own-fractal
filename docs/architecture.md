@@ -27,7 +27,7 @@ Runtime generation starts from a resolved `GenerationConfig`.
 
 ```text
 GenerationConfig
-  -> OwnedExpandIter
+  -> ExpandIter
   -> Segments2D / Segments3D
   -> renderer bridge segment records
   -> wgpu instance buffer
@@ -62,7 +62,7 @@ than caching resolved values inside the editor document.
 `lsystem-core` owns the grammar and turtle semantics:
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
-- `grammar.rs` provides lazy borrowed and owned expansion iterators.
+- `grammar.rs` provides a lazy owned expansion iterator.
 - `turtle/turtle2d.rs` yields 2D line segments from expanded symbols.
 - `turtle/turtle3d.rs` yields 3D line segments using quaternion orientation.
 - `config.rs` defines validated runtime config and color types.

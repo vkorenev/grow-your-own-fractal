@@ -3,12 +3,12 @@ use glam::{Quat, Vec3};
 use crate::Segment3DWithTopologicalDepth;
 
 /// Heading = `orientation * Vec3::X`, left = `* Vec3::Y`, up = `* Vec3::Z`.
-pub(crate) struct Segments3D<I: Iterator<Item = char>> {
+pub(crate) struct Segments3D<I: Iterator<Item = u8>> {
     inner: Segments3DWithTopologicalDepth<I>,
 }
 
-pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = char>> {
-    chars: I,
+pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = u8>> {
+    symbols: I,
     rot_yaw_plus: Quat,
     rot_yaw_minus: Quat,
     rot_pitch_down: Quat,
@@ -23,11 +23,11 @@ pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = char>> {
     stack: Vec<(Vec3, Quat, u32)>,
 }
 
-impl<I: Iterator<Item = char>> Segments3DWithTopologicalDepth<I> {
-    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+impl<I: Iterator<Item = u8>> Segments3DWithTopologicalDepth<I> {
+    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         let angle_rad = angle_deg.to_radians();
         Self {
-            chars,
+            symbols,
             rot_yaw_plus: Quat::from_rotation_z(angle_rad),
             rot_yaw_minus: Quat::from_rotation_z(-angle_rad),
             rot_pitch_down: Quat::from_rotation_y(angle_rad),
@@ -44,13 +44,13 @@ impl<I: Iterator<Item = char>> Segments3DWithTopologicalDepth<I> {
     }
 }
 
-impl<I: Iterator<Item = char>> Iterator for Segments3DWithTopologicalDepth<I> {
+impl<I: Iterator<Item = u8>> Iterator for Segments3DWithTopologicalDepth<I> {
     type Item = Segment3DWithTopologicalDepth;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.chars.next()? {
-                'F' => {
+            match self.symbols.next()? {
+                b'F' => {
                     let forward = self.orientation * Vec3::X;
                     let next = self.position + forward * self.step;
                     let segment = Segment3DWithTopologicalDepth {
@@ -61,21 +61,21 @@ impl<I: Iterator<Item = char>> Iterator for Segments3DWithTopologicalDepth<I> {
                     self.topological_depth = self.topological_depth.saturating_add(1);
                     return Some(segment);
                 }
-                'f' => {
+                b'f' => {
                     let forward = self.orientation * Vec3::X;
                     self.position += forward * self.step;
                 }
-                '+' => self.orientation *= self.rot_yaw_plus,
-                '-' => self.orientation *= self.rot_yaw_minus,
-                '&' => self.orientation *= self.rot_pitch_down,
-                '^' => self.orientation *= self.rot_pitch_up,
-                '/' => self.orientation *= self.rot_roll_right,
-                '\\' => self.orientation *= self.rot_roll_left,
-                '|' => self.orientation *= self.rot_uturn,
-                '[' => self
+                b'+' => self.orientation *= self.rot_yaw_plus,
+                b'-' => self.orientation *= self.rot_yaw_minus,
+                b'&' => self.orientation *= self.rot_pitch_down,
+                b'^' => self.orientation *= self.rot_pitch_up,
+                b'/' => self.orientation *= self.rot_roll_right,
+                b'\\' => self.orientation *= self.rot_roll_left,
+                b'|' => self.orientation *= self.rot_uturn,
+                b'[' => self
                     .stack
                     .push((self.position, self.orientation, self.topological_depth)),
-                ']' => {
+                b']' => {
                     let state = self.stack.pop();
                     debug_assert!(state.is_some(), "unmatched ] in validated program");
                     if let Some((pos, orient, topological_depth)) = state {
@@ -90,15 +90,20 @@ impl<I: Iterator<Item = char>> Iterator for Segments3DWithTopologicalDepth<I> {
     }
 }
 
-impl<I: Iterator<Item = char>> Segments3D<I> {
-    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+impl<I: Iterator<Item = u8>> Segments3D<I> {
+    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         Self {
-            inner: Segments3DWithTopologicalDepth::new(chars, angle_deg, step, initial_heading_deg),
+            inner: Segments3DWithTopologicalDepth::new(
+                symbols,
+                angle_deg,
+                step,
+                initial_heading_deg,
+            ),
         }
     }
 }
 
-impl<I: Iterator<Item = char>> Iterator for Segments3D<I> {
+impl<I: Iterator<Item = u8>> Iterator for Segments3D<I> {
     type Item = [Vec3; 2];
 
     fn next(&mut self) -> Option<[Vec3; 2]> {
@@ -117,7 +122,7 @@ mod tests {
     }
 
     fn make_with_heading(axiom: &str, angle_deg: f32, initial_heading_deg: f32) -> Vec<[Vec3; 2]> {
-        Segments3D::new(axiom.chars(), angle_deg, 1.0, initial_heading_deg).collect()
+        Segments3D::new(axiom.bytes(), angle_deg, 1.0, initial_heading_deg).collect()
     }
 
     #[test]
