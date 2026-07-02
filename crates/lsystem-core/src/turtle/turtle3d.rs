@@ -9,6 +9,12 @@ pub(crate) struct Segments3D<I: Iterator<Item = u8>> {
 
 pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = u8>> {
     symbols: I,
+    state: TurtleState3D,
+}
+
+/// Turtle state plus the single symbol transition shared by `next` and `fold`,
+/// so the two iteration paths cannot drift apart.
+struct TurtleState3D {
     rot_yaw_plus: Quat,
     rot_yaw_minus: Quat,
     rot_pitch_down: Quat,
@@ -23,23 +29,93 @@ pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = u8>> {
     stack: Vec<(Vec3, Quat, u32)>,
 }
 
+impl TurtleState3D {
+    #[inline]
+    fn apply(&mut self, symbol: u8) -> Option<Segment3DWithTopologicalDepth> {
+        match symbol {
+            b'F' => {
+                let forward = self.orientation * Vec3::X;
+                let next = self.position + forward * self.step;
+                let segment = Segment3DWithTopologicalDepth {
+                    points: [self.position, next],
+                    topological_depth: self.topological_depth,
+                };
+                self.position = next;
+                self.topological_depth = self.topological_depth.saturating_add(1);
+                Some(segment)
+            }
+            b'f' => {
+                let forward = self.orientation * Vec3::X;
+                self.position += forward * self.step;
+                None
+            }
+            b'+' => {
+                self.orientation *= self.rot_yaw_plus;
+                None
+            }
+            b'-' => {
+                self.orientation *= self.rot_yaw_minus;
+                None
+            }
+            b'&' => {
+                self.orientation *= self.rot_pitch_down;
+                None
+            }
+            b'^' => {
+                self.orientation *= self.rot_pitch_up;
+                None
+            }
+            b'/' => {
+                self.orientation *= self.rot_roll_right;
+                None
+            }
+            b'\\' => {
+                self.orientation *= self.rot_roll_left;
+                None
+            }
+            b'|' => {
+                self.orientation *= self.rot_uturn;
+                None
+            }
+            b'[' => {
+                self.stack
+                    .push((self.position, self.orientation, self.topological_depth));
+                None
+            }
+            b']' => {
+                let state = self.stack.pop();
+                debug_assert!(state.is_some(), "unmatched ] in validated program");
+                if let Some((position, orientation, topological_depth)) = state {
+                    self.position = position;
+                    self.orientation = orientation;
+                    self.topological_depth = topological_depth;
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<I: Iterator<Item = u8>> Segments3DWithTopologicalDepth<I> {
     pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         let angle_rad = angle_deg.to_radians();
         Self {
             symbols,
-            rot_yaw_plus: Quat::from_rotation_z(angle_rad),
-            rot_yaw_minus: Quat::from_rotation_z(-angle_rad),
-            rot_pitch_down: Quat::from_rotation_y(angle_rad),
-            rot_pitch_up: Quat::from_rotation_y(-angle_rad),
-            rot_roll_right: Quat::from_rotation_x(angle_rad),
-            rot_roll_left: Quat::from_rotation_x(-angle_rad),
-            rot_uturn: Quat::from_rotation_z(std::f32::consts::PI),
-            step,
-            position: Vec3::ZERO,
-            orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
-            topological_depth: 0,
-            stack: Vec::new(),
+            state: TurtleState3D {
+                rot_yaw_plus: Quat::from_rotation_z(angle_rad),
+                rot_yaw_minus: Quat::from_rotation_z(-angle_rad),
+                rot_pitch_down: Quat::from_rotation_y(angle_rad),
+                rot_pitch_up: Quat::from_rotation_y(-angle_rad),
+                rot_roll_right: Quat::from_rotation_x(angle_rad),
+                rot_roll_left: Quat::from_rotation_x(-angle_rad),
+                rot_uturn: Quat::from_rotation_z(std::f32::consts::PI),
+                step,
+                position: Vec3::ZERO,
+                orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
+                topological_depth: 0,
+                stack: Vec::new(),
+            },
         }
     }
 }
@@ -49,44 +125,24 @@ impl<I: Iterator<Item = u8>> Iterator for Segments3DWithTopologicalDepth<I> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.symbols.next()? {
-                b'F' => {
-                    let forward = self.orientation * Vec3::X;
-                    let next = self.position + forward * self.step;
-                    let segment = Segment3DWithTopologicalDepth {
-                        points: [self.position, next],
-                        topological_depth: self.topological_depth,
-                    };
-                    self.position = next;
-                    self.topological_depth = self.topological_depth.saturating_add(1);
-                    return Some(segment);
-                }
-                b'f' => {
-                    let forward = self.orientation * Vec3::X;
-                    self.position += forward * self.step;
-                }
-                b'+' => self.orientation *= self.rot_yaw_plus,
-                b'-' => self.orientation *= self.rot_yaw_minus,
-                b'&' => self.orientation *= self.rot_pitch_down,
-                b'^' => self.orientation *= self.rot_pitch_up,
-                b'/' => self.orientation *= self.rot_roll_right,
-                b'\\' => self.orientation *= self.rot_roll_left,
-                b'|' => self.orientation *= self.rot_uturn,
-                b'[' => self
-                    .stack
-                    .push((self.position, self.orientation, self.topological_depth)),
-                b']' => {
-                    let state = self.stack.pop();
-                    debug_assert!(state.is_some(), "unmatched ] in validated program");
-                    if let Some((pos, orient, topological_depth)) = state {
-                        self.position = pos;
-                        self.orientation = orient;
-                        self.topological_depth = topological_depth;
-                    }
-                }
-                _ => {}
+            let symbol = self.symbols.next()?;
+            if let Some(segment) = self.state.apply(symbol) {
+                return Some(segment);
             }
         }
+    }
+
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut state = self.state;
+        self.symbols
+            .fold(init, |acc, symbol| match state.apply(symbol) {
+                Some(segment) => f(acc, segment),
+                None => acc,
+            })
     }
 }
 
@@ -109,11 +165,20 @@ impl<I: Iterator<Item = u8>> Iterator for Segments3D<I> {
     fn next(&mut self) -> Option<[Vec3; 2]> {
         self.inner.next().map(|segment| segment.points)
     }
+
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.inner.fold(init, |acc, segment| f(acc, segment.points))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{FoldOnly, collect_with_next};
     use crate::{Dimensions, GenerationConfig};
     use std::collections::BTreeMap;
 
@@ -160,6 +225,51 @@ mod tests {
         let [a, b] = segments[0];
         assert!(a.distance(Vec3::ZERO) < 1e-5);
         assert!(b.distance(Vec3::Y) < 1e-5, "end: {b}");
+    }
+
+    #[test]
+    fn fold_uses_symbol_fold_for_plain_and_depth_segments() {
+        let plain = Segments3D::new(FoldOnly::new(br"F[+/F]f-F".iter().copied()), 90.0, 1.0, 0.0)
+            .fold(Vec::new(), |mut segments, segment| {
+                segments.push(segment);
+                segments
+            });
+        let with_depth = Segments3DWithTopologicalDepth::new(
+            FoldOnly::new(br"F[+/F]f-F".iter().copied()),
+            90.0,
+            1.0,
+            0.0,
+        )
+        .fold(Vec::new(), |mut segments, segment| {
+            segments.push(segment);
+            segments
+        });
+
+        assert_eq!(plain.len(), 3);
+        assert_eq!(with_depth.len(), 3);
+    }
+
+    #[test]
+    fn hilbert_fold_matches_repeated_next_with_depths() {
+        let config = GenerationConfig {
+            dimensions: Dimensions::ThreeD,
+            axiom: "X".to_string(),
+            iterations: 3,
+            angle: 90.0,
+            step: 1.0,
+            initial_heading: 0.0,
+            rules: BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
+        };
+        let folded = crate::generate_3d_with_topological_depth(&config).fold(
+            Vec::new(),
+            |mut segments, segment| {
+                segments.push(segment);
+                segments
+            },
+        );
+        let stepped = collect_with_next(crate::generate_3d_with_topological_depth(&config));
+
+        assert_eq!(folded, stepped);
     }
 
     #[test]

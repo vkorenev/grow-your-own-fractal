@@ -12,6 +12,8 @@ struct Frame {
 pub(crate) struct ExpandIter {
     arena: Vec<u8>,
     rules: Box<[Option<(u32, u32)>; 256]>,
+    terminal_rules: Box<[Option<(u32, u32)>; 256]>,
+    emit: [bool; 256],
     stack: Vec<Frame>,
     terminal_pos: u32,
     terminal_end: u32,
@@ -45,9 +47,14 @@ impl Iterator for ExpandIter {
                 frame.pos += 1;
                 (b, frame.depth)
             };
-            if depth > 0
-                && let Some((s, e)) = self.rules[byte as usize]
-            {
+            // Children entering depth 0 stream their span terminally, so they
+            // take the pre-filtered rule copies instead of the originals.
+            let table = if depth == 1 {
+                &self.terminal_rules
+            } else {
+                &self.rules
+            };
+            if let Some((s, e)) = table[byte as usize] {
                 self.stack.push(Frame {
                     pos: s,
                     end: e,
@@ -55,7 +62,55 @@ impl Iterator for ExpandIter {
                 });
                 continue;
             }
-            return Some(byte);
+            if self.emit[byte as usize] {
+                return Some(byte);
+            }
+        }
+    }
+
+    fn fold<B, F>(mut self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut acc = self.arena[self.terminal_pos as usize..self.terminal_end as usize]
+            .iter()
+            .copied()
+            .fold(init, &mut f);
+
+        loop {
+            let Some(frame) = self.stack.last_mut() else {
+                return acc;
+            };
+            if frame.pos == frame.end {
+                self.stack.pop();
+                continue;
+            }
+            if frame.depth == 0 {
+                let start = frame.pos as usize;
+                let end = frame.end as usize;
+                self.stack.pop();
+                acc = self.arena[start..end].iter().copied().fold(acc, &mut f);
+                continue;
+            }
+
+            let byte = self.arena[frame.pos as usize];
+            frame.pos += 1;
+            let depth = frame.depth - 1;
+            let table = if depth == 0 {
+                &self.terminal_rules
+            } else {
+                &self.rules
+            };
+            if let Some((s, e)) = table[byte as usize] {
+                self.stack.push(Frame {
+                    pos: s,
+                    end: e,
+                    depth,
+                });
+            } else if self.emit[byte as usize] {
+                acc = f(acc, byte);
+            }
         }
     }
 }
@@ -79,7 +134,12 @@ fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 
     }
 }
 
-pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u32) -> ExpandIter {
+fn expand_impl(
+    axiom: &str,
+    rules: &BTreeMap<char, String>,
+    iterations: u32,
+    effects_only: bool,
+) -> ExpandIter {
     let mut non_ascii: Vec<(char, u8)> = Vec::new();
     let mut next_id = NON_ASCII_BASE;
     let mut arena: Vec<u8> = Vec::new();
@@ -101,17 +161,83 @@ pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u3
         rule_table[key_id] = Some((rhs_start, arena.len() as u32));
     }
 
+    // Effects-only expansion appends filtered copies of the axiom and each rule
+    // RHS (effect bytes only) to the arena. Depth-0 spans stream from these
+    // copies, and `emit` drops pass-through bytes yielded at depth > 0. The
+    // filtered table must be `Some` exactly where `rule_table` is: frame pushes
+    // select a table by depth and rely on the two agreeing.
+    let (terminal_rules, emit, axiom_start, axiom_end) = if effects_only {
+        let mut effect_table = [false; 256];
+        for &byte in b"Ff+-|[]&^/\\" {
+            effect_table[byte as usize] = true;
+        }
+
+        let filtered_axiom_start = arena.len() as u32;
+        for pos in 0..axiom_end as usize {
+            let byte = arena[pos];
+            if effect_table[byte as usize] {
+                arena.push(byte);
+            }
+        }
+        let filtered_axiom_end = arena.len() as u32;
+
+        let mut filtered_rule_table: Box<[Option<(u32, u32)>; 256]> = Box::new([None; 256]);
+        for symbol in 0..rule_table.len() {
+            let Some((start, end)) = rule_table[symbol] else {
+                continue;
+            };
+            let filtered_start = arena.len() as u32;
+            for pos in start as usize..end as usize {
+                let byte = arena[pos];
+                if effect_table[byte as usize] {
+                    arena.push(byte);
+                }
+            }
+            filtered_rule_table[symbol] = Some((filtered_start, arena.len() as u32));
+        }
+
+        // At zero iterations the axiom frame itself streams terminally, so it
+        // starts on the filtered copy.
+        if iterations == 0 {
+            (
+                filtered_rule_table,
+                effect_table,
+                filtered_axiom_start,
+                filtered_axiom_end,
+            )
+        } else {
+            (filtered_rule_table, effect_table, 0, axiom_end)
+        }
+    } else {
+        (rule_table.clone(), [true; 256], 0, axiom_end)
+    };
+
     ExpandIter {
         arena,
         rules: rule_table,
+        terminal_rules,
+        emit,
         stack: vec![Frame {
-            pos: 0,
+            pos: axiom_start,
             end: axiom_end,
             depth: iterations,
         }],
         terminal_pos: 0,
         terminal_end: 0,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u32) -> ExpandIter {
+    expand_impl(axiom, rules, iterations, false)
+}
+
+pub(crate) fn expand_effects(
+    axiom: &str,
+    rules: &BTreeMap<char, String>,
+    iterations: u32,
+) -> ExpandIter {
+    expand_impl(axiom, rules, iterations, true)
 }
 
 /// Returns the maximum iteration count for which the total number of drawn segments
@@ -182,6 +308,7 @@ pub fn unused_rules(axiom: &str, rules: &BTreeMap<char, String>) -> Vec<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::collect_with_next;
 
     fn koch_rules() -> BTreeMap<char, String> {
         [('F', "F-F++F-F".to_string())].into()
@@ -220,6 +347,39 @@ mod tests {
         let result: Vec<u8> = expand("F++F++F", &koch_rules(), 1).collect();
         // Each F → F-F++F-F; the ++ between each F are carried through.
         assert_eq!(result, b"F-F++F-F++F-F++F-F++F-F++F-F");
+    }
+
+    #[test]
+    fn effect_expansion_matches_full_expansion_with_ignored_symbols_removed() {
+        let rules: BTreeMap<char, String> = [
+            ('X', "F+Y&ä".to_string()),
+            ('Y', "F[-X]^f".to_string()),
+            ('ä', "F/Z".to_string()),
+        ]
+        .into();
+        let is_effect = |byte: &u8| b"Ff+-|[]&^/\\".contains(byte);
+
+        for iterations in 0..=3 {
+            let expected: Vec<_> = expand("X|Y", &rules, iterations)
+                .filter(is_effect)
+                .collect();
+            let actual: Vec<_> = expand_effects("X|Y", &rules, iterations).collect();
+
+            assert_eq!(actual, expected, "iterations={iterations}");
+        }
+    }
+
+    #[test]
+    fn fold_matches_repeated_next_after_partial_terminal_consumption() {
+        let rules: BTreeMap<char, String> = [('F', "F+F-X".to_string())].into();
+        let mut folded = expand("F", &rules, 3);
+        let first = folded.next().unwrap();
+        let folded = folded.fold(vec![first], |mut bytes, byte| {
+            bytes.push(byte);
+            bytes
+        });
+
+        assert_eq!(folded, collect_with_next(expand("F", &rules, 3)));
     }
 
     #[test]
