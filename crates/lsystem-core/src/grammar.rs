@@ -1,5 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+const NON_ASCII_BASE: u8 = 128;
+const MAX_NON_ASCII_SYMBOLS: usize = (u8::MAX - NON_ASCII_BASE + 1) as usize;
+
 struct Frame {
     pos: u32,
     end: u32,
@@ -10,18 +13,34 @@ pub(crate) struct ExpandIter {
     arena: Vec<u8>,
     rules: Box<[Option<(u32, u32)>; 256]>,
     stack: Vec<Frame>,
+    terminal_pos: u32,
+    terminal_end: u32,
 }
 
 impl Iterator for ExpandIter {
     type Item = u8;
 
     fn next(&mut self) -> Option<u8> {
+        if self.terminal_pos < self.terminal_end {
+            let byte = self.arena[self.terminal_pos as usize];
+            self.terminal_pos += 1;
+            return Some(byte);
+        }
+
         loop {
-            while self.stack.last().is_some_and(|f| f.pos == f.end) {
-                self.stack.pop();
-            }
             let (byte, depth) = {
                 let frame = self.stack.last_mut()?;
+                if frame.pos == frame.end {
+                    self.stack.pop();
+                    continue;
+                }
+                if frame.depth == 0 {
+                    let pos = frame.pos;
+                    self.terminal_pos = pos + 1;
+                    self.terminal_end = frame.end;
+                    self.stack.pop();
+                    return Some(self.arena[pos as usize]);
+                }
                 let b = self.arena[frame.pos as usize];
                 frame.pos += 1;
                 (b, frame.depth)
@@ -41,6 +60,8 @@ impl Iterator for ExpandIter {
     }
 }
 
+/// Maps ASCII symbols to their byte values and assigns non-ASCII symbols
+/// sequential IDs from [`NON_ASCII_BASE`] through `u8::MAX`.
 fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 {
     if c.is_ascii() {
         c as u8
@@ -48,8 +69,8 @@ fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 
         id
     } else {
         assert!(
-            non_ascii.len() < 128,
-            "too many distinct non-ASCII symbols (max 128)"
+            non_ascii.len() < MAX_NON_ASCII_SYMBOLS,
+            "too many distinct non-ASCII symbols (max {MAX_NON_ASCII_SYMBOLS})"
         );
         let id = *next_id;
         *next_id = next_id.wrapping_add(1);
@@ -60,10 +81,12 @@ fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 
 
 pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u32) -> ExpandIter {
     let mut non_ascii: Vec<(char, u8)> = Vec::new();
-    let mut next_id: u8 = 128;
+    let mut next_id = NON_ASCII_BASE;
     let mut arena: Vec<u8> = Vec::new();
     let mut rule_table: Box<[Option<(u32, u32)>; 256]> = Box::new([None; 256]);
 
+    // The axiom occupies the arena prefix. Each rule RHS is appended afterward,
+    // and the rule table records its half-open range in the shared arena.
     for c in axiom.chars() {
         arena.push(char_to_id(c, &mut non_ascii, &mut next_id));
     }
@@ -86,6 +109,8 @@ pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u3
             end: axiom_end,
             depth: iterations,
         }],
+        terminal_pos: 0,
+        terminal_end: 0,
     }
 }
 
@@ -166,6 +191,28 @@ mod tests {
     fn zero_iterations_returns_axiom() {
         let result: Vec<u8> = expand("F++F++F", &koch_rules(), 0).collect();
         assert_eq!(result, b"F++F++F");
+    }
+
+    #[test]
+    fn depth_zero_frame_streams_remaining_terminal_span_after_pop() {
+        let mut symbols = expand("ABC", &BTreeMap::new(), 0);
+
+        assert_eq!(symbols.next(), Some(b'A'));
+        assert!(symbols.stack.is_empty());
+        assert_eq!(symbols.collect::<Vec<_>>(), b"BC");
+    }
+
+    #[test]
+    fn empty_axiom_returns_no_symbols() {
+        let result: Vec<u8> = expand("", &koch_rules(), 1).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_rule_rhs_resumes_parent_frame() {
+        let rules: BTreeMap<char, String> = [('F', String::new())].into();
+        let result: Vec<u8> = expand("FA", &rules, 1).collect();
+        assert_eq!(result, b"A");
     }
 
     #[test]
@@ -253,7 +300,7 @@ mod tests {
     #[test]
     fn two_distinct_non_ascii_chars_get_distinct_ids() {
         // If 'ä' and 'ö' both got ID 128, the second rule would overwrite the
-        // first in the rule table and "äö" would expand to "FF" instead of "FFF".
+        // first in the rule table and "äö" would expand to "FFFF" instead of "FFF".
         let rules: BTreeMap<char, String> =
             [('ä', "F".to_string()), ('ö', "FF".to_string())].into();
         let result: Vec<u8> = expand("äö", &rules, 1).collect();
@@ -298,6 +345,13 @@ mod tests {
         let result: Vec<u8> = expand(&axiom, &BTreeMap::new(), 0).collect();
         assert_eq!(result.len(), 128);
         assert_eq!(result, (128u8..=255u8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    #[should_panic(expected = "too many distinct non-ASCII symbols (max 128)")]
+    fn panics_on_129th_distinct_non_ascii_symbol() {
+        let axiom: String = ('\u{0080}'..='\u{0100}').collect();
+        let _ = expand(&axiom, &BTreeMap::new(), 0).collect::<Vec<_>>();
     }
 
     #[test]
