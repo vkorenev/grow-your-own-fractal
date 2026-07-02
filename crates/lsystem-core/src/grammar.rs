@@ -1,43 +1,116 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) struct ExpandIter<'a> {
-    stack: Vec<(std::str::Chars<'a>, u32)>,
-    rules: &'a BTreeMap<char, String>,
+const NON_ASCII_BASE: u8 = 128;
+const MAX_NON_ASCII_SYMBOLS: usize = (u8::MAX - NON_ASCII_BASE + 1) as usize;
+
+struct Frame {
+    pos: u32,
+    end: u32,
+    depth: u32,
 }
 
-impl Iterator for ExpandIter<'_> {
-    type Item = char;
+pub(crate) struct ExpandIter {
+    arena: Vec<u8>,
+    rules: Box<[Option<(u32, u32)>; 256]>,
+    stack: Vec<Frame>,
+    terminal_pos: u32,
+    terminal_end: u32,
+}
 
-    fn next(&mut self) -> Option<char> {
+impl Iterator for ExpandIter {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<u8> {
+        if self.terminal_pos < self.terminal_end {
+            let byte = self.arena[self.terminal_pos as usize];
+            self.terminal_pos += 1;
+            return Some(byte);
+        }
+
         loop {
-            let top = self.stack.last_mut()?;
-            let depth = top.1;
-            match top.0.next() {
-                None => {
+            let (byte, depth) = {
+                let frame = self.stack.last_mut()?;
+                if frame.pos == frame.end {
                     self.stack.pop();
+                    continue;
                 }
-                Some(ch) => {
-                    if depth > 0
-                        && let Some(rhs) = self.rules.get(&ch)
-                    {
-                        self.stack.push((rhs.chars(), depth - 1));
-                        continue;
-                    }
-                    return Some(ch);
+                if frame.depth == 0 {
+                    let pos = frame.pos;
+                    self.terminal_pos = pos + 1;
+                    self.terminal_end = frame.end;
+                    self.stack.pop();
+                    return Some(self.arena[pos as usize]);
                 }
+                let b = self.arena[frame.pos as usize];
+                frame.pos += 1;
+                (b, frame.depth)
+            };
+            if depth > 0
+                && let Some((s, e)) = self.rules[byte as usize]
+            {
+                self.stack.push(Frame {
+                    pos: s,
+                    end: e,
+                    depth: depth - 1,
+                });
+                continue;
             }
+            return Some(byte);
         }
     }
 }
 
-pub(crate) fn expand<'a>(
-    axiom: &'a str,
-    rules: &'a BTreeMap<char, String>,
-    iterations: u32,
-) -> ExpandIter<'a> {
+/// Maps ASCII symbols to their byte values and assigns non-ASCII symbols
+/// sequential IDs from [`NON_ASCII_BASE`] through `u8::MAX`.
+fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 {
+    if c.is_ascii() {
+        c as u8
+    } else if let Some(&(_, id)) = non_ascii.iter().find(|(ch, _)| *ch == c) {
+        id
+    } else {
+        assert!(
+            non_ascii.len() < MAX_NON_ASCII_SYMBOLS,
+            "too many distinct non-ASCII symbols (max {MAX_NON_ASCII_SYMBOLS})"
+        );
+        let id = *next_id;
+        *next_id = next_id.wrapping_add(1);
+        non_ascii.push((c, id));
+        id
+    }
+}
+
+pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u32) -> ExpandIter {
+    let mut non_ascii: Vec<(char, u8)> = Vec::new();
+    let mut next_id = NON_ASCII_BASE;
+    let mut arena: Vec<u8> = Vec::new();
+    let mut rule_table: Box<[Option<(u32, u32)>; 256]> = Box::new([None; 256]);
+
+    // The axiom occupies the arena prefix. Each rule RHS is appended afterward,
+    // and the rule table records its half-open range in the shared arena.
+    for c in axiom.chars() {
+        arena.push(char_to_id(c, &mut non_ascii, &mut next_id));
+    }
+    let axiom_end = arena.len() as u32;
+
+    for (k, v) in rules {
+        let key_id = char_to_id(*k, &mut non_ascii, &mut next_id) as usize;
+        let rhs_start = arena.len() as u32;
+        for c in v.chars() {
+            arena.push(char_to_id(c, &mut non_ascii, &mut next_id));
+        }
+        rule_table[key_id] = Some((rhs_start, arena.len() as u32));
+    }
+
     ExpandIter {
-        stack: vec![(axiom.chars(), iterations)],
-        rules,
+        arena,
+        rules: rule_table,
+        stack: vec![Frame {
+            pos: 0,
+            end: axiom_end,
+            depth: iterations,
+        }],
+        terminal_pos: 0,
+        terminal_end: 0,
     }
 }
 
@@ -116,15 +189,37 @@ mod tests {
 
     #[test]
     fn zero_iterations_returns_axiom() {
-        let result: String = expand("F++F++F", &koch_rules(), 0).collect();
-        assert_eq!(result, "F++F++F");
+        let result: Vec<u8> = expand("F++F++F", &koch_rules(), 0).collect();
+        assert_eq!(result, b"F++F++F");
+    }
+
+    #[test]
+    fn depth_zero_frame_streams_remaining_terminal_span_after_pop() {
+        let mut symbols = expand("ABC", &BTreeMap::new(), 0);
+
+        assert_eq!(symbols.next(), Some(b'A'));
+        assert!(symbols.stack.is_empty());
+        assert_eq!(symbols.collect::<Vec<_>>(), b"BC");
+    }
+
+    #[test]
+    fn empty_axiom_returns_no_symbols() {
+        let result: Vec<u8> = expand("", &koch_rules(), 1).collect();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_rule_rhs_resumes_parent_frame() {
+        let rules: BTreeMap<char, String> = [('F', String::new())].into();
+        let result: Vec<u8> = expand("FA", &rules, 1).collect();
+        assert_eq!(result, b"A");
     }
 
     #[test]
     fn one_iteration_expands_f() {
-        let result: String = expand("F++F++F", &koch_rules(), 1).collect();
+        let result: Vec<u8> = expand("F++F++F", &koch_rules(), 1).collect();
         // Each F → F-F++F-F; the ++ between each F are carried through.
-        assert_eq!(result, "F-F++F-F++F-F++F-F++F-F++F-F");
+        assert_eq!(result, b"F-F++F-F++F-F++F-F++F-F++F-F");
     }
 
     #[test]
@@ -133,7 +228,7 @@ mod tests {
         let rules = koch_rules();
         for iter in 0..=4u32 {
             let f_count = expand("F++F++F", &rules, iter)
-                .filter(|&c| c == 'F')
+                .filter(|&b| b == b'F')
                 .count();
             assert_eq!(f_count, 3 * 4usize.pow(iter), "iter {iter}");
         }
@@ -172,8 +267,8 @@ mod tests {
         // iter 1: "F" → "FX"
         // iter 2: F→FX, X→X → "FXX"
         let rules: BTreeMap<char, String> = [('F', "FX".to_string())].into();
-        let result: String = expand("F", &rules, 2).collect();
-        assert_eq!(result, "FXX");
+        let result: Vec<u8> = expand("F", &rules, 2).collect();
+        assert_eq!(result, b"FXX");
     }
 
     #[test]
@@ -184,8 +279,79 @@ mod tests {
         // iter 2: a→a, A→aA, B→Bb, b→b  →  "aaABbb"
         let rules: BTreeMap<char, String> =
             [('A', "aA".to_string()), ('B', "Bb".to_string())].into();
-        let result: String = expand("AB", &rules, 2).collect();
-        assert_eq!(result, "aaABbb");
+        let result: Vec<u8> = expand("AB", &rules, 2).collect();
+        assert_eq!(result, b"aaABbb");
+    }
+
+    #[test]
+    fn non_ascii_rule_key_is_applied() {
+        let rules: BTreeMap<char, String> = [('ä', "FFF".to_string())].into();
+        let result: Vec<u8> = expand("ä", &rules, 1).collect();
+        assert_eq!(result, b"FFF");
+    }
+
+    #[test]
+    fn non_ascii_without_rule_passes_through() {
+        // 'ä' is assigned ID 128; with no rule it passes through unchanged.
+        let result: Vec<u8> = expand("ä", &BTreeMap::new(), 1).collect();
+        assert_eq!(result, [128u8]);
+    }
+
+    #[test]
+    fn two_distinct_non_ascii_chars_get_distinct_ids() {
+        // If 'ä' and 'ö' both got ID 128, the second rule would overwrite the
+        // first in the rule table and "äö" would expand to "FFFF" instead of "FFF".
+        let rules: BTreeMap<char, String> =
+            [('ä', "F".to_string()), ('ö', "FF".to_string())].into();
+        let result: Vec<u8> = expand("äö", &rules, 1).collect();
+        assert_eq!(result, b"FFF");
+    }
+
+    #[test]
+    fn non_ascii_in_rule_rhs_passes_through() {
+        // 'ä' in the RHS is encoded in the arena (ID 128) and passes through
+        // when the iterator encounters it with no rule of its own.
+        let rules: BTreeMap<char, String> = [('F', "äF".to_string())].into();
+        let result: Vec<u8> = expand("F", &rules, 1).collect();
+        assert_eq!(result, [128u8, b'F']);
+    }
+
+    #[test]
+    fn non_ascii_non_terminal_in_rhs_expands_correctly() {
+        // 'ä' appears in both a RHS and has its own rule.
+        // axiom "ä", rule ä→"äF":
+        //   iter 0: [128]
+        //   iter 1: ä→äF → [128, b'F']  (ä at depth 0 passes through)
+        //   iter 2: ä→äF, depth of inner ä is 0 → [128, b'F', b'F']
+        let rules: BTreeMap<char, String> = [('ä', "äF".to_string())].into();
+        let result: Vec<u8> = expand("ä", &rules, 2).collect();
+        assert_eq!(result, [128u8, b'F', b'F']);
+    }
+
+    #[test]
+    fn mixed_ascii_and_non_ascii_axiom_with_rules() {
+        // "Fä": F has no rule (passes through), ä → "FF".
+        // iter 1: F passes through, ä→FF → "FFF"
+        let rules: BTreeMap<char, String> = [('ä', "FF".to_string())].into();
+        let result: Vec<u8> = expand("Fä", &rules, 1).collect();
+        assert_eq!(result, b"FFF");
+    }
+
+    #[test]
+    fn supports_128_distinct_non_ascii_symbols() {
+        // U+0080..=U+00FF are exactly 128 distinct non-ASCII chars (IDs 128..=255).
+        // None of them have rules, so they all pass through unchanged.
+        let axiom: String = ('\u{0080}'..='\u{00FF}').collect();
+        let result: Vec<u8> = expand(&axiom, &BTreeMap::new(), 0).collect();
+        assert_eq!(result.len(), 128);
+        assert_eq!(result, (128u8..=255u8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    #[should_panic(expected = "too many distinct non-ASCII symbols (max 128)")]
+    fn panics_on_129th_distinct_non_ascii_symbol() {
+        let axiom: String = ('\u{0080}'..='\u{0100}').collect();
+        let _ = expand(&axiom, &BTreeMap::new(), 0).collect::<Vec<_>>();
     }
 
     #[test]

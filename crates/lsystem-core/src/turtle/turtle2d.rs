@@ -2,12 +2,12 @@ use glam::Vec2;
 
 use crate::Segment2DWithTopologicalDepth;
 
-pub(crate) struct Segments2D<I: Iterator<Item = char>> {
+pub(crate) struct Segments2D<I: Iterator<Item = u8>> {
     inner: Segments2DWithTopologicalDepth<I>,
 }
 
-pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = char>> {
-    chars: I,
+pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = u8>> {
+    symbols: I,
     rot_plus: Vec2,
     rot_minus: Vec2,
     delta: Vec2,
@@ -16,11 +16,11 @@ pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = char>> {
     stack: Vec<(Vec2, Vec2, u32)>,
 }
 
-impl<I: Iterator<Item = char>> Segments2DWithTopologicalDepth<I> {
-    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+impl<I: Iterator<Item = u8>> Segments2DWithTopologicalDepth<I> {
+    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         let angle_rad = angle_deg.to_radians();
         Self {
-            chars,
+            symbols,
             rot_plus: Vec2::from_angle(angle_rad),
             rot_minus: Vec2::from_angle(-angle_rad),
             delta: Vec2::from_angle(initial_heading_deg.to_radians()) * step,
@@ -31,13 +31,13 @@ impl<I: Iterator<Item = char>> Segments2DWithTopologicalDepth<I> {
     }
 }
 
-impl<I: Iterator<Item = char>> Iterator for Segments2DWithTopologicalDepth<I> {
+impl<I: Iterator<Item = u8>> Iterator for Segments2DWithTopologicalDepth<I> {
     type Item = Segment2DWithTopologicalDepth;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.chars.next()? {
-                'F' => {
+            match self.symbols.next()? {
+                b'F' => {
                     let next = self.position + self.delta;
                     let segment = Segment2DWithTopologicalDepth {
                         points: [self.position, next],
@@ -47,16 +47,16 @@ impl<I: Iterator<Item = char>> Iterator for Segments2DWithTopologicalDepth<I> {
                     self.topological_depth = self.topological_depth.saturating_add(1);
                     return Some(segment);
                 }
-                'f' => {
+                b'f' => {
                     self.position += self.delta;
                 }
-                '+' => self.delta = self.delta.rotate(self.rot_plus),
-                '-' => self.delta = self.delta.rotate(self.rot_minus),
-                '|' => self.delta = -self.delta,
-                '[' => self
+                b'+' => self.delta = self.delta.rotate(self.rot_plus),
+                b'-' => self.delta = self.delta.rotate(self.rot_minus),
+                b'|' => self.delta = -self.delta,
+                b'[' => self
                     .stack
                     .push((self.position, self.delta, self.topological_depth)),
-                ']' => {
+                b']' => {
                     let state = self.stack.pop();
                     debug_assert!(state.is_some(), "unmatched ] in validated program");
                     if let Some((pos, delta, topological_depth)) = state {
@@ -71,15 +71,20 @@ impl<I: Iterator<Item = char>> Iterator for Segments2DWithTopologicalDepth<I> {
     }
 }
 
-impl<I: Iterator<Item = char>> Segments2D<I> {
-    pub(crate) fn new(chars: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+impl<I: Iterator<Item = u8>> Segments2D<I> {
+    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         Self {
-            inner: Segments2DWithTopologicalDepth::new(chars, angle_deg, step, initial_heading_deg),
+            inner: Segments2DWithTopologicalDepth::new(
+                symbols,
+                angle_deg,
+                step,
+                initial_heading_deg,
+            ),
         }
     }
 }
 
-impl<I: Iterator<Item = char>> Iterator for Segments2D<I> {
+impl<I: Iterator<Item = u8>> Iterator for Segments2D<I> {
     type Item = [Vec2; 2];
 
     fn next(&mut self) -> Option<[Vec2; 2]> {
