@@ -1,7 +1,7 @@
 use crate::config::{ConfigError, Dimensions};
 
-const TERMINALS_UNIVERSAL: &str = "Ff+-|[]";
-const TERMINALS_3D: &str = "&^/\\";
+pub(crate) const TERMINALS_UNIVERSAL: &str = "Ff+-|[]";
+pub(crate) const TERMINALS_3D: &str = "&^/\\";
 
 pub fn validate_symbols(
     chars: &str,

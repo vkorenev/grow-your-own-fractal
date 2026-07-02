@@ -12,8 +12,11 @@ use crate::{
 pub fn export_svg(config: &Config) -> String {
     let colors = config.colors;
     if colors.line.needs_topological_depth() && config.generation.has_stack_directives() {
-        let segments: Vec<Segment2DWithTopologicalDepth> =
-            generate_with_topological_depth(&config.generation).collect();
+        // for_each drives the pipeline's specialized `fold`; `collect` would
+        // pull every symbol one at a time through `next`.
+        let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
+        generate_with_topological_depth(&config.generation)
+            .for_each(|segment| segments.push(segment));
         return export_svg_with_segments(
             &config.generation,
             &colors,
@@ -22,7 +25,9 @@ pub fn export_svg(config: &Config) -> String {
         );
     }
 
-    let segments: Vec<[Vec2; 2]> = generate(&config.generation).collect();
+    // for_each drives the pipeline's specialized `fold` (see above).
+    let mut segments: Vec<[Vec2; 2]> = Vec::new();
+    generate(&config.generation).for_each(|segment| segments.push(segment));
     export_svg_with_segments(
         &config.generation,
         &colors,

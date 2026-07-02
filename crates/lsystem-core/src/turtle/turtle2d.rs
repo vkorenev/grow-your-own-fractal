@@ -8,6 +8,12 @@ pub(crate) struct Segments2D<I: Iterator<Item = u8>> {
 
 pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = u8>> {
     symbols: I,
+    state: TurtleState2D,
+}
+
+/// Turtle state plus the single symbol transition shared by `next` and `fold`,
+/// so the two iteration paths cannot drift apart.
+struct TurtleState2D {
     rot_plus: Vec2,
     rot_minus: Vec2,
     delta: Vec2,
@@ -16,17 +22,69 @@ pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = u8>> {
     stack: Vec<(Vec2, Vec2, u32)>,
 }
 
+impl TurtleState2D {
+    #[inline]
+    fn apply(&mut self, symbol: u8) -> Option<Segment2DWithTopologicalDepth> {
+        match symbol {
+            b'F' => {
+                let next = self.position + self.delta;
+                let segment = Segment2DWithTopologicalDepth {
+                    points: [self.position, next],
+                    topological_depth: self.topological_depth,
+                };
+                self.position = next;
+                self.topological_depth = self.topological_depth.saturating_add(1);
+                Some(segment)
+            }
+            b'f' => {
+                self.position += self.delta;
+                None
+            }
+            b'+' => {
+                self.delta = self.delta.rotate(self.rot_plus);
+                None
+            }
+            b'-' => {
+                self.delta = self.delta.rotate(self.rot_minus);
+                None
+            }
+            b'|' => {
+                self.delta = -self.delta;
+                None
+            }
+            b'[' => {
+                self.stack
+                    .push((self.position, self.delta, self.topological_depth));
+                None
+            }
+            b']' => {
+                let state = self.stack.pop();
+                debug_assert!(state.is_some(), "unmatched ] in validated program");
+                if let Some((position, delta, topological_depth)) = state {
+                    self.position = position;
+                    self.delta = delta;
+                    self.topological_depth = topological_depth;
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<I: Iterator<Item = u8>> Segments2DWithTopologicalDepth<I> {
     pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         let angle_rad = angle_deg.to_radians();
         Self {
             symbols,
-            rot_plus: Vec2::from_angle(angle_rad),
-            rot_minus: Vec2::from_angle(-angle_rad),
-            delta: Vec2::from_angle(initial_heading_deg.to_radians()) * step,
-            position: Vec2::ZERO,
-            topological_depth: 0,
-            stack: Vec::new(),
+            state: TurtleState2D {
+                rot_plus: Vec2::from_angle(angle_rad),
+                rot_minus: Vec2::from_angle(-angle_rad),
+                delta: Vec2::from_angle(initial_heading_deg.to_radians()) * step,
+                position: Vec2::ZERO,
+                topological_depth: 0,
+                stack: Vec::new(),
+            },
         }
     }
 }
@@ -36,38 +94,24 @@ impl<I: Iterator<Item = u8>> Iterator for Segments2DWithTopologicalDepth<I> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            match self.symbols.next()? {
-                b'F' => {
-                    let next = self.position + self.delta;
-                    let segment = Segment2DWithTopologicalDepth {
-                        points: [self.position, next],
-                        topological_depth: self.topological_depth,
-                    };
-                    self.position = next;
-                    self.topological_depth = self.topological_depth.saturating_add(1);
-                    return Some(segment);
-                }
-                b'f' => {
-                    self.position += self.delta;
-                }
-                b'+' => self.delta = self.delta.rotate(self.rot_plus),
-                b'-' => self.delta = self.delta.rotate(self.rot_minus),
-                b'|' => self.delta = -self.delta,
-                b'[' => self
-                    .stack
-                    .push((self.position, self.delta, self.topological_depth)),
-                b']' => {
-                    let state = self.stack.pop();
-                    debug_assert!(state.is_some(), "unmatched ] in validated program");
-                    if let Some((pos, delta, topological_depth)) = state {
-                        self.position = pos;
-                        self.delta = delta;
-                        self.topological_depth = topological_depth;
-                    }
-                }
-                _ => {}
+            let symbol = self.symbols.next()?;
+            if let Some(segment) = self.state.apply(symbol) {
+                return Some(segment);
             }
         }
+    }
+
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        let mut state = self.state;
+        self.symbols
+            .fold(init, |acc, symbol| match state.apply(symbol) {
+                Some(segment) => f(acc, segment),
+                None => acc,
+            })
     }
 }
 
@@ -90,11 +134,20 @@ impl<I: Iterator<Item = u8>> Iterator for Segments2D<I> {
     fn next(&mut self) -> Option<[Vec2; 2]> {
         self.inner.next().map(|segment| segment.points)
     }
+
+    fn fold<B, F>(self, init: B, mut f: F) -> B
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Item) -> B,
+    {
+        self.inner.fold(init, |acc, segment| f(acc, segment.points))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::{FoldOnly, collect_with_next};
     use crate::{Dimensions, GenerationConfig};
     use std::collections::BTreeMap;
 
@@ -312,5 +365,53 @@ mod tests {
             (b - expected).length() < 1e-5,
             "step=2 at 45° should end near {expected}: {b}"
         );
+    }
+
+    #[test]
+    fn fold_uses_symbol_fold_for_plain_and_depth_segments() {
+        let plain = Segments2D::new(FoldOnly::new(b"F[+F]f-F".iter().copied()), 90.0, 1.0, 0.0)
+            .fold(Vec::new(), |mut segments, segment| {
+                segments.push(segment);
+                segments
+            });
+        let with_depth = Segments2DWithTopologicalDepth::new(
+            FoldOnly::new(b"F[+F]f-F".iter().copied()),
+            90.0,
+            1.0,
+            0.0,
+        )
+        .fold(Vec::new(), |mut segments, segment| {
+            segments.push(segment);
+            segments
+        });
+
+        assert_eq!(plain.len(), 3);
+        assert_eq!(with_depth.len(), 3);
+    }
+
+    #[test]
+    fn plant_fold_matches_repeated_next_with_depths() {
+        let config = GenerationConfig {
+            dimensions: Dimensions::TwoD,
+            axiom: "X".to_string(),
+            iterations: 4,
+            angle: 23.4,
+            step: 1.0,
+            initial_heading: 90.0,
+            rules: BTreeMap::from([
+                ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        };
+        let folded = crate::generate_with_topological_depth(&config).fold(
+            Vec::new(),
+            |mut segments, segment| {
+                segments.push(segment);
+                segments
+            },
+        );
+        let stepped = collect_with_next(crate::generate_with_topological_depth(&config));
+
+        assert_eq!(folded, stepped);
     }
 }

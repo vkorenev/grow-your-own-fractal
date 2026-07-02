@@ -62,9 +62,7 @@ impl Default for SegmentDataBuilder {
 
 pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> SegmentData {
     let mut builder = SegmentDataBuilder::new();
-    for segment in segments {
-        builder.push_segment(segment);
-    }
+    segments.for_each(|segment| builder.push_segment(segment));
     builder.finish()
 }
 
@@ -142,9 +140,7 @@ pub fn geometry_to_depth_segments(
     segments: impl Iterator<Item = Segment2DWithTopologicalDepth>,
 ) -> TopologicalDepthSegmentData {
     let mut builder = TopologicalDepthSegmentDataBuilder::new();
-    for segment in segments {
-        builder.push_segment(segment);
-    }
+    segments.for_each(|segment| builder.push_segment(segment));
     builder.finish()
 }
 
@@ -213,9 +209,7 @@ impl Default for SegmentDataBuilder3D {
 
 pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> SegmentData3D {
     let mut builder = SegmentDataBuilder3D::new();
-    for segment in segments {
-        builder.push_segment(segment);
-    }
+    segments.for_each(|segment| builder.push_segment(segment));
     builder.finish()
 }
 
@@ -302,9 +296,7 @@ pub fn geometry_to_depth_segments_3d(
     segments: impl Iterator<Item = Segment3DWithTopologicalDepth>,
 ) -> TopologicalDepthSegmentData3D {
     let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
-    for segment in segments {
-        builder.push_segment(segment);
-    }
+    segments.for_each(|segment| builder.push_segment(segment));
     builder.finish()
 }
 
@@ -391,6 +383,34 @@ mod tests {
 
     const EPS: f32 = 1e-5;
 
+    struct FoldOnly<T> {
+        items: std::vec::IntoIter<T>,
+    }
+
+    impl<T> FoldOnly<T> {
+        fn new(items: Vec<T>) -> Self {
+            Self {
+                items: items.into_iter(),
+            }
+        }
+    }
+
+    impl<T> Iterator for FoldOnly<T> {
+        type Item = T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            panic!("renderer bridge must drain geometry through fold")
+        }
+
+        fn fold<B, F>(self, init: B, f: F) -> B
+        where
+            Self: Sized,
+            F: FnMut(B, Self::Item) -> B,
+        {
+            self.items.fold(init, f)
+        }
+    }
+
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < EPS
     }
@@ -398,6 +418,30 @@ mod tests {
     fn hex_rgba(hex: Rgb) -> Vec4 {
         let [r, g, b] = hex.to_array();
         Vec4::new(r, g, b, 1.0)
+    }
+
+    #[test]
+    fn geometry_drains_use_iterator_fold() {
+        let segment_2d = [Vec2::ZERO, Vec2::X];
+        let segment_3d = [Vec3::ZERO, Vec3::X];
+
+        let plain_2d = geometry_to_segments(FoldOnly::new(vec![segment_2d]));
+        let depth_2d =
+            geometry_to_depth_segments(FoldOnly::new(vec![Segment2DWithTopologicalDepth {
+                points: segment_2d,
+                topological_depth: 0,
+            }]));
+        let plain_3d = geometry_to_segments_3d(FoldOnly::new(vec![segment_3d]));
+        let depth_3d =
+            geometry_to_depth_segments_3d(FoldOnly::new(vec![Segment3DWithTopologicalDepth {
+                points: segment_3d,
+                topological_depth: 0,
+            }]));
+
+        assert_eq!(plain_2d.segments.len(), 1);
+        assert_eq!(depth_2d.segments.len(), 1);
+        assert_eq!(plain_3d.segments.len(), 1);
+        assert_eq!(depth_3d.segments.len(), 1);
     }
 
     #[test]
