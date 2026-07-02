@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::alphabet::{TERMINALS_3D, TERMINALS_UNIVERSAL};
+
 const NON_ASCII_BASE: u8 = 128;
 const MAX_NON_ASCII_SYMBOLS: usize = (u8::MAX - NON_ASCII_BASE + 1) as usize;
 
@@ -168,7 +170,11 @@ fn expand_impl(
     // select a table by depth and rely on the two agreeing.
     let (terminal_rules, emit, axiom_start, axiom_end) = if effects_only {
         let mut effect_table = [false; 256];
-        for &byte in b"Ff+-|[]&^/\\" {
+        for &byte in TERMINALS_UNIVERSAL
+            .as_bytes()
+            .iter()
+            .chain(TERMINALS_3D.as_bytes())
+        {
             effect_table[byte as usize] = true;
         }
 
@@ -357,8 +363,9 @@ mod tests {
             ('ä', "F/Z".to_string()),
         ]
         .into();
-        let is_effect = |byte: &u8| b"Ff+-|[]&^/\\".contains(byte);
-
+        let is_effect = |byte: &u8| {
+            TERMINALS_UNIVERSAL.as_bytes().contains(byte) || TERMINALS_3D.as_bytes().contains(byte)
+        };
         for iterations in 0..=3 {
             let expected: Vec<_> = expand("X|Y", &rules, iterations)
                 .filter(is_effect)
