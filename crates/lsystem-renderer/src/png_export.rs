@@ -199,15 +199,16 @@ mod gpu_tests {
     fn trivial_config() -> lsystem_core::Config {
         lsystem_core::Config {
             name: "test".to_string(),
-            generation: GenerationConfig {
-                dimensions: Dimensions::TwoD,
-                axiom: "F".to_string(),
-                iterations: 0,
-                angle: 90.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: BTreeMap::new(),
-            },
+            generation: GenerationConfig::new(
+                Dimensions::TwoD,
+                "F".to_string(),
+                0,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::new(),
+            )
+            .expect("balanced config"),
             colors: lsystem_core::ColorConfig {
                 background: Rgb::new(0, 0, 0),
                 line: LineColorConfig::Solid(Rgb::new(255, 255, 255)),
@@ -283,8 +284,16 @@ mod gpu_tests {
 
     fn depth_gradient_config(dimensions: Dimensions) -> lsystem_core::Config {
         let mut config = trivial_config();
-        config.generation.dimensions = dimensions;
-        config.generation.axiom = "F[+F]F".to_string();
+        config.generation = GenerationConfig::new(
+            dimensions,
+            "F[+F]F".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
         config.colors.line = LineColorConfig::Gradient {
             start: Rgb::new(255, 0, 0),
             end: Rgb::new(0, 0, 255),

@@ -556,15 +556,16 @@ mod tests {
     }
 
     fn cfg(axiom: &str) -> GenerationConfig {
-        GenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: axiom.to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::new(),
-        }
+        GenerationConfig::new(
+            Dimensions::TwoD,
+            axiom.to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config")
     }
 
     #[test]
@@ -593,15 +594,16 @@ mod tests {
     #[test]
     fn empty_depth_geometry_3d_uses_fallback_bounds_and_zero_max_depth() {
         let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
-            &GenerationConfig {
-                dimensions: Dimensions::ThreeD,
-                axiom: "A".to_string(),
-                iterations: 0,
-                angle: 90.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: BTreeMap::new(),
-            },
+            &GenerationConfig::new(
+                Dimensions::ThreeD,
+                "A".to_string(),
+                0,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::new(),
+            )
+            .expect("balanced config"),
         ));
 
         assert!(data.segments.is_empty());
@@ -654,15 +656,16 @@ mod tests {
     #[test]
     fn topological_depth_segments_3d_preserve_depth_and_compute_max() {
         let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
-            &GenerationConfig {
-                dimensions: Dimensions::ThreeD,
-                axiom: "F[+F]F".to_string(),
-                iterations: 0,
-                angle: 90.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: BTreeMap::new(),
-            },
+            &GenerationConfig::new(
+                Dimensions::ThreeD,
+                "F[+F]F".to_string(),
+                0,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::new(),
+            )
+            .expect("balanced config"),
         ));
 
         assert_eq!(data.segments.len(), 3);

@@ -66,6 +66,11 @@ than caching resolved values inside the editor document.
 - `turtle/turtle2d.rs` yields 2D line segments from expanded symbols.
 - `turtle/turtle3d.rs` yields 3D line segments using quaternion orientation.
 - `config.rs` defines validated runtime config and color types.
+  `GenerationConfig::new` is the only way to build a generation config; it
+  enforces single-letter rule keys and bracket balance on the axiom and every
+  rule RHS, so every expansion is balanced and downstream code (turtle stack
+  handling, templates) relies on that invariant instead of re-validating.
+  The axiom and rules are read-only after construction.
 - `svg_export.rs` exports resolved 2D configs when the `svg` feature is enabled.
 
 3D turtle orientation is stored as a `glam::Quat`. Heading, left, and up vectors

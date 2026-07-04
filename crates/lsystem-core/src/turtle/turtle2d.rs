@@ -152,15 +152,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn gen_config(axiom: &str) -> GenerationConfig {
-        GenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: axiom.to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::new(),
-        }
+        GenerationConfig::new(
+            Dimensions::TwoD,
+            axiom.to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config")
     }
 
     #[test]
@@ -208,15 +209,16 @@ mod tests {
     #[test]
     fn koch_segment_count() {
         for (iters, expected) in [(0u32, 3usize), (1, 12), (2, 48), (3, 192), (4, 768)] {
-            let cfg = GenerationConfig {
-                dimensions: Dimensions::TwoD,
-                axiom: "F++F++F".to_string(),
-                iterations: iters,
-                angle: 60.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: BTreeMap::from([('F', "F-F++F-F".to_string())]),
-            };
+            let cfg = GenerationConfig::new(
+                Dimensions::TwoD,
+                "F++F++F".to_string(),
+                iters,
+                60.0,
+                1.0,
+                0.0,
+                BTreeMap::from([('F', "F-F++F-F".to_string())]),
+            )
+            .expect("balanced config");
             let segments: Vec<[Vec2; 2]> = crate::generate(&cfg).collect();
             assert_eq!(segments.len(), expected, "iter {iters}");
         }
@@ -299,15 +301,16 @@ mod tests {
         // catching delta length drift independently of endpoint closure.
         let rules = BTreeMap::from([('F', "F-F++F-F".to_string())]);
         for iters in 4u32..=6 {
-            let config = GenerationConfig {
-                dimensions: Dimensions::TwoD,
-                axiom: "F++F++F".to_string(),
-                iterations: iters,
-                angle: 60.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: rules.clone(),
-            };
+            let config = GenerationConfig::new(
+                Dimensions::TwoD,
+                "F++F++F".to_string(),
+                iters,
+                60.0,
+                1.0,
+                0.0,
+                rules.clone(),
+            )
+            .expect("balanced config");
             let segments: Vec<[Vec2; 2]> = crate::generate(&config).collect();
             let end = segments.last().expect("non-empty")[1];
             assert!(
@@ -344,15 +347,16 @@ mod tests {
     fn non_default_heading_and_step() {
         // Validates that delta is correctly initialized from a non-default
         // initial heading and step, not just the 0°/1.0 default.
-        let config = GenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: "F".to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 2.0,
-            initial_heading: 45.0,
-            rules: BTreeMap::new(),
-        };
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F".to_string(),
+            0,
+            90.0,
+            2.0,
+            45.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
         let segments: Vec<[Vec2; 2]> = crate::generate(&config).collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
@@ -391,18 +395,19 @@ mod tests {
 
     #[test]
     fn plant_fold_matches_repeated_next_with_depths() {
-        let config = GenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: "X".to_string(),
-            iterations: 4,
-            angle: 23.4,
-            step: 1.0,
-            initial_heading: 90.0,
-            rules: BTreeMap::from([
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "X".to_string(),
+            4,
+            23.4,
+            1.0,
+            90.0,
+            BTreeMap::from([
                 ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
                 ('F', "FF".to_string()),
             ]),
-        };
+        )
+        .expect("balanced config");
         let folded = crate::generate_with_topological_depth(&config).fold(
             Vec::new(),
             |mut segments, segment| {
