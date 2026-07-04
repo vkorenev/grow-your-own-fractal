@@ -66,17 +66,17 @@ impl EditorGenerationConfig {
     /// Fills omitted `step` and `initial_heading` from `defaults`, and clamps
     /// `iterations` to `max_iterations`. Pass `u32::MAX` to skip clamping.
     pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u32) -> GenerationConfig {
-        GenerationConfig {
-            dimensions: self.dimensions,
-            axiom: self.axiom.clone(),
-            iterations: self.iterations.min(max_iterations),
-            angle: self.angle,
-            step: self.step.unwrap_or_else(|| defaults.l_system.step()),
-            initial_heading: self
-                .initial_heading
+        GenerationConfig::new(
+            self.dimensions,
+            self.axiom.clone(),
+            self.iterations.min(max_iterations),
+            self.angle,
+            self.step.unwrap_or_else(|| defaults.l_system.step()),
+            self.initial_heading
                 .unwrap_or_else(|| defaults.l_system.initial_heading()),
-            rules: self.rules.clone(),
-        }
+            self.rules.clone(),
+        )
+        .expect("editor validation guarantees balance")
     }
 }
 
@@ -921,12 +921,12 @@ solid = "#00e680"
 
         assert_eq!(cfg.name, "Koch Snowflake");
         assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
-        assert_eq!(cfg.generation.axiom, "F++F++F");
+        assert_eq!(cfg.generation.axiom(), "F++F++F");
         assert_eq!(cfg.generation.angle, 60.0);
         assert_eq!(cfg.generation.step, 1.0);
         assert_eq!(cfg.generation.initial_heading, 0.0);
         assert_eq!(cfg.generation.iterations, 4);
-        assert_eq!(cfg.generation.rules[&'F'], "F-F++F-F");
+        assert_eq!(cfg.generation.rules()[&'F'], "F-F++F-F");
     }
 
     #[test]
@@ -1073,12 +1073,12 @@ solid = "#00e680"
         let cfg = parse_config(NESTED_KOCH_TOML).unwrap();
         assert_eq!(cfg.name, "Koch Snowflake");
         assert_eq!(cfg.generation.dimensions, Dimensions::TwoD);
-        assert_eq!(cfg.generation.axiom, "F++F++F");
+        assert_eq!(cfg.generation.axiom(), "F++F++F");
         assert_eq!(cfg.generation.angle, 60.0);
         assert_eq!(cfg.generation.step, 1.0);
         assert_eq!(cfg.generation.initial_heading, 0.0);
         assert_eq!(cfg.generation.iterations, 4);
-        assert_eq!(cfg.generation.rules[&'F'], "F-F++F-F");
+        assert_eq!(cfg.generation.rules()[&'F'], "F-F++F-F");
         assert_eq!(cfg.colors.background, hex("#000000"));
         match cfg.colors.line {
             LineColorConfig::HueCycle { initial } => assert_eq!(initial, hex("#408080")),
@@ -1346,8 +1346,8 @@ colors.line.solid = "#00e680"
 
         assert_eq!(cfg.name, "Dotted");
         assert_eq!(cfg.generation.dimensions, Dimensions::ThreeD);
-        assert_eq!(cfg.generation.axiom, "F\\F");
-        assert_eq!(cfg.generation.rules[&'F'], "F\\F");
+        assert_eq!(cfg.generation.axiom(), "F\\F");
+        assert_eq!(cfg.generation.rules()[&'F'], "F\\F");
     }
 
     #[test]
@@ -1427,18 +1427,18 @@ solid = "#1a334d"
         assert_eq!(source.to_toml_string(), toml);
         let doc = ConfigDocument::try_from(source).unwrap();
         let cfg = resolve_doc(&doc);
-        assert_eq!(cfg.generation.axiom, "F\\F");
-        assert_eq!(cfg.generation.rules[&'F'], "F\\F");
+        assert_eq!(cfg.generation.axiom(), "F\\F");
+        assert_eq!(cfg.generation.rules()[&'F'], "F\\F");
     }
 
     #[test]
     fn parses_valid_config() {
         let cfg = parse_config(NESTED_KOCH_TOML).unwrap();
-        assert_eq!(cfg.generation.axiom, "F++F++F");
+        assert_eq!(cfg.generation.axiom(), "F++F++F");
         assert_eq!(cfg.generation.angle, 60.0);
         assert_eq!(cfg.generation.step, 1.0);
         assert_eq!(cfg.generation.iterations, 4);
-        assert_eq!(cfg.generation.rules[&'F'], "F-F++F-F");
+        assert_eq!(cfg.generation.rules()[&'F'], "F-F++F-F");
     }
 
     #[test]
@@ -1705,8 +1705,8 @@ solid = "#00e680"
             r#"F = "F - F""#,
         );
         let cfg = parse_config(&toml).unwrap();
-        assert_eq!(cfg.generation.axiom, "F++F");
-        assert_eq!(cfg.generation.rules[&'F'], "F-F");
+        assert_eq!(cfg.generation.axiom(), "F++F");
+        assert_eq!(cfg.generation.rules()[&'F'], "F-F");
     }
 
     #[test]

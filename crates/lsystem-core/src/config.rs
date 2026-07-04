@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use crate::alphabet::validate_bracket_balance;
 use crate::grammar;
 
 #[derive(Debug, Error)]
@@ -188,10 +189,17 @@ pub struct Config {
 }
 
 /// Validated inputs needed to expand an L-system and run the turtle.
+///
+/// Construction goes through [`GenerationConfig::new`], which enforces
+/// single-letter rule keys and bracket balance on the axiom and every rule
+/// RHS — together these guarantee every expansion is balanced.
+/// Everything downstream (expansion, turtle stack handling, templates)
+/// relies on that invariant, so `axiom` and `rules` are read-only after
+/// construction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationConfig {
     pub dimensions: Dimensions,
-    pub axiom: String,
+    axiom: String,
     pub iterations: u32,
     /// Turn angle in degrees.
     pub angle: f32,
@@ -200,11 +208,54 @@ pub struct GenerationConfig {
     /// Turtle heading at the start, in degrees (0 = +X, counter-clockwise positive).
     /// In 3D this is the initial yaw in the XY plane.
     pub initial_heading: f32,
-    /// Production rules: single ASCII letter → replacement string.
-    pub rules: BTreeMap<char, String>,
+    /// Production rules: single letter → replacement string.
+    rules: BTreeMap<char, String>,
 }
 
 impl GenerationConfig {
+    /// Creates a generation config, rejecting an unbalanced axiom or rule RHS
+    /// and rule keys that are not letters.
+    ///
+    /// Restricting rule keys to letters is part of the balance invariant: a
+    /// rule keyed on `[` or `]` could rewrite a bracket away and unbalance
+    /// the expansion even though every validated string is balanced.
+    pub fn new(
+        dimensions: Dimensions,
+        axiom: String,
+        iterations: u32,
+        angle: f32,
+        step: f32,
+        initial_heading: f32,
+        rules: BTreeMap<char, String>,
+    ) -> Result<Self, ConfigError> {
+        validate_bracket_balance(&axiom, "axiom")?;
+        for (key, rhs) in &rules {
+            if !key.is_alphabetic() {
+                return Err(ConfigError::InvalidRuleKey {
+                    key: key.to_string(),
+                });
+            }
+            validate_bracket_balance(rhs, &format!("rules.{key}"))?;
+        }
+        Ok(Self {
+            dimensions,
+            axiom,
+            iterations,
+            angle,
+            step,
+            initial_heading,
+            rules,
+        })
+    }
+
+    pub fn axiom(&self) -> &str {
+        &self.axiom
+    }
+
+    pub fn rules(&self) -> &BTreeMap<char, String> {
+        &self.rules
+    }
+
     /// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
     ///
     /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
@@ -220,6 +271,84 @@ impl GenerationConfig {
 
 pub(crate) fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) -> bool {
     axiom.contains('[') || rules.values().any(|rhs| rhs.contains('['))
+}
+
+#[cfg(test)]
+mod generation_config {
+    use super::*;
+
+    fn new(axiom: &str, rules: BTreeMap<char, String>) -> Result<GenerationConfig, ConfigError> {
+        GenerationConfig::new(
+            Dimensions::TwoD,
+            axiom.to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            rules,
+        )
+    }
+
+    #[test]
+    fn accepts_balanced_axiom_and_rules() {
+        let config = new("F[+F]F", BTreeMap::from([('F', "F[-F]+[F]".to_string())]))
+            .expect("balanced config");
+        assert_eq!(config.axiom(), "F[+F]F");
+        assert_eq!(config.rules()[&'F'], "F[-F]+[F]");
+    }
+
+    #[test]
+    fn rejects_unbalanced_axiom() {
+        assert!(matches!(
+            new("F[+F", BTreeMap::new()),
+            Err(ConfigError::UnmatchedOpen { field, .. }) if field == "axiom"
+        ));
+        assert!(matches!(
+            new("F]F", BTreeMap::new()),
+            Err(ConfigError::UnmatchedClose { field, .. }) if field == "axiom"
+        ));
+    }
+
+    #[test]
+    fn rejects_unbalanced_rule_rhs() {
+        assert!(matches!(
+            new("F", BTreeMap::from([('F', "F[F".to_string())])),
+            Err(ConfigError::UnmatchedOpen { field, .. }) if field == "rules.F"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_letter_rule_key() {
+        // A rule keyed on a bracket could rewrite the bracket away and
+        // unbalance the expansion, so keys are restricted to letters.
+        assert!(matches!(
+            new("[]", BTreeMap::from([('[', String::new())])),
+            Err(ConfigError::InvalidRuleKey { key }) if key == "["
+        ));
+        assert!(matches!(
+            new("F", BTreeMap::from([('+', "F".to_string())])),
+            Err(ConfigError::InvalidRuleKey { key }) if key == "+"
+        ));
+    }
+
+    #[test]
+    fn accepts_non_ascii_letter_rule_key() {
+        // Non-ASCII letters are valid rule symbols; the grammar assigns them
+        // dedicated byte IDs during compilation.
+        let config =
+            new("ä", BTreeMap::from([('ä', "F[+ä]".to_string())])).expect("balanced config");
+        assert_eq!(config.rules()[&'ä'], "F[+ä]");
+    }
+
+    #[test]
+    fn rejects_unbalanced_rhs_of_unreachable_rule() {
+        // Balance is a construction invariant of the whole config, not a
+        // property of what expansion happens to reach.
+        assert!(matches!(
+            new("F", BTreeMap::from([('Z', "F]".to_string())])),
+            Err(ConfigError::UnmatchedClose { field, .. }) if field == "rules.Z"
+        ));
+    }
 }
 
 #[cfg(test)]

@@ -307,15 +307,16 @@ mod gpu_tests {
     fn trivial_config() -> lsystem_core::Config {
         lsystem_core::Config {
             name: "test".to_string(),
-            generation: GenerationConfig {
-                dimensions: Dimensions::TwoD,
-                axiom: "F".to_string(),
-                iterations: 0,
-                angle: 90.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: BTreeMap::new(),
-            },
+            generation: GenerationConfig::new(
+                Dimensions::TwoD,
+                "F".to_string(),
+                0,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::new(),
+            )
+            .expect("balanced config"),
             colors: lsystem_core::ColorConfig {
                 background: lsystem_core::Rgb::new(0, 0, 0),
                 line: lsystem_core::LineColorConfig::Solid(lsystem_core::Rgb::new(255, 255, 255)),

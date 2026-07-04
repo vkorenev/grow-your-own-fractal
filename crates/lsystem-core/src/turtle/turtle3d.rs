@@ -210,15 +210,16 @@ mod tests {
 
     #[test]
     fn generate_3d_uses_config_initial_heading() {
-        let cfg = GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: "F".to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 90.0,
-            rules: BTreeMap::new(),
-        };
+        let cfg = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F".to_string(),
+            0,
+            90.0,
+            1.0,
+            90.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
 
         let segments: Vec<[Vec3; 2]> = crate::generate_3d(&cfg).collect();
         assert_eq!(segments.len(), 1);
@@ -251,15 +252,16 @@ mod tests {
 
     #[test]
     fn hilbert_fold_matches_repeated_next_with_depths() {
-        let config = GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: "X".to_string(),
-            iterations: 3,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
-        };
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "X".to_string(),
+            3,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
+        )
+        .expect("balanced config");
         let folded = crate::generate_3d_with_topological_depth(&config).fold(
             Vec::new(),
             |mut segments, segment| {
@@ -303,15 +305,16 @@ mod tests {
 
     #[test]
     fn topological_depth_starts_at_zero_and_increments_per_drawn_segment() {
-        let cfg = GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: "FF".to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::new(),
-        };
+        let cfg = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "FF".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
         let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
             .map(|segment| segment.topological_depth)
             .collect();
@@ -321,15 +324,16 @@ mod tests {
 
     #[test]
     fn topological_depth_restores_across_branches() {
-        let cfg = GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: "F[+F]F".to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::new(),
-        };
+        let cfg = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F[+F]F".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
         let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
             .map(|segment| segment.topological_depth)
             .collect();
@@ -339,15 +343,16 @@ mod tests {
 
     #[test]
     fn nested_branches_restore_topological_depth() {
-        let cfg = GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: "F[+F[+F]F]F".to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::new(),
-        };
+        let cfg = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F[+F[+F]F]F".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
         let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
             .map(|segment| segment.topological_depth)
             .collect();
@@ -357,15 +362,16 @@ mod tests {
 
     #[test]
     fn moves_and_rotations_do_not_increment_topological_depth() {
-        let cfg = GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: r"Ff&^/\F".to_string(),
-            iterations: 0,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::new(),
-        };
+        let cfg = GenerationConfig::new(
+            Dimensions::ThreeD,
+            r"Ff&^/\F".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
         let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&cfg)
             .map(|segment| segment.topological_depth)
             .collect();

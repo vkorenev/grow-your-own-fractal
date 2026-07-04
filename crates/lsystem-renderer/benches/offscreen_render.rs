@@ -72,14 +72,17 @@ fn bench_offscreen_render(c: &mut Criterion) {
                 },
             },
         },
-        &|iterations| GenerationConfig {
-            dimensions: Dimensions::TwoD,
-            axiom: "FX".to_string(),
-            iterations,
-            angle: 90.0,
-            step: 1.0,
-            initial_heading: 0.0,
-            rules: BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
+        &|iterations| {
+            GenerationConfig::new(
+                Dimensions::TwoD,
+                "FX".to_string(),
+                iterations,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
+            )
+            .expect("balanced config")
         },
     );
     bench_render_case(
@@ -96,18 +99,21 @@ fn bench_offscreen_render(c: &mut Criterion) {
                 },
             },
         },
-        &|iterations| GenerationConfig {
-            dimensions: Dimensions::ThreeD,
-            axiom: "X".to_string(),
-            iterations,
-            angle: 30.0,
-            step: 1.0,
-            initial_heading: 90.0,
-            rules: BTreeMap::from([
-                ('X', "Y[+X][-X][&X][^X]".to_string()),
-                ('Y', "FFFZ".to_string()),
-                ('Z', "FZ".to_string()),
-            ]),
+        &|iterations| {
+            GenerationConfig::new(
+                Dimensions::ThreeD,
+                "X".to_string(),
+                iterations,
+                30.0,
+                1.0,
+                90.0,
+                BTreeMap::from([
+                    ('X', "Y[+X][-X][&X][^X]".to_string()),
+                    ('Y', "FFFZ".to_string()),
+                    ('Z', "FZ".to_string()),
+                ]),
+            )
+            .expect("balanced config")
         },
     );
 }

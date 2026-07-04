@@ -225,15 +225,16 @@ mod tests {
     fn make_config(axiom: &str, line: LineColorConfig) -> Config {
         Config {
             name: "Test".to_string(),
-            generation: GenerationConfig {
-                dimensions: Dimensions::TwoD,
-                axiom: axiom.to_string(),
-                iterations: 1,
-                angle: 90.0,
-                step: 1.0,
-                initial_heading: 0.0,
-                rules: BTreeMap::new(),
-            },
+            generation: GenerationConfig::new(
+                Dimensions::TwoD,
+                axiom.to_string(),
+                1,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::new(),
+            )
+            .expect("balanced config"),
             colors: ColorConfig {
                 background: Rgb::new(0, 0, 0),
                 line,
