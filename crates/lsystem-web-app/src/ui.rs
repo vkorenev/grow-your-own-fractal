@@ -49,15 +49,28 @@ pub fn Spinner(
     #[prop(default = 1.0_f64)] step: f64,
     #[prop(into, default = Signal::stored(false))] disabled: Signal<bool>,
 ) -> impl IntoView {
-    let displayed = RwSignal::new(value.get_untracked());
-
-    // Keep displayed in sync when the authoritative value changes from outside
-    Effect::new(move |_| displayed.set(value.get()));
+    let editing = RwSignal::new(false);
+    let draft = RwSignal::new(String::new());
+    // While editing, show the user's draft; otherwise mirror the authoritative value.
+    let shown = move || {
+        if editing.get() {
+            draft.get()
+        } else {
+            value.get()
+        }
+    };
+    let current_text = move || {
+        if editing.get_untracked() {
+            draft.get_untracked()
+        } else {
+            value.get_untracked()
+        }
+    };
 
     let step_down = {
         let on_commit = on_commit.clone();
         move |_: web_sys::MouseEvent| {
-            if let Ok(n) = displayed.get_untracked().parse::<f64>() {
+            if let Ok(n) = current_text().parse::<f64>() {
                 on_commit(format_step(n - step));
             }
         }
@@ -66,12 +79,13 @@ pub fn Spinner(
     let step_up = {
         let on_commit = on_commit.clone();
         move |_: web_sys::MouseEvent| {
-            if let Ok(n) = displayed.get_untracked().parse::<f64>() {
+            if let Ok(n) = current_text().parse::<f64>() {
                 on_commit(format_step(n + step));
             }
         }
     };
 
+    let on_commit_enter = on_commit.clone();
     let on_commit_blur = on_commit.clone();
 
     view! {
@@ -85,20 +99,29 @@ pub fn Spinner(
             <input
                 type="text"
                 class="spinner-input"
-                prop:value=move || displayed.get()
+                prop:value=shown
                 disabled=move || disabled.get()
-                on:input:target=move |ev| displayed.set(ev.target().value())
+                on:focus=move |_| {
+                    draft.set(value.get_untracked());
+                    editing.set(true);
+                }
+                on:input:target=move |ev| {
+                    editing.set(true);
+                    draft.set(ev.target().value());
+                }
                 on:keydown=move |ev: web_sys::KeyboardEvent| {
                     if ev.key() == "Enter" {
-                        on_commit(displayed.get_untracked());
+                        on_commit_enter(draft.get_untracked());
+                        // Refresh the draft from the committed (clamped/formatted) value so
+                        // continued typing starts from what is displayed.
+                        draft.set(value.get_untracked());
                     }
                 }
                 on:blur=move |_| {
-                    let text = displayed.get_untracked();
+                    let text = draft.get_untracked();
+                    editing.set(false);
                     if text.parse::<f64>().is_ok() {
                         on_commit_blur(text);
-                    } else {
-                        displayed.set(value.get_untracked());
                     }
                 }
             />
@@ -122,15 +145,16 @@ fn format_step(n: f64) -> String {
 /// Fires `on_change(key)` when a non-active option is clicked.
 /// `disabled` disables all buttons. `disabled_keys` disables specific option keys.
 #[component]
-pub fn SegmentedToggle(
-    options: Vec<(&'static str, &'static str)>,
-    selected: Signal<&'static str>,
-    on_change: impl Fn(&'static str) + 'static + Clone,
+pub fn SegmentedToggle<K>(
+    options: Vec<(K, &'static str)>,
+    #[prop(into)] selected: Signal<K>,
+    on_change: impl Fn(K) + 'static + Clone,
     #[prop(into, default = Signal::stored(false))] disabled: Signal<bool>,
-    #[prop(into, default = Signal::stored(Vec::<&'static str>::new()))] disabled_keys: Signal<
-        Vec<&'static str>,
-    >,
-) -> impl IntoView {
+    #[prop(into, default = Signal::stored(Vec::new()))] disabled_keys: Signal<Vec<K>>,
+) -> impl IntoView
+where
+    K: PartialEq + Copy + Send + Sync + 'static,
+{
     view! {
         <div class="seg-toggle">
             {options.into_iter().map(|(key, label)| {
