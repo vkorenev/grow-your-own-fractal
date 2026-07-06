@@ -6,17 +6,13 @@ use encase::UniformBuffer;
 use lsystem_core::Dimensions;
 use wgpu::util::DeviceExt;
 
-pub use crate::generated_shader::{
-    ColorParams, Mvp, Segment2D, Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D,
-    Transform,
+pub use crate::generated_shader_2d::{
+    ColorParams, Segment2D, TopologicalDepthSegment2D, Transform,
 };
+pub use crate::generated_shader_3d::{Mvp, Segment3D, TopologicalDepthSegment3D};
 
-use crate::generated_shader::{
-    self,
-    bind_groups::{
-        BindGroup0, BindGroup1, BindGroup2, BindGroupLayout0, BindGroupLayout1, BindGroupLayout2,
-    },
-};
+use crate::generated_shader_2d;
+use crate::generated_shader_3d;
 use crate::wgpu_util;
 
 impl Default for Mvp {
@@ -62,7 +58,7 @@ pub fn max_segments_for_line_color(dimensions: Dimensions, uses_topological_dept
     }
 }
 
-/// Discriminant values are matched by literal in `shader.wgsl`;
+/// Discriminant values are matched by literal in `shaders/common.wesl`;
 /// keep them in sync when adding or renumbering variants.
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -231,14 +227,10 @@ fn draw_line_list(
 fn create_line_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
     label: &'static str,
-    vertex_entry: &generated_shader::VertexEntry<1>,
-    fragment_entry: &generated_shader::FragmentEntry<1>,
+    vertex: wgpu::VertexState,
+    fragment: wgpu::FragmentState,
 ) -> wgpu::RenderPipeline {
-    let vertex = generated_shader::vertex_state(shader, vertex_entry);
-    let fragment = generated_shader::fragment_state(shader, fragment_entry);
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(pipeline_layout),
@@ -260,8 +252,7 @@ pub struct LinePipeline2D {
     depth_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
-    color_bind_group: BindGroup0,
-    transform_bind_group: BindGroup1,
+    bind_group: generated_shader_2d::bind_groups::BindGroup0,
     segment_buffer: GrowableVertexBuffer,
     depth_segment_buffer: GrowableVertexBuffer,
     active_segment_buffer: ActiveSegmentBuffer,
@@ -271,7 +262,9 @@ impl LinePipeline2D {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lsystem_2d_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!(concat!(env!("OUT_DIR"), "/shader_2d.wgsl")).into(),
+            ),
         });
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -290,52 +283,43 @@ impl LinePipeline2D {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let color_bgl = BindGroup0::get_bind_group_layout(device);
-        let transform_bgl = BindGroup1::get_bind_group_layout(device);
+        let bgl = generated_shader_2d::bind_groups::BindGroup0::get_bind_group_layout(device);
 
-        let color_bind_group = BindGroup0::from_bindings(
+        let bind_group = generated_shader_2d::bind_groups::BindGroup0::from_bindings(
             device,
-            BindGroupLayout0 {
+            generated_shader_2d::bind_groups::BindGroupLayout0 {
                 color_params: color_params_buffer.as_entire_buffer_binding(),
-            },
-        );
-
-        let transform_bind_group = BindGroup1::from_bindings(
-            device,
-            BindGroupLayout1 {
                 transform: uniform_buffer.as_entire_buffer_binding(),
             },
         );
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lsystem_2d_pipeline_layout"),
-            bind_group_layouts: &[Some(&color_bgl), Some(&transform_bgl)],
+            bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
 
-        let fragment_entry = generated_shader::fs_main_entry([Some(wgpu::ColorTargetState {
+        let fragment_entry = generated_shader_2d::fs_main_entry([Some(wgpu::ColorTargetState {
             format,
             blend: Some(wgpu::BlendState::REPLACE),
             write_mask: wgpu::ColorWrites::ALL,
         })]);
-        let vertex_entry = generated_shader::vs_main_2d_entry(wgpu::VertexStepMode::Instance);
+        let vertex_entry = generated_shader_2d::vs_main_2d_entry(wgpu::VertexStepMode::Instance);
         let depth_vertex_entry =
-            generated_shader::vs_depth_main_2d_entry(wgpu::VertexStepMode::Instance);
+            generated_shader_2d::vs_depth_main_2d_entry(wgpu::VertexStepMode::Instance);
         let pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
-            &shader,
             "lsystem_2d_pipeline",
-            &vertex_entry,
-            &fragment_entry,
+            generated_shader_2d::vertex_state(&shader, &vertex_entry),
+            generated_shader_2d::fragment_state(&shader, &fragment_entry),
         );
         let depth_pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
-            &shader,
             "lsystem_2d_depth_pipeline",
-            &depth_vertex_entry,
-            &fragment_entry,
+            generated_shader_2d::vertex_state(&shader, &depth_vertex_entry),
+            generated_shader_2d::fragment_state(&shader, &fragment_entry),
         );
 
         Self {
@@ -343,8 +327,7 @@ impl LinePipeline2D {
             depth_pipeline,
             uniform_buffer,
             color_params_buffer,
-            color_bind_group,
-            transform_bind_group,
+            bind_group,
             segment_buffer: GrowableVertexBuffer::new(),
             depth_segment_buffer: GrowableVertexBuffer::new(),
             active_segment_buffer: ActiveSegmentBuffer::Normal,
@@ -390,10 +373,7 @@ impl LinePipeline2D {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[
-            (0, self.color_bind_group.inner()),
-            (1, self.transform_bind_group.inner()),
-        ];
+        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[(0, self.bind_group.inner())];
         match self.active_segment_buffer {
             ActiveSegmentBuffer::Normal => draw_line_list(
                 render_pass,
@@ -418,8 +398,7 @@ pub struct LinePipeline3D {
     depth_pipeline: wgpu::RenderPipeline,
     mvp_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
-    color_bind_group: BindGroup0,
-    mvp_bind_group: BindGroup2,
+    bind_group: generated_shader_3d::bind_groups::BindGroup0,
     segment_buffer: GrowableVertexBuffer,
     depth_segment_buffer: GrowableVertexBuffer,
     active_segment_buffer: ActiveSegmentBuffer,
@@ -429,7 +408,9 @@ impl LinePipeline3D {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lsystem_3d_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!(concat!(env!("OUT_DIR"), "/shader_3d.wgsl")).into(),
+            ),
         });
 
         let mvp_uniform = Mvp::default().uniform_bytes();
@@ -445,52 +426,43 @@ impl LinePipeline3D {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let color_bgl = BindGroup0::get_bind_group_layout(device);
-        let mvp_bgl = BindGroup2::get_bind_group_layout(device);
+        let bgl = generated_shader_3d::bind_groups::BindGroup0::get_bind_group_layout(device);
 
-        let color_bind_group = BindGroup0::from_bindings(
+        let bind_group = generated_shader_3d::bind_groups::BindGroup0::from_bindings(
             device,
-            BindGroupLayout0 {
+            generated_shader_3d::bind_groups::BindGroupLayout0 {
                 color_params: color_params_buffer.as_entire_buffer_binding(),
-            },
-        );
-
-        let mvp_bind_group = BindGroup2::from_bindings(
-            device,
-            BindGroupLayout2 {
                 mvp: mvp_buffer.as_entire_buffer_binding(),
             },
         );
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lsystem_3d_pipeline_layout"),
-            bind_group_layouts: &[Some(&color_bgl), None, Some(&mvp_bgl)],
+            bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
 
-        let fragment_entry = generated_shader::fs_main_entry([Some(wgpu::ColorTargetState {
+        let fragment_entry = generated_shader_3d::fs_main_entry([Some(wgpu::ColorTargetState {
             format,
             blend: Some(wgpu::BlendState::REPLACE),
             write_mask: wgpu::ColorWrites::ALL,
         })]);
-        let vertex_entry = generated_shader::vs_main_3d_entry(wgpu::VertexStepMode::Instance);
+        let vertex_entry = generated_shader_3d::vs_main_3d_entry(wgpu::VertexStepMode::Instance);
         let depth_vertex_entry =
-            generated_shader::vs_depth_main_3d_entry(wgpu::VertexStepMode::Instance);
+            generated_shader_3d::vs_depth_main_3d_entry(wgpu::VertexStepMode::Instance);
         let pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
-            &shader,
             "lsystem_3d_pipeline",
-            &vertex_entry,
-            &fragment_entry,
+            generated_shader_3d::vertex_state(&shader, &vertex_entry),
+            generated_shader_3d::fragment_state(&shader, &fragment_entry),
         );
         let depth_pipeline = create_line_pipeline(
             device,
             &pipeline_layout,
-            &shader,
             "lsystem_3d_depth_pipeline",
-            &depth_vertex_entry,
-            &fragment_entry,
+            generated_shader_3d::vertex_state(&shader, &depth_vertex_entry),
+            generated_shader_3d::fragment_state(&shader, &fragment_entry),
         );
 
         Self {
@@ -498,8 +470,7 @@ impl LinePipeline3D {
             depth_pipeline,
             mvp_buffer,
             color_params_buffer,
-            color_bind_group,
-            mvp_bind_group,
+            bind_group,
             segment_buffer: GrowableVertexBuffer::new(),
             depth_segment_buffer: GrowableVertexBuffer::new(),
             active_segment_buffer: ActiveSegmentBuffer::Normal,
@@ -545,10 +516,7 @@ impl LinePipeline3D {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[
-            (0, self.color_bind_group.inner()),
-            (2, self.mvp_bind_group.inner()),
-        ];
+        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[(0, self.bind_group.inner())];
         match self.active_segment_buffer {
             ActiveSegmentBuffer::Normal => draw_line_list(
                 render_pass,

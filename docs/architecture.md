@@ -108,17 +108,28 @@ line colors use an externally tagged TOML shape (`solid`, `gradient`,
 `lsystem-renderer` owns the shared wgpu machinery used by both apps and by
 offscreen exports.
 
-- `build.rs` generates Rust bindings from `shader.wgsl` at build time via
-  `wgsl_to_wgpu`, validating `shader.wgsl` before compiling
-  `lsystem-renderer`'s Rust sources. `line_renderer.rs` sources its uniform
-  types (`ColorParams`, `Transform`, `Mvp`) and shader entry-point constants
-  from these generated bindings rather than hand-mirroring them, so most
-  field, binding, and entry-point renames in `shader.wgsl` now fail the Rust
-  build instead of only surfacing as a runtime wgpu validation error. Bind
-  group layouts, bind groups, vertex instance records, vertex buffer layouts,
-  and shader entry states are built from generated helpers. Pipeline layouts
-  are still assembled by hand because the 2D and 3D pipelines bind different,
-  sparse subsets of the shader's three bind groups.
+- Shader sources live in `src/shaders/` as WESL modules: `common.wesl`
+  declares the shared `ColorParams` uniform (group 0, binding 0) and the color
+  helper functions, and `shader_2d.wesl`/`shader_3d.wesl` each import it
+  (`import package::common::{...}`) and add their own transform uniform
+  (`Transform`/`Mvp`, binding 1) and vertex/fragment entry points.
+- `build.rs` compiles the `package::shader_2d` and `package::shader_3d` root
+  modules to plain WGSL via the `wesl` crate (`ManglerKind::None`), writes
+  `shader_2d.wgsl`/`shader_3d.wgsl` to `OUT_DIR`, and runs `wgsl_to_wgpu` on
+  each compiled WGSL string to generate `shader_2d_bindings.rs`/
+  `shader_3d_bindings.rs`. `lib.rs` includes those as the
+  `generated_shader_2d`/`generated_shader_3d` modules, and `line_renderer.rs`
+  loads the compiled WGSL text at runtime via `include_str!` on the `OUT_DIR`
+  files. `line_renderer.rs` sources its uniform types (`ColorParams`,
+  `Transform`, `Mvp`) and shader entry-point constants from the generated
+  bindings rather than hand-mirroring them, so most field, binding, and
+  entry-point renames in the WESL sources now fail the Rust build instead of
+  only surfacing as a runtime wgpu validation error. Each pipeline uses a
+  single bind group (group 0: `color_params` at binding 0, `transform`/`mvp`
+  at binding 1); bind group layouts, bind groups, vertex instance records,
+  vertex buffer layouts, and shader entry states are built from generated
+  helpers, and each pipeline layout wraps that one generated bind group
+  layout.
 - `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   2D/3D line pipelines, color uniforms, and surface frame handling.
@@ -134,8 +145,9 @@ shader selects the start or end point from `vertex_index`. Buffers grow to the
 next power-of-two capacity and are reused through `Queue::write_buffer`.
 
 The 2D and 3D line pipelines are separate because they use different vertex
-entry points, vertex-buffer layouts, and transform uniforms within the shared
-`shader.wgsl` module. They share the same color uniform model and
+entry points, vertex-buffer layouts, and transform uniforms, so they live in
+separate `shader_2d.wesl`/`shader_3d.wesl` modules. Both import the shared
+`common.wesl` module for the color uniform model, and they share the same
 segment-buffer strategy.
 
 ## Color And Depth
@@ -191,4 +203,6 @@ builds.
 `lsystem-renderer`'s `wgsl_to_wgpu` build-dependency generates code against
 `naga`/`wgpu-types` types that must match the workspace `wgpu` major version.
 When updating `wgpu`, also check whether `wgsl_to_wgpu` needs a matching
-version bump.
+version bump. The `wesl` build-dependency that compiles `src/shaders/*.wesl`
+to WGSL runs at build time only and emits plain WGSL text, so it has no
+naga/wgpu version coupling.

@@ -190,9 +190,9 @@ fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColor
     out
 }
 
-/// Port of the WGSL `hsv_to_rgb` in `shader.wgsl`. Inputs must match the shader's
-/// conventions: `h` is in any range (modulo 360 is applied internally), `s` and `v`
-/// are in [0, 1].
+/// Port of the WGSL `hsv_to_rgb` in `lsystem-renderer`'s `shaders/common.wesl`.
+/// Inputs must match the shader's conventions: `h` is in any range (modulo 360
+/// is applied internally), `s` and `v` are in [0, 1].
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let h6 = (h % 360.0) / 60.0;
     let i = (h6 as u32) % 6;

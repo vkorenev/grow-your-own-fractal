@@ -22,6 +22,7 @@ png = { version = "0.18", optional = true }
 wgpu.workspace = true
 
 [build-dependencies]
+wesl = "0.4"
 wgsl_to_wgpu = "0.18"
 
 [dev-dependencies]
