@@ -2,6 +2,7 @@
 
 mod app;
 mod export;
+mod panels;
 mod presets;
 mod renderer;
 pub(crate) mod ui;
