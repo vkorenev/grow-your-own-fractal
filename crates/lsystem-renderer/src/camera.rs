@@ -1,4 +1,4 @@
-use glam::{Mat4, Quat, Vec3};
+use glam::{Quat, Vec3};
 
 use crate::line_renderer::{Mvp, Transform};
 use crate::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
@@ -202,10 +202,10 @@ impl Camera {
         let roll_quat = Quat::from_axis_angle(eye_dir, self.roll.to_radians());
         let up = roll_quat * world_up;
 
-        let view = Mat4::look_at_rh(eye, center, up);
+        let view = glam::camera::rh::view::look_at_mat4(eye, center, up);
         let z_near = distance * NEAR_CLIP_RATIO;
         let z_far = distance * 10.0;
-        let proj = Mat4::perspective_rh(FOV_Y_RAD, aspect, z_near, z_far);
+        let proj = glam::camera::rh::proj::directx::perspective(FOV_Y_RAD, aspect, z_near, z_far);
 
         Mvp {
             matrix: proj * view,
