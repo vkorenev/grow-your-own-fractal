@@ -42,7 +42,9 @@ struct RuleSpans {
 /// The compiled form of a grammar: axiom and rule RHS spans in one shared u8
 /// arena, with O(1) rule lookup per symbol byte. This is the single place
 /// where `char`-domain axiom and rules convert to the byte-domain arena;
-/// every expansion flavor iterates over one compiled value.
+/// every expansion flavor iterates over one compiled value. Rules that can
+/// never be reached from the axiom are dropped during compilation, so the
+/// rule table holds exactly the rules expansion can apply.
 ///
 /// Each expandable string is stored twice ([`RuleSpans`]): the full form and
 /// an effect-filtered copy. Effects-only expansion streams terminal (depth-0)
@@ -56,6 +58,8 @@ pub(crate) struct CompiledGrammar {
 
 impl CompiledGrammar {
     pub(crate) fn compile(axiom: &str, rules: &BTreeMap<char, String>) -> Self {
+        let reachable = reachable_symbols(axiom, rules);
+
         let mut non_ascii: Vec<(char, u8)> = Vec::new();
         let mut next_id = NON_ASCII_BASE;
         let mut arena: Vec<u8> = Vec::new();
@@ -85,7 +89,7 @@ impl CompiledGrammar {
         let axiom_spans = finish_spans(&mut arena, 0);
 
         let mut rule_table: Box<[Option<RuleSpans>; 256]> = Box::new([None; 256]);
-        for (k, v) in rules {
+        for (k, v) in rules.iter().filter(|(k, _)| reachable.contains(k)) {
             let key_id = char_to_id(*k, &mut non_ascii, &mut next_id) as usize;
             let rhs_start = arena.len() as u32;
             for c in v.chars() {
@@ -321,12 +325,9 @@ pub fn max_safe_iterations(axiom: &str, rules: &BTreeMap<char, String>, max_segm
     HARD_MAX
 }
 
-/// Returns the rule symbols that are never reached during expansion of `axiom`.
-///
-/// A rule is reachable if its symbol appears in `axiom`, or in the RHS of any
-/// other reachable rule. Unreachable rules are dead: expansion never applies
-/// them, no matter the iteration count.
-pub fn unused_rules(axiom: &str, rules: &BTreeMap<char, String>) -> Vec<char> {
+/// Returns every symbol that can appear during expansion of `axiom`: the
+/// axiom's own symbols plus the RHS symbols of every reachable rule.
+fn reachable_symbols(axiom: &str, rules: &BTreeMap<char, String>) -> BTreeSet<char> {
     let mut reachable = BTreeSet::new();
     let mut stack: Vec<char> = axiom.chars().collect();
     while let Some(c) = stack.pop() {
@@ -336,6 +337,16 @@ pub fn unused_rules(axiom: &str, rules: &BTreeMap<char, String>) -> Vec<char> {
             stack.extend(rhs.chars());
         }
     }
+    reachable
+}
+
+/// Returns the rule symbols that are never reached during expansion of `axiom`.
+///
+/// A rule is reachable if its symbol appears in `axiom`, or in the RHS of any
+/// other reachable rule. Unreachable rules are dead: expansion never applies
+/// them, no matter the iteration count.
+pub fn unused_rules(axiom: &str, rules: &BTreeMap<char, String>) -> Vec<char> {
+    let reachable = reachable_symbols(axiom, rules);
     rules
         .keys()
         .filter(|k| !reachable.contains(k))
@@ -579,5 +590,54 @@ mod tests {
     fn unused_rules_empty_for_no_rules() {
         let rules: BTreeMap<char, String> = BTreeMap::new();
         assert_eq!(unused_rules("F", &rules), Vec::<char>::new());
+    }
+
+    #[test]
+    fn compile_drops_rule_never_referenced() {
+        // 'X' has a rule but never appears in the axiom or any reachable RHS.
+        let rules: BTreeMap<char, String> =
+            [('F', "F-F".to_string()), ('X', "FF".to_string())].into();
+        let grammar = CompiledGrammar::compile("F", &rules);
+
+        assert!(grammar.rules[b'X' as usize].is_none());
+        assert!(grammar.rules[b'F' as usize].is_some());
+    }
+
+    #[test]
+    fn compile_drops_self_referencing_cycle_disconnected_from_axiom() {
+        // 'X' only ever refers to itself; it's never reachable from the axiom.
+        let rules: BTreeMap<char, String> =
+            [('F', "F-F".to_string()), ('X', "XX".to_string())].into();
+        let grammar = CompiledGrammar::compile("F", &rules);
+
+        assert!(grammar.rules[b'X' as usize].is_none());
+    }
+
+    #[test]
+    fn compile_arena_matches_compiling_without_the_dropped_rule() {
+        // Dropping an unreachable rule must not change the arena bytes or
+        // spans produced for the rules that remain.
+        let with_dead_rule: BTreeMap<char, String> =
+            [('F', "F-F".to_string()), ('X', "FF".to_string())].into();
+        let without_dead_rule: BTreeMap<char, String> = [('F', "F-F".to_string())].into();
+
+        let a = CompiledGrammar::compile("F", &with_dead_rule);
+        let b = CompiledGrammar::compile("F", &without_dead_rule);
+
+        assert_eq!(a.arena, b.arena);
+    }
+
+    #[test]
+    fn compile_drops_dead_rule_with_a_unique_non_ascii_key() {
+        // A dropped rule's key must never consume a non-ASCII ID: it is
+        // filtered out before `char_to_id` sees it.
+        let with_dead_rule: BTreeMap<char, String> =
+            [('F', "F-F".to_string()), ('ä', "FF".to_string())].into();
+        let without_dead_rule: BTreeMap<char, String> = [('F', "F-F".to_string())].into();
+
+        let a = CompiledGrammar::compile("F", &with_dead_rule);
+        let b = CompiledGrammar::compile("F", &without_dead_rule);
+
+        assert_eq!(a.arena, b.arena);
     }
 }
