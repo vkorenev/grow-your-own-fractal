@@ -73,7 +73,7 @@ impl FractalApp {
                         editor_config.generation.angle,
                         Message::AngleChanged,
                     )
-                    .step(0.5),
+                    .step(0.5_f32),
                 );
 
             controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
@@ -110,7 +110,7 @@ impl FractalApp {
                             self.auto_rotate_speed,
                             Message::SetAutoRotateSpeed,
                         )
-                        .step(10.0),
+                        .step(10.0_f32),
                     );
             }
         }
@@ -302,7 +302,7 @@ fn push_color_controls<'a>(
                         hue_rotation.speed_degrees_per_second(),
                         Message::SetHueRotationSpeed,
                     )
-                    .step(1.0),
+                    .step(1.0_f32),
                 )
         }
     }
@@ -337,7 +337,7 @@ fn color_slider<'a>(
             next[component] = value.clamp(0.0, 1.0);
             message(rgb_from_f32_array(next))
         })
-        .step(0.01),
+        .step(0.01_f32),
         text(format!("{:.0}", color[component] * 255.0))
             .size(12)
             .width(Length::Fixed(34.0)),
