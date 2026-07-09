@@ -104,6 +104,45 @@ impl CompiledGrammar {
             axiom: axiom_spans,
         }
     }
+
+    /// Full expansion: every expanded symbol is yielded.
+    #[cfg(test)]
+    pub(crate) fn expand(self, iterations: u32) -> ExpandIter {
+        let (pos, end) = self.axiom.full;
+        ExpandIter {
+            stack: vec![Frame {
+                pos,
+                end,
+                depth: iterations,
+            }],
+            effects_only: false,
+            grammar: self,
+            terminal_pos: 0,
+            terminal_end: 0,
+        }
+    }
+
+    /// Effects-only expansion: symbols with no turtle effect are stripped.
+    pub(crate) fn expand_effects(self, iterations: u32) -> ExpandIter {
+        // At zero iterations the axiom frame itself streams terminally, so an
+        // effects-only expansion starts on the filtered copy.
+        let (pos, end) = if iterations == 0 {
+            self.axiom.effects
+        } else {
+            self.axiom.full
+        };
+        ExpandIter {
+            stack: vec![Frame {
+                pos,
+                end,
+                depth: iterations,
+            }],
+            effects_only: true,
+            grammar: self,
+            terminal_pos: 0,
+            terminal_end: 0,
+        }
+    }
 }
 
 pub(crate) struct ExpandIter {
@@ -112,40 +151,6 @@ pub(crate) struct ExpandIter {
     stack: Vec<Frame>,
     terminal_pos: u32,
     terminal_end: u32,
-}
-
-impl ExpandIter {
-    /// Full expansion: every expanded symbol is yielded.
-    #[cfg(test)]
-    pub(crate) fn full(grammar: CompiledGrammar, iterations: u32) -> Self {
-        Self::new(grammar, iterations, false)
-    }
-
-    /// Effects-only expansion: symbols with no turtle effect are stripped.
-    pub(crate) fn effects_only(grammar: CompiledGrammar, iterations: u32) -> Self {
-        Self::new(grammar, iterations, true)
-    }
-
-    fn new(grammar: CompiledGrammar, iterations: u32, effects_only: bool) -> Self {
-        // At zero iterations the axiom frame itself streams terminally, so an
-        // effects-only expansion starts on the filtered copy.
-        let (pos, end) = if effects_only && iterations == 0 {
-            grammar.axiom.effects
-        } else {
-            grammar.axiom.full
-        };
-        Self {
-            grammar,
-            effects_only,
-            stack: vec![Frame {
-                pos,
-                end,
-                depth: iterations,
-            }],
-            terminal_pos: 0,
-            terminal_end: 0,
-        }
-    }
 }
 
 impl Iterator for ExpandIter {
@@ -265,23 +270,6 @@ fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 
     }
 }
 
-/// Unfiltered expansion: every expanded symbol is yielded, including
-/// rewrite-only ones. Tests use it as the oracle.
-#[cfg(test)]
-pub(crate) fn expand(axiom: &str, rules: &BTreeMap<char, String>, iterations: u32) -> ExpandIter {
-    ExpandIter::full(CompiledGrammar::compile(axiom, rules), iterations)
-}
-
-/// Effects-only expansion: symbols with no turtle effect are stripped, so the
-/// generation path never sees rewrite-only symbols.
-pub(crate) fn expand_effects(
-    axiom: &str,
-    rules: &BTreeMap<char, String>,
-    iterations: u32,
-) -> ExpandIter {
-    ExpandIter::effects_only(CompiledGrammar::compile(axiom, rules), iterations)
-}
-
 /// Returns the maximum iteration count for which the total number of drawn segments
 /// (produced by `F` symbols) does not exceed `max_segments`.
 ///
@@ -365,13 +353,15 @@ mod tests {
 
     #[test]
     fn zero_iterations_returns_axiom() {
-        let result: Vec<u8> = expand("F++F++F", &koch_rules(), 0).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("F++F++F", &koch_rules())
+            .expand(0)
+            .collect();
         assert_eq!(result, b"F++F++F");
     }
 
     #[test]
     fn depth_zero_frame_streams_remaining_terminal_span_after_pop() {
-        let mut symbols = expand("ABC", &BTreeMap::new(), 0);
+        let mut symbols = CompiledGrammar::compile("ABC", &BTreeMap::new()).expand(0);
 
         assert_eq!(symbols.next(), Some(b'A'));
         assert!(symbols.stack.is_empty());
@@ -380,20 +370,24 @@ mod tests {
 
     #[test]
     fn empty_axiom_returns_no_symbols() {
-        let result: Vec<u8> = expand("", &koch_rules(), 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("", &koch_rules())
+            .expand(1)
+            .collect();
         assert!(result.is_empty());
     }
 
     #[test]
     fn empty_rule_rhs_resumes_parent_frame() {
         let rules: BTreeMap<char, String> = [('F', String::new())].into();
-        let result: Vec<u8> = expand("FA", &rules, 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("FA", &rules).expand(1).collect();
         assert_eq!(result, b"A");
     }
 
     #[test]
     fn one_iteration_expands_f() {
-        let result: Vec<u8> = expand("F++F++F", &koch_rules(), 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("F++F++F", &koch_rules())
+            .expand(1)
+            .collect();
         // Each F → F-F++F-F; the ++ between each F are carried through.
         assert_eq!(result, b"F-F++F-F++F-F++F-F++F-F++F-F");
     }
@@ -410,10 +404,13 @@ mod tests {
             TERMINALS_UNIVERSAL.as_bytes().contains(byte) || TERMINALS_3D.as_bytes().contains(byte)
         };
         for iterations in 0..=3 {
-            let expected: Vec<_> = expand("X|Y", &rules, iterations)
+            let expected: Vec<_> = CompiledGrammar::compile("X|Y", &rules)
+                .expand(iterations)
                 .filter(is_effect)
                 .collect();
-            let actual: Vec<_> = expand_effects("X|Y", &rules, iterations).collect();
+            let actual: Vec<_> = CompiledGrammar::compile("X|Y", &rules)
+                .expand_effects(iterations)
+                .collect();
 
             assert_eq!(actual, expected, "iterations={iterations}");
         }
@@ -422,14 +419,17 @@ mod tests {
     #[test]
     fn fold_matches_repeated_next_after_partial_terminal_consumption() {
         let rules: BTreeMap<char, String> = [('F', "F+F-X".to_string())].into();
-        let mut folded = expand("F", &rules, 3);
+        let mut folded = CompiledGrammar::compile("F", &rules).expand(3);
         let first = folded.next().unwrap();
         let folded = folded.fold(vec![first], |mut bytes, byte| {
             bytes.push(byte);
             bytes
         });
 
-        assert_eq!(folded, collect_with_next(expand("F", &rules, 3)));
+        assert_eq!(
+            folded,
+            collect_with_next(CompiledGrammar::compile("F", &rules).expand(3))
+        );
     }
 
     #[test]
@@ -437,7 +437,8 @@ mod tests {
         // Koch snowflake: 3 F's at iter 0, multiplied by 4 each iteration.
         let rules = koch_rules();
         for iter in 0..=4u32 {
-            let f_count = expand("F++F++F", &rules, iter)
+            let f_count = CompiledGrammar::compile("F++F++F", &rules)
+                .expand(iter)
                 .filter(|&b| b == b'F')
                 .count();
             assert_eq!(f_count, 3 * 4usize.pow(iter), "iter {iter}");
@@ -477,7 +478,7 @@ mod tests {
         // iter 1: "F" → "FX"
         // iter 2: F→FX, X→X → "FXX"
         let rules: BTreeMap<char, String> = [('F', "FX".to_string())].into();
-        let result: Vec<u8> = expand("F", &rules, 2).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("F", &rules).expand(2).collect();
         assert_eq!(result, b"FXX");
     }
 
@@ -489,21 +490,23 @@ mod tests {
         // iter 2: a→a, A→aA, B→Bb, b→b  →  "aaABbb"
         let rules: BTreeMap<char, String> =
             [('A', "aA".to_string()), ('B', "Bb".to_string())].into();
-        let result: Vec<u8> = expand("AB", &rules, 2).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("AB", &rules).expand(2).collect();
         assert_eq!(result, b"aaABbb");
     }
 
     #[test]
     fn non_ascii_rule_key_is_applied() {
         let rules: BTreeMap<char, String> = [('ä', "FFF".to_string())].into();
-        let result: Vec<u8> = expand("ä", &rules, 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("ä", &rules).expand(1).collect();
         assert_eq!(result, b"FFF");
     }
 
     #[test]
     fn non_ascii_without_rule_passes_through() {
         // 'ä' is assigned ID 128; with no rule it passes through unchanged.
-        let result: Vec<u8> = expand("ä", &BTreeMap::new(), 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("ä", &BTreeMap::new())
+            .expand(1)
+            .collect();
         assert_eq!(result, [128u8]);
     }
 
@@ -513,7 +516,7 @@ mod tests {
         // first in the rule table and "äö" would expand to "FFFF" instead of "FFF".
         let rules: BTreeMap<char, String> =
             [('ä', "F".to_string()), ('ö', "FF".to_string())].into();
-        let result: Vec<u8> = expand("äö", &rules, 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("äö", &rules).expand(1).collect();
         assert_eq!(result, b"FFF");
     }
 
@@ -522,7 +525,7 @@ mod tests {
         // 'ä' in the RHS is encoded in the arena (ID 128) and passes through
         // when the iterator encounters it with no rule of its own.
         let rules: BTreeMap<char, String> = [('F', "äF".to_string())].into();
-        let result: Vec<u8> = expand("F", &rules, 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("F", &rules).expand(1).collect();
         assert_eq!(result, [128u8, b'F']);
     }
 
@@ -534,7 +537,7 @@ mod tests {
         //   iter 1: ä→äF → [128, b'F']  (ä at depth 0 passes through)
         //   iter 2: ä→äF, depth of inner ä is 0 → [128, b'F', b'F']
         let rules: BTreeMap<char, String> = [('ä', "äF".to_string())].into();
-        let result: Vec<u8> = expand("ä", &rules, 2).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("ä", &rules).expand(2).collect();
         assert_eq!(result, [128u8, b'F', b'F']);
     }
 
@@ -543,7 +546,7 @@ mod tests {
         // "Fä": F has no rule (passes through), ä → "FF".
         // iter 1: F passes through, ä→FF → "FFF"
         let rules: BTreeMap<char, String> = [('ä', "FF".to_string())].into();
-        let result: Vec<u8> = expand("Fä", &rules, 1).collect();
+        let result: Vec<u8> = CompiledGrammar::compile("Fä", &rules).expand(1).collect();
         assert_eq!(result, b"FFF");
     }
 
@@ -552,7 +555,9 @@ mod tests {
         // U+0080..=U+00FF are exactly 128 distinct non-ASCII chars (IDs 128..=255).
         // None of them have rules, so they all pass through unchanged.
         let axiom: String = ('\u{0080}'..='\u{00FF}').collect();
-        let result: Vec<u8> = expand(&axiom, &BTreeMap::new(), 0).collect();
+        let result: Vec<u8> = CompiledGrammar::compile(&axiom, &BTreeMap::new())
+            .expand(0)
+            .collect();
         assert_eq!(result.len(), 128);
         assert_eq!(result, (128u8..=255u8).collect::<Vec<_>>());
     }
@@ -561,7 +566,9 @@ mod tests {
     #[should_panic(expected = "too many distinct non-ASCII symbols (max 128)")]
     fn panics_on_129th_distinct_non_ascii_symbol() {
         let axiom: String = ('\u{0080}'..='\u{0100}').collect();
-        let _ = expand(&axiom, &BTreeMap::new(), 0).collect::<Vec<_>>();
+        let _ = CompiledGrammar::compile(&axiom, &BTreeMap::new())
+            .expand(0)
+            .collect::<Vec<_>>();
     }
 
     #[test]
