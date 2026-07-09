@@ -40,7 +40,8 @@ pub struct Segment3DWithTopologicalDepth {
 
 /// Expand the grammar and run the 2D turtle, returning a lazy iterator of line segments.
 pub fn generate(config: &GenerationConfig) -> impl Iterator<Item = [Vec2; 2]> + '_ {
-    let symbols = grammar::expand_effects(config.axiom(), config.rules(), config.iterations);
+    let symbols = grammar::CompiledGrammar::compile(config.axiom(), config.rules())
+        .expand_effects(config.iterations);
     turtle::turtle2d::Segments2D::new(symbols, config.angle, config.step, config.initial_heading)
 }
 
@@ -48,7 +49,8 @@ pub fn generate(config: &GenerationConfig) -> impl Iterator<Item = [Vec2; 2]> + 
 pub fn generate_with_topological_depth(
     config: &GenerationConfig,
 ) -> impl Iterator<Item = Segment2DWithTopologicalDepth> + '_ {
-    let symbols = grammar::expand_effects(config.axiom(), config.rules(), config.iterations);
+    let symbols = grammar::CompiledGrammar::compile(config.axiom(), config.rules())
+        .expand_effects(config.iterations);
     turtle::turtle2d::Segments2DWithTopologicalDepth::new(
         symbols,
         config.angle,
@@ -59,7 +61,8 @@ pub fn generate_with_topological_depth(
 
 /// Like `generate` but runs the 3D turtle.
 pub fn generate_3d(config: &GenerationConfig) -> impl Iterator<Item = [Vec3; 2]> + '_ {
-    let symbols = grammar::expand_effects(config.axiom(), config.rules(), config.iterations);
+    let symbols = grammar::CompiledGrammar::compile(config.axiom(), config.rules())
+        .expand_effects(config.iterations);
     turtle::turtle3d::Segments3D::new(symbols, config.angle, config.step, config.initial_heading)
 }
 
@@ -67,7 +70,8 @@ pub fn generate_3d(config: &GenerationConfig) -> impl Iterator<Item = [Vec3; 2]>
 pub fn generate_3d_with_topological_depth(
     config: &GenerationConfig,
 ) -> impl Iterator<Item = Segment3DWithTopologicalDepth> + '_ {
-    let symbols = grammar::expand_effects(config.axiom(), config.rules(), config.iterations);
+    let symbols = grammar::CompiledGrammar::compile(config.axiom(), config.rules())
+        .expand_effects(config.iterations);
     turtle::turtle3d::Segments3DWithTopologicalDepth::new(
         symbols,
         config.angle,
