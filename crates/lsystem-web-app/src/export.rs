@@ -13,38 +13,33 @@ pub(crate) fn export_svg(config: Config) {
     download_blob(blob, filename);
 }
 
-pub(crate) fn export_png(
+pub(crate) async fn export_png(
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     camera: Camera,
     config: Config,
     width: u32,
     height: u32,
-    on_error: impl Fn(String) + 'static,
-) {
+) -> Result<(), String> {
     let filename = sanitize_filename(&config.name, "png");
-    wasm_bindgen_futures::spawn_local(async move {
-        match lsystem_renderer::png_export::render_png(
-            &device, &queue, &config, width, height, &camera,
-        )
+    match lsystem_renderer::png_export::render_png(&device, &queue, &config, width, height, &camera)
         .await
-        {
-            Ok(png) => {
-                let blob =
-                    gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/png"));
-                download_blob(blob, filename);
-            }
-            Err(err) => {
-                let error = format!("Failed to export PNG: {err}");
-                log::error!("{error}");
-                on_error(error);
-            }
+    {
+        Ok(png) => {
+            let blob = gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/png"));
+            download_blob(blob, filename);
+            Ok(())
         }
-    });
+        Err(err) => {
+            let error = format!("Failed to export PNG: {err}");
+            log::error!("{error}");
+            Err(error)
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn export_animation(
+pub(crate) async fn export_animation(
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     camera: Camera,
@@ -52,36 +47,32 @@ pub(crate) fn export_animation(
     width: u32,
     height: u32,
     params: AnimationParams,
-    on_progress: impl Fn(u32, u32) + 'static,
-    on_done: impl Fn(Option<String>) + 'static,
-) {
+    on_progress: impl Fn(u32, u32),
+) -> Result<(), String> {
     let filename = sanitize_filename(&config.name, "apng");
-    wasm_bindgen_futures::spawn_local(async move {
-        match lsystem_renderer::animation_export::render_animation(
-            &device,
-            &queue,
-            &config,
-            width,
-            height,
-            &camera,
-            &params,
-            &on_progress,
-        )
-        .await
-        {
-            Ok(png) => {
-                let blob =
-                    gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/apng"));
-                download_blob(blob, filename);
-                on_done(None);
-            }
-            Err(err) => {
-                let msg = format!("Failed to export APNG: {err}");
-                log::error!("{msg}");
-                on_done(Some(msg));
-            }
+    match lsystem_renderer::animation_export::render_animation(
+        &device,
+        &queue,
+        &config,
+        width,
+        height,
+        &camera,
+        &params,
+        &on_progress,
+    )
+    .await
+    {
+        Ok(png) => {
+            let blob = gloo_file::Blob::new_with_options(png.bytes.as_slice(), Some("image/apng"));
+            download_blob(blob, filename);
+            Ok(())
         }
-    });
+        Err(err) => {
+            let msg = format!("Failed to export APNG: {err}");
+            log::error!("{msg}");
+            Err(msg)
+        }
+    }
 }
 
 pub(crate) fn download_toml(name: &str, text: &str) {

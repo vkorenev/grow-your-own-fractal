@@ -85,6 +85,21 @@ pub enum RenderStatus {
     Skipped(FrameSkipReason),
 }
 
+impl RenderStatus {
+    /// Returns the skip reason if the frame was skipped for a reason other than
+    /// the routine timeout/occlusion cases.
+    pub fn unexpected_skip_reason(self) -> Option<FrameSkipReason> {
+        match self {
+            Self::Skipped(reason)
+                if !matches!(reason, FrameSkipReason::Timeout | FrameSkipReason::Occluded) =>
+            {
+                Some(reason)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl CanvasRenderer {
     pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<Self, GpuInitError> {
         let (width, height, _) = sync_canvas_size(&canvas);
