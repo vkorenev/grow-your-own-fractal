@@ -69,25 +69,21 @@ pub(crate) fn SavePanel(
                 <div class="spinner-row">
                     <span class="spinner-label">"Width (px)"</span>
                     <crate::ui::Spinner
-                        value=Signal::derive(move || png_width.get().to_string())
+                        value=png_width
                         step=16.0
-                        on_commit=move |s| {
-                            if let Ok(v) = s.parse::<u32>() {
-                                png_width.set(v.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION));
-                            }
-                        }
+                        min=PNG_MIN_DIMENSION
+                        max=PNG_MAX_DIMENSION
+                        on_commit=move |v: u32| png_width.set(v)
                     />
                 </div>
                 <div class="spinner-row">
                     <span class="spinner-label">"Height (px)"</span>
                     <crate::ui::Spinner
-                        value=Signal::derive(move || png_height.get().to_string())
+                        value=png_height
                         step=16.0
-                        on_commit=move |s| {
-                            if let Ok(v) = s.parse::<u32>() {
-                                png_height.set(v.clamp(PNG_MIN_DIMENSION, PNG_MAX_DIMENSION));
-                            }
-                        }
+                        min=PNG_MIN_DIMENSION
+                        max=PNG_MAX_DIMENSION
+                        on_commit=move |v: u32| png_height.set(v)
                     />
                 </div>
             </Show>
@@ -113,13 +109,11 @@ pub(crate) fn SavePanel(
                 <div class="spinner-row">
                     <span class="spinner-label">"Duration (s)"</span>
                     <crate::ui::Spinner
-                        value=Signal::derive(move || format!("{:.1}", anim_duration_secs.get()))
+                        value=anim_duration_secs
                         step=1.0
-                        on_commit=move |s| {
-                            if let Ok(v) = s.parse::<f32>() {
-                                anim_duration_secs.set(v.max(0.1));
-                            }
-                        }
+                        min=0.1_f32
+                        decimals=1
+                        on_commit=move |v: f32| anim_duration_secs.set(v)
                     />
                 </div>
 
