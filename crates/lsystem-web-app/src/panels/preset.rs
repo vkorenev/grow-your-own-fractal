@@ -24,26 +24,24 @@ pub(crate) fn PresetPanel() -> impl IntoView {
 
     let commit_rename = move || {
         let name = rename_draft.get_untracked().trim().to_string();
-        match config_workspace.try_update(|ws| ws.selected_mut().rename(&name)) {
-            Some(Ok(())) => {
+        let result = config_workspace.write().selected_mut().rename(&name);
+        match result {
+            Ok(()) => {
                 workspace_error.set(None);
                 rename_mode.set(false);
             }
-            Some(Err(e)) => workspace_error.set(Some(e.to_string())),
-            None => workspace_error.set(Some("Internal error: could not rename.".to_string())),
+            Err(e) => workspace_error.set(Some(e.to_string())),
         }
     };
 
     let do_reset = move || {
-        let result = config_workspace.try_update(|ws| ws.selected_mut().reset_to_default());
-        match result {
-            Some(true) => select_current_config.run(()),
-            Some(false) => {
-                log::warn!(
-                    "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
-                );
-            }
-            None => workspace_error.set(Some("Internal error: could not reset.".to_string())),
+        let reset = config_workspace.write().selected_mut().reset_to_default();
+        if reset {
+            select_current_config.run(());
+        } else {
+            log::warn!(
+                "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
+            );
         }
     };
 
@@ -61,26 +59,10 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                         ));
                         return;
                     };
-                    let selected = config_workspace.try_update(|workspace| {
-                        workspace
-                            .select_by_id(id)
-                            .map(|_| ())
-                            .map_err(|e| e.to_string())
-                    });
-                    match selected {
-                        Some(Ok(())) => {}
-                        Some(Err(err)) => {
-                            log::error!("select preset: rejected id {id}: {err}");
-                            workspace_error.set(Some(err));
-                        }
-                        None => {
-                            log::error!(
-                                "select preset: config_workspace signal was unavailable"
-                            );
-                            workspace_error.set(Some(
-                                "Internal error: could not select config.".to_string(),
-                            ));
-                        }
+                    let selected = config_workspace.write().select_by_id(id);
+                    if let Err(err) = selected {
+                        log::error!("select preset: rejected id {id}: {err}");
+                        workspace_error.set(Some(err.to_string()));
                     }
                 }
             >
@@ -129,18 +111,9 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                             <button
                                 type="button"
                                 on:click=move |_| {
-                                    let result = config_workspace.try_update(|workspace| {
-                                        workspace.copy().map(|_| ()).map_err(|e| e.to_string())
-                                    });
-                                    match result {
-                                        Some(Ok(())) => {}
-                                        Some(Err(msg)) => workspace_error.set(Some(msg)),
-                                        None => {
-                                            log::error!("copy: config_workspace signal was unavailable");
-                                            workspace_error.set(Some(
-                                                "Internal error: could not copy config.".to_string(),
-                                            ));
-                                        }
+                                    let result = config_workspace.write().copy().map(|_| ());
+                                    if let Err(e) = result {
+                                        workspace_error.set(Some(e.to_string()));
                                     }
                                 }
                             >"Copy"</button>
@@ -211,23 +184,10 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                 wasm_bindgen_futures::spawn_local(async move {
                     match gloo_file::futures::read_as_text(&file).await {
                         Ok(text) => {
-                            let result = config_workspace
-                                .try_update(|ws| ws.import_toml(&text).map(|_| ()));
-                            match result {
-                                Some(Ok(_)) => {}
-                                Some(Err(e)) => {
-                                    workspace_error.set(Some(e.to_string()));
-                                }
-                                None => {
-                                    log::error!(
-                                        "import_toml: config_workspace signal was \
-                                         unavailable"
-                                    );
-                                    workspace_error.set(Some(
-                                        "Internal error: could not import config."
-                                            .to_string(),
-                                    ));
-                                }
+                            let result =
+                                config_workspace.write().import_toml(&text).map(|_| ());
+                            if let Err(e) = result {
+                                workspace_error.set(Some(e.to_string()));
                             }
                         }
                         Err(e) => {
