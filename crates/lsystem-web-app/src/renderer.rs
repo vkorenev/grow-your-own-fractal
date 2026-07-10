@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use web_time::{Duration, Instant};
 
-use lsystem_core::{Config, Dimensions};
+use lsystem_core::{Config, Dimensions, compile_generation};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
@@ -129,11 +129,12 @@ impl CanvasRenderer {
 
     fn rebuild_scene(&mut self, config: &Config) {
         let started = Instant::now();
+        let (grammar, params) = compile_generation(&config.generation);
         match config.generation.dimensions {
             Dimensions::ThreeD => {
                 if config.generation.has_stack_directives() {
                     let data = geometry_to_depth_segments_3d(
-                        lsystem_core::generate_3d_with_topological_depth(&config.generation),
+                        lsystem_core::generate_3d_with_topological_depth(&grammar, &params),
                     );
                     let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::ThreeDWithTopologicalDepth {
@@ -147,7 +148,7 @@ impl CanvasRenderer {
                         segments,
                         bounds_min,
                         bounds_max,
-                    } = geometry_to_segments_3d(lsystem_core::generate_3d(&config.generation));
+                    } = geometry_to_segments_3d(lsystem_core::generate_3d(&grammar, &params));
                     self.scene = ActiveScene::ThreeD {
                         segments,
                         bounds_min,
@@ -158,7 +159,7 @@ impl CanvasRenderer {
             Dimensions::TwoD => {
                 if config.generation.has_stack_directives() {
                     let data = geometry_to_depth_segments(
-                        lsystem_core::generate_with_topological_depth(&config.generation),
+                        lsystem_core::generate_with_topological_depth(&grammar, &params),
                     );
                     let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::TwoDWithTopologicalDepth {
@@ -172,7 +173,7 @@ impl CanvasRenderer {
                         segments,
                         bounds_min,
                         bounds_max,
-                    } = geometry_to_segments(lsystem_core::generate(&config.generation));
+                    } = geometry_to_segments(lsystem_core::generate(&grammar, &params));
                     self.scene = ActiveScene::TwoD {
                         segments,
                         bounds_min,

@@ -376,7 +376,7 @@ pub fn viewport_transform(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{Dimensions, GenerationConfig, Rgb, generate};
+    use lsystem_core::{Dimensions, GenerationConfig, Rgb, compile_generation, generate};
     use std::collections::BTreeMap;
 
     use super::*;
@@ -570,11 +570,13 @@ mod tests {
 
     #[test]
     fn empty_geometry_uses_fallback_bounds() {
+        let config = cfg("A");
+        let (grammar, params) = compile_generation(&config);
         let SegmentData {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(generate(&cfg("A")));
+        } = geometry_to_segments(generate(&grammar, &params));
         assert!(segments.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
@@ -582,8 +584,11 @@ mod tests {
 
     #[test]
     fn empty_depth_geometry_uses_fallback_bounds_and_zero_max_depth() {
-        let data =
-            geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(&cfg("A")));
+        let config = cfg("A");
+        let (grammar, params) = compile_generation(&config);
+        let data = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
+            &grammar, &params,
+        ));
 
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
@@ -593,17 +598,19 @@ mod tests {
 
     #[test]
     fn empty_depth_geometry_3d_uses_fallback_bounds_and_zero_max_depth() {
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "A".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        let (grammar, params) = compile_generation(&config);
         let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
-            &GenerationConfig::new(
-                Dimensions::ThreeD,
-                "A".to_string(),
-                0,
-                90.0,
-                1.0,
-                0.0,
-                BTreeMap::new(),
-            )
-            .expect("balanced config"),
+            &grammar, &params,
         ));
 
         assert!(data.segments.is_empty());
@@ -614,11 +621,13 @@ mod tests {
 
     #[test]
     fn single_segment_produces_one_segment_record_and_tight_bounds() {
+        let config = cfg("F");
+        let (grammar, params) = compile_generation(&config);
         let SegmentData {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(generate(&cfg("F")));
+        } = geometry_to_segments(generate(&grammar, &params));
         assert_eq!(segments.len(), 1);
         assert!(close(segments[0].start[0], 0.0) && close(segments[0].start[1], 0.0));
         assert!(close(segments[0].end[0], 1.0) && close(segments[0].end[1], 0.0));
@@ -628,11 +637,13 @@ mod tests {
 
     #[test]
     fn bounds_are_tight_over_all_segments() {
+        let config = cfg("F+F-F");
+        let (grammar, params) = compile_generation(&config);
         let SegmentData {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(generate(&cfg("F+F-F")));
+        } = geometry_to_segments(generate(&grammar, &params));
         assert_eq!(segments.len(), 3);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
@@ -640,9 +651,11 @@ mod tests {
 
     #[test]
     fn topological_depth_segments_preserve_depth_and_compute_max() {
-        let data = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(&cfg(
-            "F[+F]F",
-        )));
+        let config = cfg("F[+F]F");
+        let (grammar, params) = compile_generation(&config);
+        let data = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
+            &grammar, &params,
+        ));
 
         assert_eq!(data.segments.len(), 3);
         assert_eq!(data.segments[0].topological_depth, 0);
@@ -655,17 +668,19 @@ mod tests {
 
     #[test]
     fn topological_depth_segments_3d_preserve_depth_and_compute_max() {
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F[+F]F".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        let (grammar, params) = compile_generation(&config);
         let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
-            &GenerationConfig::new(
-                Dimensions::ThreeD,
-                "F[+F]F".to_string(),
-                0,
-                90.0,
-                1.0,
-                0.0,
-                BTreeMap::new(),
-            )
-            .expect("balanced config"),
+            &grammar, &params,
         ));
 
         assert_eq!(data.segments.len(), 3);
