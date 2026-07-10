@@ -105,9 +105,7 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
     let try_apply_grammar = move || {
         // The Apply button is disabled when grammar has 3D symbols in 2D mode;
         // this guard is a defensive fallback.
-        if grammar_has_3d_symbols.get_untracked()
-            && !matches!(dimensions.get_untracked(), Dimensions::ThreeD)
-        {
+        if grammar_has_3d_symbols.get_untracked() && !is_3d.get_untracked() {
             return;
         }
         do_apply_grammar();

@@ -9,7 +9,6 @@ use lsystem_app_model::{
     advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols};
-use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
@@ -171,57 +170,43 @@ pub(crate) fn App() -> impl IntoView {
         colors: color_config.get_untracked(),
     };
 
-    let recover_after_render =
-        move |status: RenderStatus, canvas: web_sys::HtmlCanvasElement| match status {
-            RenderStatus::Rendered
-            | RenderStatus::Skipped(FrameSkipReason::Timeout | FrameSkipReason::Occluded) => {}
-            RenderStatus::Skipped(reason) => {
-                log::error!("Skipped GPU frame: {reason}");
-            }
-            RenderStatus::SurfaceLost => {
-                log::error!("GPU surface was lost; attempting to recreate it");
-                wasm_bindgen_futures::spawn_local(async move {
-                    let Some(Some(mut renderer_state)) =
-                        renderer.try_update_value(|opt| opt.take())
-                    else {
-                        return;
-                    };
-                    match renderer_state.recover_surface(canvas.clone()).await {
-                        Ok(_) => {
-                            let config = config_for_render();
-                            match renderer_state
-                                .set_config_preserving_camera_and_render(&canvas, &config)
-                            {
-                                RenderStatus::Rendered
-                                | RenderStatus::Skipped(
-                                    FrameSkipReason::Timeout | FrameSkipReason::Occluded,
-                                ) => {
-                                    gpu_error.set(None);
-                                    renderer.update_value(|opt| *opt = Some(renderer_state));
-                                }
-                                RenderStatus::Skipped(reason) => {
-                                    log::error!(
-                                        "Skipped GPU frame after surface recovery: {reason}"
-                                    );
-                                    gpu_error.set(None);
-                                    renderer.update_value(|opt| *opt = Some(renderer_state));
-                                }
-                                RenderStatus::SurfaceLost => {
-                                    log::error!("GPU surface was lost again after recovery");
-                                    gpu_error.set(Some(
-                                        "GPU surface was lost again after recovery".to_string(),
-                                    ));
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            log::error!("Failed to recover GPU surface: {err}");
-                            gpu_error.set(Some(err.to_string()));
-                        }
+    let recover_after_render = move |status: RenderStatus, canvas: web_sys::HtmlCanvasElement| {
+        if let Some(reason) = status.unexpected_skip_reason() {
+            log::error!("Skipped GPU frame: {reason}");
+        }
+        if status != RenderStatus::SurfaceLost {
+            return;
+        }
+        log::error!("GPU surface was lost; attempting to recreate it");
+        wasm_bindgen_futures::spawn_local(async move {
+            let Some(Some(mut renderer_state)) = renderer.try_update_value(|opt| opt.take()) else {
+                return;
+            };
+            match renderer_state.recover_surface(canvas.clone()).await {
+                Ok(()) => {
+                    let config = config_for_render();
+                    let status =
+                        renderer_state.set_config_preserving_camera_and_render(&canvas, &config);
+                    if let Some(reason) = status.unexpected_skip_reason() {
+                        log::error!("Skipped GPU frame after surface recovery: {reason}");
                     }
-                });
+                    if status == RenderStatus::SurfaceLost {
+                        log::error!("GPU surface was lost again after recovery");
+                        gpu_error.set(Some(
+                            "GPU surface was lost again after recovery".to_string(),
+                        ));
+                    } else {
+                        gpu_error.set(None);
+                        renderer.update_value(|opt| *opt = Some(renderer_state));
+                    }
+                }
+                Err(err) => {
+                    log::error!("Failed to recover GPU surface: {err}");
+                    gpu_error.set(Some(err.to_string()));
+                }
             }
-        };
+        });
+    };
 
     let animation_active = Memo::new(move |_| {
         (auto_rotate.get() && is_3d.get())
@@ -255,8 +240,7 @@ pub(crate) fn App() -> impl IntoView {
                 if !animation_active.get_untracked() {
                     break;
                 }
-                let auto_active = auto_rotate.get_untracked()
-                    && matches!(dimensions.get_untracked(), Dimensions::ThreeD);
+                let auto_active = auto_rotate.get_untracked() && is_3d.get_untracked();
                 let line_color = color_config.with_untracked(|c| c.line);
                 let rotation = hue_rotation.get_untracked();
                 let rotation_active = rotation.is_active(&line_color);
@@ -631,7 +615,7 @@ pub(crate) fn App() -> impl IntoView {
                                 recover_after_render,
                                 |r, c| r.reset_and_render(c),
                             );
-                        } else if matches!(dimensions.get_untracked(), Dimensions::ThreeD) {
+                        } else if is_3d.get_untracked() {
                             let handled = match key.as_str() {
                                 "ArrowLeft" => {
                                     with_renderer(canvas, renderer, recover_after_render, |r, c| {
@@ -705,7 +689,7 @@ fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec
 
 pub(crate) fn update_clean_config(
     config_workspace: RwSignal<ConfigWorkspace>,
-    grammar_error: RwSignal<Option<String>>,
+    error: RwSignal<Option<String>>,
     event: &'static str,
     update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
 ) -> bool {
@@ -723,12 +707,12 @@ pub(crate) fn update_clean_config(
     };
     match result {
         Ok(true) => {
-            grammar_error.set(None);
+            error.set(None);
             true
         }
         Ok(false) => false,
         Err(msg) => {
-            grammar_error.set(Some(msg));
+            error.set(Some(msg));
             false
         }
     }

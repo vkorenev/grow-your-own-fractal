@@ -1,5 +1,5 @@
 use crate::app::{ConfigContext, RenderContext};
-use crate::export::{export_png, export_svg};
+use crate::export::{export_animation, export_png, export_svg};
 use leptos::prelude::*;
 use lsystem_app_model::HueRotationDirection;
 use lsystem_renderer::animation_export::AnimationParams;
@@ -43,8 +43,81 @@ pub(crate) fn SavePanel() -> impl IntoView {
     let anim_num_frames =
         Memo::new(move |_| (anim_duration_secs.get() * anim_fps.get() as f32).round() as u32);
     let anim_progress: RwSignal<Option<(u32, u32)>> = RwSignal::new(None);
-    let anim_exporting: RwSignal<bool> = RwSignal::new(false);
-    let export_error = RwSignal::new(None::<String>);
+
+    // The whole export runs as one Action: `pending()` replaces a hand-rolled
+    // "exporting" flag and `value()` carries the outcome of the last export.
+    let export_action = Action::new_unsync(move |&(): &()| {
+        let fmt = effective_save_format.get_untracked();
+        let config = config_for_render.run(());
+        let width = png_width.get_untracked();
+        let height = png_height.get_untracked();
+        // None while the GPU renderer is still initializing.
+        let gpu = renderer
+            .try_with_value(|opt| {
+                opt.as_ref().map(|r| {
+                    let (device, queue) = r.device_queue();
+                    (device, queue, r.camera())
+                })
+            })
+            .flatten();
+        let hue_rotation_dps = hue_rotation.with_untracked(|m| {
+            if m.is_enabled() {
+                let sign = if m.direction() == HueRotationDirection::Forward {
+                    1.0f32
+                } else {
+                    -1.0
+                };
+                sign * m.speed_degrees_per_second()
+            } else {
+                0.0
+            }
+        });
+        let auto_rotate_dps = if auto_rotate.get_untracked() && is_3d.get_untracked() {
+            auto_rotate_speed.get_untracked()
+        } else {
+            0.0
+        };
+        let params = AnimationParams {
+            fps: anim_fps.get_untracked(),
+            num_frames: anim_num_frames.get_untracked(),
+            initial_hue_phase_degrees: hue_rotation_phase.get_value(),
+            hue_rotation_dps,
+            auto_rotate_dps,
+        };
+        async move {
+            match fmt {
+                SaveFormat::Svg => {
+                    export_svg(config);
+                    Ok(())
+                }
+                SaveFormat::Png | SaveFormat::Apng => {
+                    let Some((device, queue, camera)) = gpu else {
+                        return Err("Cannot save: GPU renderer not ready.".to_string());
+                    };
+                    if fmt == SaveFormat::Png {
+                        export_png(device, queue, camera, config, width, height).await
+                    } else {
+                        let result = export_animation(
+                            device,
+                            queue,
+                            camera,
+                            config,
+                            width,
+                            height,
+                            params,
+                            move |n, total| anim_progress.set(Some((n, total))),
+                        )
+                        .await;
+                        anim_progress.set(None);
+                        result
+                    }
+                }
+            }
+        }
+    });
+    let export_pending = export_action.pending();
+    let export_error = move || export_action.value().get().and_then(Result::err);
+    let clear_export_error = move || export_action.value().set(None);
 
     view! {
         <crate::ui::Disclosure title="Save image" open=false>
@@ -55,7 +128,7 @@ pub(crate) fn SavePanel() -> impl IntoView {
                         selected=Signal::derive(move || effective_save_format.get())
                         on_change=move |key| {
                             save_format.set(key);
-                            export_error.set(None);
+                            clear_export_error();
                         }
                     />
                 }.into_any()
@@ -70,7 +143,7 @@ pub(crate) fn SavePanel() -> impl IntoView {
                         selected=Signal::derive(move || effective_save_format.get())
                         on_change=move |key| {
                             save_format.set(key);
-                            export_error.set(None);
+                            clear_export_error();
                         }
                     />
                 }.into_any()
@@ -179,98 +252,13 @@ pub(crate) fn SavePanel() -> impl IntoView {
 
             <button
                 type="button"
-                disabled=move || effective_save_format.get() == SaveFormat::Apng && (anim_exporting.get() || anim_num_frames.get() > AnimationParams::MAX_FRAMES)
+                disabled=move || effective_save_format.get() == SaveFormat::Apng && (export_pending.get() || anim_num_frames.get() > AnimationParams::MAX_FRAMES)
                 on:click=move |_| {
-                    export_error.set(None);
-                    let fmt = effective_save_format.get_untracked();
-                    let config = config_for_render.run(());
-                    match fmt {
-                        SaveFormat::Svg => {
-                            export_svg(config);
-                        }
-                        SaveFormat::Png => {
-                            let Some(Some((device, queue, camera))) =
-                                renderer.try_with_value(|opt| {
-                                    opt.as_ref().map(|r| {
-                                        let (d, q) = r.device_queue();
-                                        (d, q, r.camera())
-                                    })
-                                })
-                            else {
-                                export_error.set(Some("Cannot save: GPU renderer not ready.".to_string()));
-                                return;
-                            };
-                            export_png(
-                                device,
-                                queue,
-                                camera,
-                                config,
-                                png_width.get_untracked(),
-                                png_height.get_untracked(),
-                                move |e| export_error.set(Some(e)),
-                            );
-                        }
-                        SaveFormat::Apng => {
-                            let Some(Some((device, queue, camera))) =
-                                renderer.try_with_value(|opt| {
-                                    opt.as_ref().map(|r| {
-                                        let (d, q) = r.device_queue();
-                                        (d, q, r.camera())
-                                    })
-                                })
-                            else {
-                                export_error.set(Some("Cannot save: GPU renderer not ready.".to_string()));
-                                return;
-                            };
-                            let fps = anim_fps.get_untracked();
-                            let num_frames = anim_num_frames.get_untracked();
-                            let initial_hue = hue_rotation_phase.get_value();
-                            let hue_rotation_dps = hue_rotation.with_untracked(|m| {
-                                if m.is_enabled() {
-                                    let sign = if m.direction() == HueRotationDirection::Forward { 1.0f32 } else { -1.0 };
-                                    sign * m.speed_degrees_per_second()
-                                } else {
-                                    0.0
-                                }
-                            });
-                            let auto_rotate_dps = if auto_rotate.get_untracked() && is_3d.get() {
-                                auto_rotate_speed.get_untracked()
-                            } else {
-                                0.0
-                            };
-                            let params = AnimationParams {
-                                fps,
-                                num_frames,
-                                initial_hue_phase_degrees: initial_hue,
-                                hue_rotation_dps,
-                                auto_rotate_dps,
-                            };
-                            let width = png_width.get_untracked();
-                            let height = png_height.get_untracked();
-                            anim_exporting.set(true);
-                            anim_progress.set(None);
-                            crate::export::export_animation(
-                                device,
-                                queue,
-                                camera,
-                                config,
-                                width,
-                                height,
-                                params,
-                                move |n, total| anim_progress.set(Some((n, total))),
-                                move |err| {
-                                    anim_exporting.set(false);
-                                    anim_progress.set(None);
-                                    if let Some(msg) = err {
-                                        export_error.set(Some(msg));
-                                    }
-                                },
-                            );
-                        }
-                    }
+                    clear_export_error();
+                    export_action.dispatch(());
                 }
             >"Save"</button>
-            {move || export_error.get().map(|m| view! {
+            {move || export_error().map(|m| view! {
                 <span class="inline-status error">{m}</span>
             })}
         </crate::ui::Disclosure>
