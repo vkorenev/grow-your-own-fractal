@@ -1,8 +1,7 @@
-use crate::app::RendererState;
+use crate::app::{ConfigContext, RenderContext};
 use crate::export::{export_png, export_svg};
 use leptos::prelude::*;
-use lsystem_app_model::{HueRotation, HueRotationDirection};
-use lsystem_core::Config;
+use lsystem_app_model::HueRotationDirection;
 use lsystem_renderer::animation_export::AnimationParams;
 use lsystem_renderer::png_export::{
     MAX_DIMENSION as PNG_MAX_DIMENSION, MIN_DIMENSION as PNG_MIN_DIMENSION,
@@ -16,25 +15,37 @@ pub(crate) enum SaveFormat {
 }
 
 #[component]
-pub(crate) fn SavePanel(
-    is_3d: Memo<bool>,
-    save_format: RwSignal<SaveFormat>,
-    effective_save_format: Memo<SaveFormat>,
-    png_width: RwSignal<u32>,
-    png_height: RwSignal<u32>,
-    anim_fps: RwSignal<u16>,
-    anim_duration_secs: RwSignal<f32>,
-    anim_num_frames: Memo<u32>,
-    anim_progress: RwSignal<Option<(u32, u32)>>,
-    anim_exporting: RwSignal<bool>,
-    export_error: RwSignal<Option<String>>,
-    auto_rotate: RwSignal<bool>,
-    auto_rotate_speed: RwSignal<f32>,
-    hue_rotation: RwSignal<HueRotation>,
-    hue_rotation_phase: StoredValue<f32>,
-    renderer: RendererState,
-    config_for_render: Callback<(), Config>,
-) -> impl IntoView {
+pub(crate) fn SavePanel() -> impl IntoView {
+    let ConfigContext { is_3d, .. } = expect_context();
+    let RenderContext {
+        renderer,
+        auto_rotate,
+        auto_rotate_speed,
+        hue_rotation,
+        hue_rotation_phase,
+        config_for_render,
+        ..
+    } = expect_context();
+
+    let save_format = RwSignal::new(SaveFormat::Png);
+    let effective_save_format = Memo::new(move |_| {
+        let fmt = save_format.get();
+        if is_3d.get() && fmt == SaveFormat::Svg {
+            SaveFormat::Png
+        } else {
+            fmt
+        }
+    });
+    let png_width = RwSignal::new(800u32);
+    let png_height = RwSignal::new(800u32);
+    let anim_fps: RwSignal<u16> = RwSignal::new(30);
+    let anim_duration_secs: RwSignal<f32> = RwSignal::new(4.0);
+    let anim_num_frames =
+        Memo::new(move |_| (anim_duration_secs.get() * anim_fps.get() as f32).round() as u32);
+    let anim_progress: RwSignal<Option<(u32, u32)>> = RwSignal::new(None);
+    let anim_exporting: RwSignal<bool> = RwSignal::new(false);
+    let export_error = RwSignal::new(None::<String>);
+
     view! {
         <crate::ui::Disclosure title="Save image" open=false>
             {move || if is_3d.get() {

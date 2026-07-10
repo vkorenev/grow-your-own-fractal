@@ -1,20 +1,27 @@
+use crate::app::{ConfigContext, RenderContext};
 use leptos::prelude::*;
 use lsystem_app_model::{
     HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
-    HueRotation, HueRotationDirection,
+    HueRotationDirection,
 };
 use lsystem_core::LineColorConfig;
 
 #[component]
-pub(crate) fn AnimationsPanel(
-    is_3d: Memo<bool>,
-    auto_rotate: RwSignal<bool>,
-    auto_rotate_speed: RwSignal<f32>,
-    hue_rotation: RwSignal<HueRotation>,
-    control_line_color: Memo<LineColorConfig>,
-    animation_error: RwSignal<Option<String>>,
-    set_hue_rotation: Callback<Option<HueRotationDirection>>,
-) -> impl IntoView {
+pub(crate) fn AnimationsPanel() -> impl IntoView {
+    let ConfigContext {
+        is_3d,
+        control_line_color,
+        ..
+    } = expect_context();
+    let RenderContext {
+        auto_rotate,
+        auto_rotate_speed,
+        hue_rotation,
+        animation_error,
+        set_hue_rotation,
+        ..
+    } = expect_context();
+
     view! {
         <crate::ui::Disclosure title="Animations">
             <div style="display:flex;flex-direction:column;gap:6px">

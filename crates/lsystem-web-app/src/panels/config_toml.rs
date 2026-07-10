@@ -1,15 +1,20 @@
+use crate::app::ConfigContext;
 use leptos::prelude::*;
-use lsystem_app_model::{ConfigWorkspace, EntryViewMut};
+use lsystem_app_model::EntryViewMut;
 
 #[component]
-pub(crate) fn ConfigTomlPanel(
-    config_workspace: RwSignal<ConfigWorkspace>,
-    toml_text: Memo<String>,
-    toml_error: RwSignal<Option<String>>,
-    is_dirty: Memo<bool>,
-    grammar_is_dirty: Memo<bool>,
-    select_current_config: Callback<()>,
-) -> impl IntoView {
+pub(crate) fn ConfigTomlPanel() -> impl IntoView {
+    let ConfigContext {
+        config_workspace,
+        toml_text,
+        toml_error,
+        is_dirty,
+        grammar,
+        select_current_config,
+        ..
+    } = expect_context();
+    let grammar_is_dirty = grammar.is_dirty;
+
     let apply_current = move || {
         if !is_dirty.get_untracked() {
             return;
