@@ -62,7 +62,8 @@ than caching resolved values inside the editor document.
 `lsystem-core` owns the grammar and turtle semantics:
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
-- `grammar.rs` provides a lazy owned expansion iterator.
+- `grammar.rs` provides a lazy expansion iterator that borrows a compiled
+  grammar (`CompiledGrammar::compile`) rather than owning it.
 - `turtle/turtle2d.rs` yields 2D line segments from expanded symbols.
 - `turtle/turtle3d.rs` yields 3D line segments using quaternion orientation.
 - `config.rs` defines validated runtime config and color types.
@@ -70,8 +71,23 @@ than caching resolved values inside the editor document.
   enforces single-letter rule keys and bracket balance on the axiom and every
   rule RHS, so every expansion is balanced and downstream code (turtle stack
   handling, templates) relies on that invariant instead of re-validating.
-  The axiom and rules are read-only after construction.
+  The axiom and rules are read-only after construction. `GenerationParams`
+  projects out the scalar parameters needed for generation beyond the
+  grammar itself (`iterations`/`angle`/`step`/`initial_heading`),
+  independent of axiom/rules.
 - `svg_export.rs` exports resolved 2D configs when the `svg` feature is enabled.
+
+`generate`/`generate_with_topological_depth`/`generate_3d`/
+`generate_3d_with_topological_depth` (in `lib.rs`) take a `&CompiledGrammar`
+and `&GenerationParams` rather than compiling from a `&GenerationConfig`
+internally — callers compile the grammar once
+(`CompiledGrammar::compile(&config)`) and hold it across the call, which is
+what lets the returned iterator borrow it instead of owning it;
+`GenerationParams` is `Copy` and consumed by value into the turtle
+constructors, so it need not outlive the call. `grammar` and `params` should
+come from the same config — nothing enforces the pairing, so passing
+mismatched sources compiles and runs but produces geometry that doesn't
+correspond to any single config.
 
 3D turtle orientation is stored as a `glam::Quat`. Heading, left, and up vectors
 are derived from that orientation, and pitch/roll/yaw symbols compose in local

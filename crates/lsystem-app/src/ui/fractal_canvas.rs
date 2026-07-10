@@ -2,7 +2,7 @@ use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
 use lsystem_app_model::ConfigDefaults;
-use lsystem_core::{ColorConfig, Config, Dimensions};
+use lsystem_core::{ColorConfig, Config, Dimensions, compile_generation};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -340,6 +340,7 @@ pub(super) async fn build_scene(
     camera.reset_position();
     let colors = config.colors;
     let started = Instant::now();
+    let (grammar, params) = compile_generation(&config.generation);
 
     match config.generation.dimensions {
         Dimensions::ThreeD => {
@@ -350,8 +351,7 @@ pub(super) async fn build_scene(
 
             if use_topological_depth {
                 let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
-                for segment in lsystem_core::generate_3d_with_topological_depth(&config.generation)
-                {
+                for segment in lsystem_core::generate_3d_with_topological_depth(&grammar, &params) {
                     if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
                         if is_cancelled(generation, &current_generation) {
                             return SceneBuildResult::Cancelled;
@@ -382,7 +382,7 @@ pub(super) async fn build_scene(
                 }
             } else {
                 let mut builder = SegmentDataBuilder3D::new();
-                for segment in lsystem_core::generate_3d(&config.generation) {
+                for segment in lsystem_core::generate_3d(&grammar, &params) {
                     if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
                         if is_cancelled(generation, &current_generation) {
                             return SceneBuildResult::Cancelled;
@@ -421,7 +421,7 @@ pub(super) async fn build_scene(
 
             if use_topological_depth {
                 let mut builder = TopologicalDepthSegmentDataBuilder::new();
-                for segment in lsystem_core::generate_with_topological_depth(&config.generation) {
+                for segment in lsystem_core::generate_with_topological_depth(&grammar, &params) {
                     if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
                         if is_cancelled(generation, &current_generation) {
                             return SceneBuildResult::Cancelled;
@@ -452,7 +452,7 @@ pub(super) async fn build_scene(
                 }
             } else {
                 let mut builder = SegmentDataBuilder::new();
-                for segment in lsystem_core::generate(&config.generation) {
+                for segment in lsystem_core::generate(&grammar, &params) {
                     if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
                         if is_cancelled(generation, &current_generation) {
                             return SceneBuildResult::Cancelled;

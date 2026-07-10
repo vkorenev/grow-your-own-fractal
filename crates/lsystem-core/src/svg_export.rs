@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::{
     ColorConfig, Config, GenerationConfig, LineColorConfig, Segment2DWithTopologicalDepth,
-    generate, generate_with_topological_depth,
+    compile_generation, generate, generate_with_topological_depth,
 };
 
 /// Generate an SVG string for the given config.
@@ -11,11 +11,12 @@ use crate::{
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> String {
     let colors = config.colors;
+    let (grammar, params) = compile_generation(&config.generation);
     if colors.line.needs_topological_depth() && config.generation.has_stack_directives() {
         // for_each drives the pipeline's specialized `fold`; `collect` would
         // pull every symbol one at a time through `next`.
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
-        generate_with_topological_depth(&config.generation)
+        generate_with_topological_depth(&grammar, &params)
             .for_each(|segment| segments.push(segment));
         return export_svg_with_segments(
             &config.generation,
@@ -27,7 +28,7 @@ pub fn export_svg(config: &Config) -> String {
 
     // for_each drives the pipeline's specialized `fold` (see above).
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
-    generate(&config.generation).for_each(|segment| segments.push(segment));
+    generate(&grammar, &params).for_each(|segment| segments.push(segment));
     export_svg_with_segments(
         &config.generation,
         &colors,

@@ -3,27 +3,31 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use lsystem_core::{
-    Dimensions, GenerationConfig, generate, generate_3d, generate_3d_with_topological_depth,
-    generate_with_topological_depth,
+    Dimensions, GenerationConfig, compile_generation, generate, generate_3d,
+    generate_3d_with_topological_depth, generate_with_topological_depth,
 };
 
 fn checksum_2d(config: &GenerationConfig) -> f32 {
-    generate(config).fold(0.0, |acc, [a, b]| acc + a.x + a.y + b.x + b.y)
+    let (grammar, params) = compile_generation(config);
+    generate(&grammar, &params).fold(0.0, |acc, [a, b]| acc + a.x + a.y + b.x + b.y)
 }
 
 fn checksum_2d_with_topological_depth(config: &GenerationConfig) -> f32 {
-    generate_with_topological_depth(config).fold(0.0, |acc, segment| {
+    let (grammar, params) = compile_generation(config);
+    generate_with_topological_depth(&grammar, &params).fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
         acc + a.x + a.y + b.x + b.y + segment.topological_depth as f32
     })
 }
 
 fn checksum_3d(config: &GenerationConfig) -> f32 {
-    generate_3d(config).fold(0.0, |acc, [a, b]| acc + a.x + a.y + a.z + b.x + b.y + b.z)
+    let (grammar, params) = compile_generation(config);
+    generate_3d(&grammar, &params).fold(0.0, |acc, [a, b]| acc + a.x + a.y + a.z + b.x + b.y + b.z)
 }
 
 fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
-    generate_3d_with_topological_depth(config).fold(0.0, |acc, segment| {
+    let (grammar, params) = compile_generation(config);
+    generate_3d_with_topological_depth(&grammar, &params).fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
         acc + a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32
     })
