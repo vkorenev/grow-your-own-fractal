@@ -154,17 +154,10 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                     };
                     let editor_line =
                         editor_color_config.with_untracked(|e| e.line);
-                    let Some(new_editor_line) = color_memory.try_update(|memory| {
+                    let new_editor_line = {
+                        let mut memory = color_memory.write();
                         memory.remember_line(editor_line);
                         memory.line_for(mode)
-                    }) else {
-                        log::error!(
-                            "line color mode select: line color memory signal was unavailable"
-                        );
-                        colors_error.set(Some(
-                            "Internal error: could not update line color.".to_string(),
-                        ));
-                        return;
                     };
                     if update_clean_config(
                         config_workspace,

@@ -709,32 +709,26 @@ pub(crate) fn update_clean_config(
     event: &'static str,
     update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
 ) -> bool {
-    let result = config_workspace.try_update(|workspace| {
-        let entry = workspace.selected_mut();
-        match entry.view_mut() {
+    let result = {
+        let mut workspace = config_workspace.write();
+        match workspace.selected_mut().view_mut() {
             EntryViewMut::Clean(mut clean) => {
-                update(&mut clean).map_err(|e| e.to_string())?;
-                Ok(true)
+                update(&mut clean).map(|()| true).map_err(|e| e.to_string())
             }
             EntryViewMut::Dirty(_) => {
                 log::error!("{event} fired while entry is dirty; UI guards bypassed");
                 Ok(false)
             }
         }
-    });
+    };
     match result {
-        Some(Ok(true)) => {
+        Ok(true) => {
             grammar_error.set(None);
             true
         }
-        Some(Ok(false)) => false,
-        Some(Err(msg)) => {
+        Ok(false) => false,
+        Err(msg) => {
             grammar_error.set(Some(msg));
-            false
-        }
-        None => {
-            log::error!("{event}: config_workspace signal was unavailable");
-            grammar_error.set(Some("Internal error: could not update config.".to_string()));
             false
         }
     }
