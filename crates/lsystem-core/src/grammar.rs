@@ -6,9 +6,8 @@ use crate::config::GenerationConfig;
 const NON_ASCII_BASE: u8 = 128;
 const MAX_NON_ASCII_SYMBOLS: usize = (u8::MAX - NON_ASCII_BASE + 1) as usize;
 
-struct Frame {
-    pos: u32,
-    end: u32,
+struct Frame<'a> {
+    remaining: std::slice::Iter<'a, u8>,
     depth: u32,
 }
 
@@ -32,7 +31,7 @@ const EFFECTS: [bool; 256] = {
 };
 
 /// Half-open arena spans for one expandable string: the string itself and
-/// its effect-filtered copy. Storing both behind one `Option` makes it
+/// its effect-filtered copy. Bundling both into one struct makes it
 /// impossible for a symbol to have one span without the other.
 #[derive(Clone, Copy)]
 struct RuleSpans {
@@ -40,12 +39,50 @@ struct RuleSpans {
     effects: (u32, u32),
 }
 
+impl RuleSpans {
+    fn to_slices(self, arena: &[u8]) -> RuleSlices<'_> {
+        RuleSlices {
+            full: &arena[self.full.0 as usize..self.full.1 as usize],
+            effects: &arena[self.effects.0 as usize..self.effects.1 as usize],
+        }
+    }
+}
+
+/// Slice-based analog of `RuleSpans`, resolved once per expansion against a
+/// specific arena so traversal never re-indexes it. `effects` is guaranteed
+/// to be the effect-filtered subsequence of `full`, the same invariant
+/// `RuleSpans` carries, preserved by `RuleSpans::to_slices`.
+#[derive(Clone, Copy)]
+struct RuleSlices<'a> {
+    full: &'a [u8],
+    effects: &'a [u8],
+}
+
+impl<'a> RuleSlices<'a> {
+    /// The span a rule application should push for a child at `child_depth`:
+    /// the effects-filtered copy iff the child enters depth 0 in
+    /// effects-only mode, otherwise the full span.
+    fn child(self, child_depth: u32, effects_only: bool) -> &'a [u8] {
+        if child_depth == 0 && effects_only {
+            self.effects
+        } else {
+            self.full
+        }
+    }
+}
+
 /// The compiled form of a grammar: axiom and rule RHS spans in one shared u8
-/// arena, with O(1) rule lookup per symbol byte. This is the single place
-/// where `char`-domain axiom and rules convert to the byte-domain arena;
-/// every expansion flavor iterates over one compiled value. Rules that can
-/// never be reached from the axiom are dropped during compilation, so the
-/// rule table holds exactly the rules expansion can apply.
+/// arena. This is the single place where `char`-domain axiom and rules
+/// convert to the byte-domain arena; every expansion flavor iterates over one
+/// compiled value. Rules that can never be reached from the axiom are
+/// dropped during compilation, so the rule table holds exactly the rules
+/// expansion can apply.
+///
+/// `rules` is a sparse list, sized to the actual (usually small) rule count
+/// rather than a fixed 256-entry table: after compilation it's only ever
+/// fully scanned, never point-looked-up by key. `slice_rules` resolves it
+/// into a byte-indexed, O(1)-lookup table once per expansion, for traversal
+/// to use.
 ///
 /// Each expandable string is stored twice (`RuleSpans`): the full form and
 /// an effect-filtered copy. Effects-only expansion streams terminal (depth-0)
@@ -53,7 +90,7 @@ struct RuleSpans {
 /// depth > 0 via the effects table.
 pub struct CompiledGrammar {
     arena: Vec<u8>,
-    rules: Box<[Option<RuleSpans>; 256]>,
+    rules: Box<[(u8, RuleSpans)]>,
     axiom: RuleSpans,
 }
 
@@ -99,116 +136,119 @@ impl CompiledGrammar {
         }
         let axiom_spans = finish_spans(&mut arena, 0);
 
-        let mut rule_table: Box<[Option<RuleSpans>; 256]> = Box::new([None; 256]);
+        // Keys are unique by construction: `rules` is a `BTreeMap` (distinct
+        // `char` keys), and `char_to_id` is injective over distinct `char`s,
+        // so no two entries below can ever share a `key_id`. Asserted here,
+        // where the table is built, rather than downstream in `slice_rules`
+        // where it would re-check on every expansion instead of once.
+        let mut rule_table: Vec<(u8, RuleSpans)> = Vec::with_capacity(rules.len());
         for (k, v) in rules.iter().filter(|(k, _)| reachable.contains(k)) {
-            let key_id = char_to_id(*k, &mut non_ascii, &mut next_id) as usize;
+            let key_id = char_to_id(*k, &mut non_ascii, &mut next_id);
+            debug_assert!(
+                !rule_table.iter().any(|&(existing, _)| existing == key_id),
+                "duplicate rule key {key_id}"
+            );
             let rhs_start = arena.len() as u32;
             for c in v.chars() {
                 arena.push(char_to_id(c, &mut non_ascii, &mut next_id));
             }
-            rule_table[key_id] = Some(finish_spans(&mut arena, rhs_start));
+            rule_table.push((key_id, finish_spans(&mut arena, rhs_start)));
         }
 
         Self {
             arena,
-            rules: rule_table,
+            rules: rule_table.into_boxed_slice(),
             axiom: axiom_spans,
         }
+    }
+
+    /// Builds the per-expansion byte-indexed rule table by resolving every
+    /// compiled `RuleSpans` against `self.arena` once, up front, so
+    /// traversal never re-indexes the arena for rule lookup.
+    fn slice_rules(&self) -> Box<[Option<RuleSlices<'_>>; 256]> {
+        let mut rules: Box<[Option<RuleSlices>; 256]> = Box::new([None; 256]);
+        for &(key, spans) in self.rules.iter() {
+            rules[key as usize] = Some(spans.to_slices(&self.arena));
+        }
+        rules
     }
 
     /// Full expansion: every expanded symbol is yielded.
     #[cfg(test)]
     pub(crate) fn expand(&self, iterations: u32) -> ExpandIter<'_> {
-        let (pos, end) = self.axiom.full;
+        let axiom = self.axiom.to_slices(&self.arena);
         ExpandIter {
             stack: vec![Frame {
-                pos,
-                end,
+                remaining: axiom.full.iter(),
                 depth: iterations,
             }],
             effects_only: false,
-            grammar: self,
-            terminal_pos: 0,
-            terminal_end: 0,
+            rules: self.slice_rules(),
+            // Starts empty; the first `next`/`fold` call fills it in.
+            terminal: Default::default(),
         }
     }
 
     /// Effects-only expansion: symbols with no turtle effect are stripped.
     pub(crate) fn expand_effects(&self, iterations: u32) -> ExpandIter<'_> {
+        let axiom = self.axiom.to_slices(&self.arena);
         // At zero iterations the axiom frame itself streams terminally, so an
         // effects-only expansion starts on the filtered copy.
-        let (pos, end) = if iterations == 0 {
-            self.axiom.effects
+        let initial = if iterations == 0 {
+            axiom.effects
         } else {
-            self.axiom.full
+            axiom.full
         };
         ExpandIter {
             stack: vec![Frame {
-                pos,
-                end,
+                remaining: initial.iter(),
                 depth: iterations,
             }],
             effects_only: true,
-            grammar: self,
-            terminal_pos: 0,
-            terminal_end: 0,
+            rules: self.slice_rules(),
+            // Starts empty; the first `next`/`fold` call fills it in.
+            terminal: Default::default(),
         }
     }
 }
 
 pub(crate) struct ExpandIter<'a> {
-    grammar: &'a CompiledGrammar,
+    rules: Box<[Option<RuleSlices<'a>>; 256]>,
     effects_only: bool,
-    stack: Vec<Frame>,
-    terminal_pos: u32,
-    terminal_end: u32,
+    stack: Vec<Frame<'a>>,
+    terminal: std::slice::Iter<'a, u8>,
 }
 
 impl<'a> Iterator for ExpandIter<'a> {
     type Item = u8;
 
     fn next(&mut self) -> Option<u8> {
-        if self.terminal_pos < self.terminal_end {
-            let byte = self.grammar.arena[self.terminal_pos as usize];
-            self.terminal_pos += 1;
+        if let Some(&byte) = self.terminal.next() {
             return Some(byte);
         }
 
         loop {
-            let (byte, depth) = {
-                let frame = self.stack.last_mut()?;
-                if frame.pos == frame.end {
-                    self.stack.pop();
-                    continue;
-                }
-                if frame.depth == 0 {
-                    let pos = frame.pos;
-                    self.terminal_pos = pos + 1;
-                    self.terminal_end = frame.end;
-                    self.stack.pop();
-                    return Some(self.grammar.arena[pos as usize]);
-                }
-                let b = self.grammar.arena[frame.pos as usize];
-                frame.pos += 1;
-                (b, frame.depth)
+            let frame = self.stack.last_mut()?;
+            let Some(&first) = frame.remaining.next() else {
+                self.stack.pop();
+                continue;
             };
-            if let Some(spans) = self.grammar.rules[byte as usize] {
-                // In effects-only mode, children entering depth 0 stream
-                // their span terminally, so they take the filtered copy.
-                let (pos, end) = if depth == 1 && self.effects_only {
-                    spans.effects
-                } else {
-                    spans.full
-                };
+            if frame.depth == 0 {
+                // The frame's remaining span, already advanced past `first`,
+                // streams terminally without further rule lookups.
+                self.terminal = self.stack.pop().unwrap().remaining;
+                return Some(first);
+            }
+            let depth = frame.depth;
+            if let Some(entry) = self.rules[first as usize] {
                 self.stack.push(Frame {
-                    pos,
-                    end,
+                    remaining: entry.child(depth - 1, self.effects_only).iter(),
                     depth: depth - 1,
                 });
                 continue;
             }
-            if !self.effects_only || EFFECTS[byte as usize] {
-                return Some(byte);
+            if !self.effects_only || EFFECTS[first as usize] {
+                return Some(first);
             }
         }
     }
@@ -218,43 +258,32 @@ impl<'a> Iterator for ExpandIter<'a> {
         Self: Sized,
         F: FnMut(B, Self::Item) -> B,
     {
-        let mut acc = self.grammar.arena[self.terminal_pos as usize..self.terminal_end as usize]
-            .iter()
-            .copied()
-            .fold(init, &mut f);
+        let mut acc = self.terminal.copied().fold(init, &mut f);
 
         loop {
             let Some(frame) = self.stack.last_mut() else {
                 return acc;
             };
-            if frame.pos == frame.end {
-                self.stack.pop();
-                continue;
-            }
             if frame.depth == 0 {
-                let start = frame.pos as usize;
-                let end = frame.end as usize;
-                self.stack.pop();
-                acc = self.grammar.arena[start..end]
-                    .iter()
+                acc = self
+                    .stack
+                    .pop()
+                    .unwrap()
+                    .remaining
                     .copied()
                     .fold(acc, &mut f);
                 continue;
             }
-
-            let byte = self.grammar.arena[frame.pos as usize];
-            frame.pos += 1;
+            let Some(&byte) = frame.remaining.next() else {
+                self.stack.pop();
+                continue;
+            };
             let depth = frame.depth - 1;
-            if let Some(spans) = self.grammar.rules[byte as usize] {
-                // Mirrors the span selection in `next`; `depth` here is the
-                // child's depth (already decremented), so `depth == 0`
-                // corresponds to `depth == 1` there.
-                let (pos, end) = if depth == 0 && self.effects_only {
-                    spans.effects
-                } else {
-                    spans.full
-                };
-                self.stack.push(Frame { pos, end, depth });
+            if let Some(entry) = self.rules[byte as usize] {
+                self.stack.push(Frame {
+                    remaining: entry.child(depth, self.effects_only).iter(),
+                    depth,
+                });
             } else if !self.effects_only || EFFECTS[byte as usize] {
                 acc = f(acc, byte);
             }
@@ -632,8 +661,8 @@ mod tests {
             [('F', "F-F".to_string()), ('X', "FF".to_string())].into();
         let grammar = CompiledGrammar::compile_raw("F", &rules);
 
-        assert!(grammar.rules[b'X' as usize].is_none());
-        assert!(grammar.rules[b'F' as usize].is_some());
+        assert!(!grammar.rules.iter().any(|&(k, _)| k == b'X'));
+        assert!(grammar.rules.iter().any(|&(k, _)| k == b'F'));
     }
 
     #[test]
@@ -643,7 +672,7 @@ mod tests {
             [('F', "F-F".to_string()), ('X', "XX".to_string())].into();
         let grammar = CompiledGrammar::compile_raw("F", &rules);
 
-        assert!(grammar.rules[b'X' as usize].is_none());
+        assert!(!grammar.rules.iter().any(|&(k, _)| k == b'X'));
     }
 
     #[test]
