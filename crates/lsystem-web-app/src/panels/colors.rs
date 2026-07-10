@@ -1,8 +1,8 @@
-use crate::app::update_clean_config;
+use crate::app::{ConfigContext, update_clean_config};
 use leptos::prelude::*;
 use lsystem_app_model::{
-    ColorControlMemory, ConfigDefaults, ConfigWorkspace, EditorColorConfig, EditorLineColorConfig,
-    LineColorMode, selected_line_color_mode,
+    ColorControlMemory, ConfigDefaults, EditorLineColorConfig, LineColorMode,
+    selected_line_color_mode,
 };
 use lsystem_core::{LineColorConfig, Rgb};
 
@@ -53,14 +53,17 @@ fn ColorOverrideRow(
 }
 
 #[component]
-pub(crate) fn ColorsPanel(
-    config_workspace: RwSignal<ConfigWorkspace>,
-    colors_error: RwSignal<Option<String>>,
-    editor_color_config: Memo<EditorColorConfig>,
-    control_line_color: Memo<LineColorConfig>,
-    color_memory: RwSignal<ColorControlMemory>,
-    is_dirty: Memo<bool>,
-) -> impl IntoView {
+pub(crate) fn ColorsPanel() -> impl IntoView {
+    let ConfigContext {
+        config_workspace,
+        colors_error,
+        editor_color_config,
+        control_line_color,
+        color_memory,
+        is_dirty,
+        ..
+    } = expect_context();
+
     let dirty_tooltip = move || {
         if is_dirty.get() {
             "Apply or Revert TOML changes first"

@@ -1,7 +1,6 @@
-use crate::app::update_clean_config;
+use crate::app::{ConfigContext, GrammarDraft, update_clean_config};
 use leptos::prelude::*;
-use lsystem_app_model::ConfigWorkspace;
-use lsystem_core::{Dimensions, GenerationConfig};
+use lsystem_core::Dimensions;
 
 #[derive(Clone, Copy)]
 pub(crate) struct GrammarRow {
@@ -31,25 +30,30 @@ pub(crate) fn rows_from_rules(
 }
 
 #[component]
-pub(crate) fn GrammarPanel(
-    config_workspace: RwSignal<ConfigWorkspace>,
-    grammar_error: RwSignal<Option<String>>,
-    generation_config: Memo<GenerationConfig>,
-    dimensions: Memo<Dimensions>,
-    is_dirty: Memo<bool>,
-    grammar_is_dirty: Memo<bool>,
-    grammar_has_3d_symbols: Memo<bool>,
-    grammar_symbols: Memo<Vec<char>>,
-    unused_rule_symbols: Memo<Vec<char>>,
-    iterations: Memo<u32>,
-    max_iterations: Memo<u32>,
-    angle: Memo<f32>,
-    grammar_axiom: RwSignal<String>,
-    grammar_rows: RwSignal<Vec<GrammarRow>>,
-    grammar_row_counter: StoredValue<u32>,
-    sync_grammar_editor: Callback<()>,
-) -> impl IntoView {
-    let is_3d = Memo::new(move |_| matches!(dimensions.get(), Dimensions::ThreeD));
+pub(crate) fn GrammarPanel() -> impl IntoView {
+    let ConfigContext {
+        config_workspace,
+        grammar_error,
+        generation_config,
+        dimensions,
+        is_3d,
+        is_dirty,
+        unused_rule_symbols,
+        iterations,
+        max_iterations,
+        angle,
+        grammar:
+            GrammarDraft {
+                axiom: grammar_axiom,
+                rows: grammar_rows,
+                row_counter: grammar_row_counter,
+                is_dirty: grammar_is_dirty,
+                has_3d_symbols: grammar_has_3d_symbols,
+                symbols: grammar_symbols,
+                sync: sync_grammar_editor,
+            },
+        ..
+    } = expect_context();
 
     let dirty_tooltip = move || {
         if is_dirty.get() {

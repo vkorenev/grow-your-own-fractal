@@ -1,14 +1,14 @@
-use crate::panels::save::SaveFormat;
+use crate::panels::grammar::GrammarRow;
 use crate::presets::max_iterations_for_editor_config;
 use crate::renderer::{CanvasRenderer, RenderStatus};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigWorkspace, EntryViewMut, HueRotation,
-    HueRotationDirection, ParseConfigError, advance_hue_rotation_phase_degrees,
-    line_color_for_controls, load_presets,
+    CleanMut, ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace,
+    EditorColorConfig, EntryViewMut, HueRotation, HueRotationDirection, ParseConfigError,
+    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
-use lsystem_core::{Config, Dimensions, LineColorConfig, contains_3d_symbols};
+use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols};
 use lsystem_renderer::line_renderer::FrameSkipReason;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -16,6 +16,67 @@ use wasm_bindgen::closure::Closure;
 pub(crate) type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
 
 const ROTATION_STEP_DEG: f32 = 5.0;
+
+/// Grammar-editor draft state. The draft signals live in `App` (not in the
+/// grammar panel) because `select_current_config` resyncs them on entry
+/// switches and `is_dirty` participates in the TOML/grammar cross-lockout.
+#[derive(Clone, Copy)]
+pub(crate) struct GrammarDraft {
+    pub(crate) axiom: RwSignal<String>,
+    pub(crate) rows: RwSignal<Vec<GrammarRow>>,
+    pub(crate) row_counter: StoredValue<u32>,
+    pub(crate) is_dirty: Memo<bool>,
+    pub(crate) has_3d_symbols: Memo<bool>,
+    pub(crate) symbols: Memo<Vec<char>>,
+    /// Resets the draft to the currently applied grammar.
+    pub(crate) sync: Callback<()>,
+}
+
+/// Workspace/config state shared between `App` and the control panels,
+/// provided via context.
+#[derive(Clone, Copy)]
+pub(crate) struct ConfigContext {
+    pub(crate) config_workspace: RwSignal<ConfigWorkspace>,
+    pub(crate) toml_text: Memo<String>,
+    pub(crate) selected_id: Memo<ConfigEntryId>,
+    pub(crate) selected_name: Memo<String>,
+    pub(crate) display_options: Memo<Vec<(ConfigEntryId, String)>>,
+    pub(crate) differs_from_default: Memo<bool>,
+    pub(crate) generation_config: Memo<GenerationConfig>,
+    pub(crate) editor_color_config: Memo<EditorColorConfig>,
+    pub(crate) control_line_color: Memo<LineColorConfig>,
+    pub(crate) color_memory: RwSignal<ColorControlMemory>,
+    pub(crate) unused_rule_symbols: Memo<Vec<char>>,
+    pub(crate) iterations: Memo<u32>,
+    pub(crate) max_iterations: Memo<u32>,
+    pub(crate) angle: Memo<f32>,
+    pub(crate) dimensions: Memo<Dimensions>,
+    pub(crate) is_3d: Memo<bool>,
+    pub(crate) is_dirty: Memo<bool>,
+    pub(crate) grammar: GrammarDraft,
+    pub(crate) grammar_error: RwSignal<Option<String>>,
+    pub(crate) toml_error: RwSignal<Option<String>>,
+    pub(crate) workspace_error: RwSignal<Option<String>>,
+    pub(crate) colors_error: RwSignal<Option<String>>,
+    /// Clears panel errors and resyncs editors after the selected entry (or its
+    /// applied config) changes.
+    pub(crate) select_current_config: Callback<()>,
+}
+
+/// Renderer and animation state shared between `App` and the control panels,
+/// provided via context.
+#[derive(Clone, Copy)]
+pub(crate) struct RenderContext {
+    pub(crate) renderer: RendererState,
+    pub(crate) auto_rotate: RwSignal<bool>,
+    pub(crate) auto_rotate_speed: RwSignal<f32>,
+    pub(crate) hue_rotation: RwSignal<HueRotation>,
+    pub(crate) hue_rotation_phase: StoredValue<f32>,
+    pub(crate) animation_error: RwSignal<Option<String>>,
+    /// Snapshot of the currently applied config for rendering/export.
+    pub(crate) config_for_render: Callback<(), Config>,
+    pub(crate) set_hue_rotation: Callback<Option<HueRotationDirection>>,
+}
 
 #[component]
 pub(crate) fn App() -> impl IntoView {
@@ -30,17 +91,8 @@ pub(crate) fn App() -> impl IntoView {
     let grammar_error = RwSignal::new(None::<String>);
     let toml_error = RwSignal::new(None::<String>);
     let workspace_error = RwSignal::new(None::<String>);
-    let export_error = RwSignal::new(None::<String>);
     let animation_error = RwSignal::new(None::<String>);
     let colors_error = RwSignal::new(None::<String>);
-    let png_width = RwSignal::new(800u32);
-    let png_height = RwSignal::new(800u32);
-    let anim_fps: RwSignal<u16> = RwSignal::new(30);
-    let anim_duration_secs: RwSignal<f32> = RwSignal::new(4.0);
-    let anim_progress: RwSignal<Option<(u32, u32)>> = RwSignal::new(None);
-    let anim_exporting: RwSignal<bool> = RwSignal::new(false);
-    let anim_num_frames =
-        Memo::new(move |_| (anim_duration_secs.get() * anim_fps.get() as f32).round() as u32);
     let gpu_error = RwSignal::new(None::<String>);
     let auto_rotate = RwSignal::new(true);
     let auto_rotate_speed = RwSignal::new(20.0f32);
@@ -101,16 +153,6 @@ pub(crate) fn App() -> impl IntoView {
         &editor_generation_config.get_untracked().rules,
         grammar_row_counter,
     ));
-
-    let save_format = RwSignal::new(SaveFormat::Png);
-    let effective_save_format = Memo::new(move |_| {
-        let fmt = save_format.get();
-        if is_3d.get() && fmt == SaveFormat::Svg {
-            SaveFormat::Png
-        } else {
-            fmt
-        }
-    });
 
     let sync_grammar_editor = move || {
         let generation = editor_generation_config.get_untracked();
@@ -406,6 +448,50 @@ pub(crate) fn App() -> impl IntoView {
         apply_hue_rotation(dir);
     };
 
+    provide_context(ConfigContext {
+        config_workspace,
+        toml_text,
+        selected_id,
+        selected_name,
+        display_options,
+        differs_from_default,
+        generation_config,
+        editor_color_config,
+        control_line_color,
+        color_memory,
+        unused_rule_symbols,
+        iterations,
+        max_iterations,
+        angle,
+        dimensions,
+        is_3d,
+        is_dirty,
+        grammar: GrammarDraft {
+            axiom: grammar_axiom,
+            rows: grammar_rows,
+            row_counter: grammar_row_counter,
+            is_dirty: grammar_is_dirty,
+            has_3d_symbols: grammar_has_3d_symbols,
+            symbols: grammar_symbols,
+            sync: Callback::new(move |()| sync_grammar_editor()),
+        },
+        grammar_error,
+        toml_error,
+        workspace_error,
+        colors_error,
+        select_current_config: Callback::new(move |()| select_current_config()),
+    });
+    provide_context(RenderContext {
+        renderer,
+        auto_rotate,
+        auto_rotate_speed,
+        hue_rotation,
+        hue_rotation_phase,
+        animation_error,
+        config_for_render: Callback::new(move |()| config_for_render()),
+        set_hue_rotation: Callback::new(try_set_hue_rotation),
+    });
+
     view! {
         <main
             class="app-shell"
@@ -442,84 +528,12 @@ pub(crate) fn App() -> impl IntoView {
                 </div>
 
                 <div class="controls-scroll">
-                <crate::panels::preset::PresetPanel
-                    config_workspace=config_workspace
-                    selected_id=selected_id
-                    selected_name=selected_name
-                    display_options=display_options
-                    differs_from_default=differs_from_default
-                    workspace_error=workspace_error
-                    toml_text=toml_text
-                    select_current_config=Callback::new(move |()| select_current_config())
-                />
-
-                <crate::panels::config_toml::ConfigTomlPanel
-                    config_workspace=config_workspace
-                    toml_text=toml_text
-                    toml_error=toml_error
-                    is_dirty=is_dirty
-                    grammar_is_dirty=grammar_is_dirty
-                    select_current_config=Callback::new(move |()| select_current_config())
-                />
-
-                <crate::panels::grammar::GrammarPanel
-                    config_workspace=config_workspace
-                    grammar_error=grammar_error
-                    generation_config=generation_config
-                    dimensions=dimensions
-                    is_dirty=is_dirty
-                    grammar_is_dirty=grammar_is_dirty
-                    grammar_has_3d_symbols=grammar_has_3d_symbols
-                    grammar_symbols=grammar_symbols
-                    unused_rule_symbols=unused_rule_symbols
-                    iterations=iterations
-                    max_iterations=max_iterations
-                    angle=angle
-                    grammar_axiom=grammar_axiom
-                    grammar_rows=grammar_rows
-                    grammar_row_counter=grammar_row_counter
-                    sync_grammar_editor=Callback::new(move |()| sync_grammar_editor())
-                />
-
-                <crate::panels::colors::ColorsPanel
-                    config_workspace=config_workspace
-                    colors_error=colors_error
-                    editor_color_config=editor_color_config
-                    control_line_color=control_line_color
-                    color_memory=color_memory
-                    is_dirty=is_dirty
-                />
-
-                <crate::panels::animations::AnimationsPanel
-                    is_3d=is_3d
-                    auto_rotate=auto_rotate
-                    auto_rotate_speed=auto_rotate_speed
-                    hue_rotation=hue_rotation
-                    control_line_color=control_line_color
-                    animation_error=animation_error
-                    set_hue_rotation=Callback::new(try_set_hue_rotation)
-                />
-
-                <crate::panels::save::SavePanel
-                    is_3d=is_3d
-                    save_format=save_format
-                    effective_save_format=effective_save_format
-                    png_width=png_width
-                    png_height=png_height
-                    anim_fps=anim_fps
-                    anim_duration_secs=anim_duration_secs
-                    anim_num_frames=anim_num_frames
-                    anim_progress=anim_progress
-                    anim_exporting=anim_exporting
-                    export_error=export_error
-                    auto_rotate=auto_rotate
-                    auto_rotate_speed=auto_rotate_speed
-                    hue_rotation=hue_rotation
-                    hue_rotation_phase=hue_rotation_phase
-                    renderer=renderer
-                    config_for_render=Callback::new(move |()| config_for_render())
-                />
-
+                <crate::panels::preset::PresetPanel />
+                <crate::panels::config_toml::ConfigTomlPanel />
+                <crate::panels::grammar::GrammarPanel />
+                <crate::panels::colors::ColorsPanel />
+                <crate::panels::animations::AnimationsPanel />
+                <crate::panels::save::SavePanel />
                 </div>
             </aside>
 

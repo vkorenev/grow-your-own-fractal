@@ -1,19 +1,23 @@
+use crate::app::ConfigContext;
 use crate::export::download_toml;
 use leptos::html::Input;
 use leptos::prelude::*;
-use lsystem_app_model::{ConfigEntryId, ConfigWorkspace};
+use lsystem_app_model::ConfigEntryId;
 
 #[component]
-pub(crate) fn PresetPanel(
-    config_workspace: RwSignal<ConfigWorkspace>,
-    selected_id: Memo<ConfigEntryId>,
-    selected_name: Memo<String>,
-    display_options: Memo<Vec<(ConfigEntryId, String)>>,
-    differs_from_default: Memo<bool>,
-    workspace_error: RwSignal<Option<String>>,
-    toml_text: Memo<String>,
-    select_current_config: Callback<()>,
-) -> impl IntoView {
+pub(crate) fn PresetPanel() -> impl IntoView {
+    let ConfigContext {
+        config_workspace,
+        selected_id,
+        selected_name,
+        display_options,
+        differs_from_default,
+        workspace_error,
+        toml_text,
+        select_current_config,
+        ..
+    } = expect_context();
+
     let rename_mode = RwSignal::new(false);
     let rename_draft = RwSignal::new(String::new());
     let file_input_ref = NodeRef::<Input>::new();
