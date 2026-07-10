@@ -1,5 +1,8 @@
 use leptos::prelude::*;
-use lsystem_app_model::{HueRotation, HueRotationDirection};
+use lsystem_app_model::{
+    HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
+    HueRotation, HueRotationDirection,
+};
 use lsystem_core::LineColorConfig;
 
 #[component]
@@ -28,13 +31,12 @@ pub(crate) fn AnimationsPanel(
                     <div class="spinner-row">
                         <span class="spinner-label">"Speed (°/s)"</span>
                         <crate::ui::Spinner
-                            value=Signal::derive(move || format!("{:.0}", auto_rotate_speed.get()))
+                            value=auto_rotate_speed
                             step=5.0
-                            on_commit=move |s| {
-                                if let Ok(v) = s.parse::<f32>() {
-                                    auto_rotate_speed.set(v.clamp(5.0, 360.0));
-                                }
-                            }
+                            min=5.0_f32
+                            max=360.0_f32
+                            decimals=0
+                            on_commit=move |v: f32| auto_rotate_speed.set(v)
                         />
                     </div>
                 </Show>
@@ -74,13 +76,12 @@ pub(crate) fn AnimationsPanel(
                     <div class="spinner-row">
                         <span class="spinner-label">"Speed (°/s)"</span>
                         <crate::ui::Spinner
-                            value=Signal::derive(move || hue_rotation.with(|m| format!("{:.0}", m.speed_degrees_per_second())))
+                            value=Signal::derive(move || hue_rotation.with(|m| m.speed_degrees_per_second()))
                             step=1.0
-                            on_commit=move |s| {
-                                if let Ok(v) = s.parse::<f32>() {
-                                    hue_rotation.update(|m| m.set_speed(v));
-                                }
-                            }
+                            min=HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND
+                            max=HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND
+                            decimals=0
+                            on_commit=move |v: f32| hue_rotation.update(|m| m.set_speed(v))
                         />
                     </div>
                 </Show>

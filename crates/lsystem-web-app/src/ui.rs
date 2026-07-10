@@ -36,17 +36,86 @@ pub fn Disclosure(
     }
 }
 
-/// Text input flanked by − and + buttons.
+/// Numeric value type usable in a [`Spinner`].
+pub trait SpinnerValue: Copy + PartialOrd + Send + Sync + 'static {
+    fn parse(text: &str) -> Option<Self>;
+    fn to_f64(self) -> f64;
+    /// Converts a ± stepping result back, rounding/saturating as appropriate.
+    fn from_f64(v: f64) -> Self;
+    /// Formats for display. `decimals` fixes the fraction width when set.
+    fn format(self, decimals: Option<u8>) -> String;
+    /// `inputmode` attribute value, so mobile browsers show a numeric keyboard.
+    fn input_mode() -> &'static str;
+}
+
+impl SpinnerValue for f32 {
+    fn parse(text: &str) -> Option<Self> {
+        text.trim().parse().ok().filter(|v: &f32| v.is_finite())
+    }
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(v: f64) -> Self {
+        v as f32
+    }
+
+    fn format(self, decimals: Option<u8>) -> String {
+        match decimals {
+            Some(d) => format!("{self:.0$}", usize::from(d)),
+            // No trailing zeros, at most 4 decimal places.
+            None => {
+                let s = format!("{self:.4}");
+                s.trim_end_matches('0').trim_end_matches('.').to_string()
+            }
+        }
+    }
+
+    fn input_mode() -> &'static str {
+        "decimal"
+    }
+}
+
+impl SpinnerValue for u32 {
+    fn parse(text: &str) -> Option<Self> {
+        text.trim().parse().ok()
+    }
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(v: f64) -> Self {
+        // `as` saturates at the type bounds, so stepping below 0 lands on 0.
+        v.round() as u32
+    }
+
+    fn format(self, _decimals: Option<u8>) -> String {
+        self.to_string()
+    }
+
+    fn input_mode() -> &'static str {
+        "numeric"
+    }
+}
+
+/// Numeric text input flanked by − and + buttons.
 ///
-/// `value` — reactive display string (controlled from outside).
-/// `on_commit` — called with the new string on Enter, ± click, or blur with a valid value.
-///   On blur with unparseable content the field resets to `value`.
-/// `step` — amount added/subtracted by ± buttons (parsed as f64 from `value`).
+/// `value` — the authoritative value (controlled from outside).
+/// `on_commit` — called with the parsed, clamped value on Enter, ± click, or blur
+///   with valid content. Unparseable content resets the field to `value`.
+/// `step` — amount added/subtracted by the ± buttons.
+/// `min`/`max` — optional bounds; commits are clamped into them.
+/// `decimals` — fixed fraction width for display (floats only).
 #[component]
-pub fn Spinner(
-    value: Signal<String>,
-    on_commit: impl Fn(String) + 'static + Clone,
+pub fn Spinner<T: SpinnerValue>(
+    #[prop(into)] value: Signal<T>,
+    on_commit: impl Fn(T) + 'static + Clone,
     #[prop(default = 1.0_f64)] step: f64,
+    #[prop(into, optional)] min: MaybeProp<T>,
+    #[prop(into, optional)] max: MaybeProp<T>,
+    #[prop(optional)] decimals: Option<u8>,
     #[prop(into, default = Signal::stored(false))] disabled: Signal<bool>,
 ) -> impl IntoView {
     let editing = RwSignal::new(false);
@@ -56,37 +125,44 @@ pub fn Spinner(
         if editing.get() {
             draft.get()
         } else {
-            value.get()
+            value.get().format(decimals)
         }
     };
-    let current_text = move || {
+    let current = move || {
         if editing.get_untracked() {
-            draft.get_untracked()
+            T::parse(&draft.get_untracked())
         } else {
-            value.get_untracked()
+            Some(value.get_untracked())
         }
     };
 
+    let commit = move |v: T| {
+        let v = match min.get_untracked() {
+            Some(lo) if v < lo => lo,
+            _ => v,
+        };
+        let v = match max.get_untracked() {
+            Some(hi) if v > hi => hi,
+            _ => v,
+        };
+        on_commit(v);
+    };
+
+    let step_by = {
+        let commit = commit.clone();
+        move |direction: f64| {
+            if let Some(v) = current() {
+                commit(T::from_f64(v.to_f64() + direction * step));
+            }
+        }
+    };
     let step_down = {
-        let on_commit = on_commit.clone();
-        move |_: web_sys::MouseEvent| {
-            if let Ok(n) = current_text().parse::<f64>() {
-                on_commit(format_step(n - step));
-            }
-        }
+        let step_by = step_by.clone();
+        move |_: web_sys::MouseEvent| step_by(-1.0)
     };
-
-    let step_up = {
-        let on_commit = on_commit.clone();
-        move |_: web_sys::MouseEvent| {
-            if let Ok(n) = current_text().parse::<f64>() {
-                on_commit(format_step(n + step));
-            }
-        }
-    };
-
-    let on_commit_enter = on_commit.clone();
-    let on_commit_blur = on_commit.clone();
+    let step_up = move |_: web_sys::MouseEvent| step_by(1.0);
+    let commit_enter = commit.clone();
+    let commit_blur = commit;
 
     view! {
         <div class="spinner">
@@ -98,11 +174,12 @@ pub fn Spinner(
             >"−"</button>
             <input
                 type="text"
+                inputmode=T::input_mode()
                 class="spinner-input"
                 prop:value=shown
                 disabled=move || disabled.get()
                 on:focus=move |_| {
-                    draft.set(value.get_untracked());
+                    draft.set(value.get_untracked().format(decimals));
                     editing.set(true);
                 }
                 on:input:target=move |ev| {
@@ -111,17 +188,19 @@ pub fn Spinner(
                 }
                 on:keydown=move |ev: web_sys::KeyboardEvent| {
                     if ev.key() == "Enter" {
-                        on_commit_enter(draft.get_untracked());
+                        if let Some(v) = T::parse(&draft.get_untracked()) {
+                            commit_enter(v);
+                        }
                         // Refresh the draft from the committed (clamped/formatted) value so
-                        // continued typing starts from what is displayed.
-                        draft.set(value.get_untracked());
+                        // continued typing starts from what is displayed; unparseable
+                        // content is discarded the same way.
+                        draft.set(value.get_untracked().format(decimals));
                     }
                 }
                 on:blur=move |_| {
-                    let text = draft.get_untracked();
                     editing.set(false);
-                    if text.parse::<f64>().is_ok() {
-                        on_commit_blur(text);
+                    if let Some(v) = T::parse(&draft.get_untracked()) {
+                        commit_blur(v);
                     }
                 }
             />
@@ -133,12 +212,6 @@ pub fn Spinner(
             >"+"</button>
         </div>
     }
-}
-
-/// Format a float for spinner display: no trailing zeros, at most 4 decimal places.
-fn format_step(n: f64) -> String {
-    let s = format!("{n:.4}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// Segmented toggle (pill group). `options` is `(key, label)` pairs.

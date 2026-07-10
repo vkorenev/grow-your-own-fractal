@@ -276,17 +276,17 @@ pub(crate) fn GrammarPanel(
             <div class="spinner-row" title=dirty_tooltip>
                 <span class="spinner-label">"Angle (°)"</span>
                 <crate::ui::Spinner
-                    value=Signal::derive(move || format!("{:.1}", angle.get()))
+                    value=angle
                     step=0.5
+                    min=1.0_f32
+                    max=180.0_f32
+                    decimals=1
                     disabled=is_dirty
-                    on_commit=move |s| {
-                        if let Ok(v) = s.parse::<f32>() {
-                            let v = v.clamp(1.0, 180.0);
-                            update_clean_config(
-                                config_workspace, grammar_error,"angle",
-                                move |clean| clean.set_angle(v),
-                            );
-                        }
+                    on_commit=move |v: f32| {
+                        update_clean_config(
+                            config_workspace, grammar_error,"angle",
+                            move |clean| clean.set_angle(v),
+                        );
                     }
                 />
             </div>
@@ -294,19 +294,15 @@ pub(crate) fn GrammarPanel(
             <div class="spinner-row" title=dirty_tooltip>
                 <span class="spinner-label">"Initial heading (°)"</span>
                 <crate::ui::Spinner
-                    value=Signal::derive(move || format!(
-                        "{:.1}",
-                        generation_config.with(|g| g.initial_heading)
-                    ))
+                    value=Signal::derive(move || generation_config.with(|g| g.initial_heading))
                     step=1.0
+                    decimals=1
                     disabled=is_dirty
-                    on_commit=move |s| {
-                        if let Ok(v) = s.parse::<f32>() {
-                            update_clean_config(
-                                config_workspace, grammar_error,"initial_heading",
-                                move |clean| clean.set_initial_heading(v),
-                            );
-                        }
+                    on_commit=move |v: f32| {
+                        update_clean_config(
+                            config_workspace, grammar_error,"initial_heading",
+                            move |clean| clean.set_initial_heading(v),
+                        );
                     }
                 />
             </div>
@@ -314,17 +310,15 @@ pub(crate) fn GrammarPanel(
             <div class="spinner-row" title=dirty_tooltip>
                 <span class="spinner-label">"Iterations"</span>
                 <crate::ui::Spinner
-                    value=Signal::derive(move || iterations.get().to_string())
+                    value=iterations
                     step=1.0
+                    max=max_iterations
                     disabled=is_dirty
-                    on_commit=move |s| {
-                        if let Ok(v) = s.parse::<u32>() {
-                            let v = v.clamp(0, max_iterations.get_untracked());
-                            update_clean_config(
-                                config_workspace, grammar_error,"iterations",
-                                move |clean| clean.set_iterations(v),
-                            );
-                        }
+                    on_commit=move |v: u32| {
+                        update_clean_config(
+                            config_workspace, grammar_error,"iterations",
+                            move |clean| clean.set_iterations(v),
+                        );
                     }
                 />
             </div>
