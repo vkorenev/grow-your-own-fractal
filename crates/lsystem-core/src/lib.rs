@@ -4,6 +4,7 @@ pub mod svg_export;
 pub(crate) mod alphabet;
 pub mod config;
 pub mod grammar;
+pub mod template;
 #[cfg(test)]
 pub(crate) mod test_util;
 pub(crate) mod turtle;
@@ -14,6 +15,10 @@ pub use config::{
     LineColorConfig, Rgb, RgbError,
 };
 pub use grammar::{CompiledGrammar, max_safe_iterations, unused_rules};
+pub use template::{
+    DEFAULT_TEMPLATE_SEGMENT_BUDGET, Stamp2D, Stamp3D, StampStats, Template2D, Template3D,
+    TemplateSegment2D, TemplateSegment3D, TemplateSet2D, TemplateSet3D, choose_template_iterations,
+};
 
 use glam::{Vec2, Vec3};
 

@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use web_time::{Duration, Instant};
 
-use lsystem_core::{Config, Dimensions, compile_generation};
+use lsystem_core::{
+    Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, Dimensions, TemplateSet2D, TemplateSet3D,
+    compile_generation,
+};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
@@ -13,6 +16,8 @@ use lsystem_renderer::line_renderer::{
 use lsystem_renderer::lsystem_bridge::{
     SegmentData, SegmentData3D, color_params_from_config, geometry_to_depth_segments,
     geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
+    stamped_geometry_to_depth_segments, stamped_geometry_to_depth_segments_3d,
+    stamped_geometry_to_segments, stamped_geometry_to_segments_3d,
 };
 
 enum ActiveScene {
@@ -145,12 +150,24 @@ impl CanvasRenderer {
     fn rebuild_scene(&mut self, config: &Config) {
         let started = Instant::now();
         let (grammar, params) = compile_generation(&config.generation);
+        let mut stamped_iterations = 0;
         match config.generation.dimensions {
             Dimensions::ThreeD => {
+                let set = TemplateSet3D::build_within_budget(
+                    grammar,
+                    params,
+                    DEFAULT_TEMPLATE_SEGMENT_BUDGET,
+                );
+                if let Ok(set) = &set {
+                    stamped_iterations = set.template_iterations();
+                }
                 if config.generation.has_stack_directives() {
-                    let data = geometry_to_depth_segments_3d(
-                        lsystem_core::generate_3d_with_topological_depth(&grammar, &params),
-                    );
+                    let data = match &set {
+                        Ok(set) => stamped_geometry_to_depth_segments_3d(set),
+                        Err(grammar) => geometry_to_depth_segments_3d(
+                            lsystem_core::generate_3d_with_topological_depth(grammar, &params),
+                        ),
+                    };
                     let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::ThreeDWithTopologicalDepth {
                         segments: data.segments,
@@ -163,7 +180,12 @@ impl CanvasRenderer {
                         segments,
                         bounds_min,
                         bounds_max,
-                    } = geometry_to_segments_3d(lsystem_core::generate_3d(&grammar, &params));
+                    } = match &set {
+                        Ok(set) => stamped_geometry_to_segments_3d(set),
+                        Err(grammar) => {
+                            geometry_to_segments_3d(lsystem_core::generate_3d(grammar, &params))
+                        }
+                    };
                     self.scene = ActiveScene::ThreeD {
                         segments,
                         bounds_min,
@@ -172,10 +194,21 @@ impl CanvasRenderer {
                 }
             }
             Dimensions::TwoD => {
+                let set = TemplateSet2D::build_within_budget(
+                    grammar,
+                    params,
+                    DEFAULT_TEMPLATE_SEGMENT_BUDGET,
+                );
+                if let Ok(set) = &set {
+                    stamped_iterations = set.template_iterations();
+                }
                 if config.generation.has_stack_directives() {
-                    let data = geometry_to_depth_segments(
-                        lsystem_core::generate_with_topological_depth(&grammar, &params),
-                    );
+                    let data = match &set {
+                        Ok(set) => stamped_geometry_to_depth_segments(set),
+                        Err(grammar) => geometry_to_depth_segments(
+                            lsystem_core::generate_with_topological_depth(grammar, &params),
+                        ),
+                    };
                     let max_topological_depth = data.max_topological_depth();
                     self.scene = ActiveScene::TwoDWithTopologicalDepth {
                         segments: data.segments,
@@ -188,7 +221,12 @@ impl CanvasRenderer {
                         segments,
                         bounds_min,
                         bounds_max,
-                    } = geometry_to_segments(lsystem_core::generate(&grammar, &params));
+                    } = match &set {
+                        Ok(set) => stamped_geometry_to_segments(set),
+                        Err(grammar) => {
+                            geometry_to_segments(lsystem_core::generate(grammar, &params))
+                        }
+                    };
                     self.scene = ActiveScene::TwoD {
                         segments,
                         bounds_min,
@@ -200,9 +238,10 @@ impl CanvasRenderer {
 
         let elapsed = started.elapsed();
         log::info!(
-            "generation_wall_ms={:.2} segments={}",
+            "generation_wall_ms={:.2} segments={} template_iterations={}",
             elapsed.as_secs_f64() * 1000.0,
             self.scene.total_segments(),
+            stamped_iterations,
         );
 
         let colors = config.colors;

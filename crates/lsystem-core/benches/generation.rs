@@ -3,8 +3,9 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use lsystem_core::{
-    Dimensions, GenerationConfig, compile_generation, generate, generate_3d,
-    generate_3d_with_topological_depth, generate_with_topological_depth,
+    CompiledGrammar, Dimensions, GenerationConfig, GenerationParams, TemplateSet2D, TemplateSet3D,
+    compile_generation, generate, generate_3d, generate_3d_with_topological_depth,
+    generate_with_topological_depth,
 };
 
 fn checksum_2d(config: &GenerationConfig) -> f32 {
@@ -33,6 +34,89 @@ fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
     })
 }
 
+/// Stamped counterparts include template building and the placement walk, so
+/// they measure the full alternative pipeline, matching the interpreter
+/// checksums segment for segment (modulo f32 rounding).
+fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u32) -> f32 {
+    let set = TemplateSet2D::build(
+        CompiledGrammar::compile(config),
+        GenerationParams::from(config),
+        template_iterations,
+    )
+    .expect("template set builds");
+    let mut acc = 0.0f32;
+    set.emit_stamps(|stamp, template| {
+        for segment in &template.segments {
+            let a = stamp.pos + stamp.rot.rotate(segment.start);
+            let b = stamp.pos + stamp.rot.rotate(segment.end);
+            acc += a.x + a.y + b.x + b.y;
+        }
+    });
+    acc
+}
+
+fn checksum_2d_stamped_with_topological_depth(
+    config: &GenerationConfig,
+    template_iterations: u32,
+) -> f32 {
+    let set = TemplateSet2D::build(
+        CompiledGrammar::compile(config),
+        GenerationParams::from(config),
+        template_iterations,
+    )
+    .expect("template set builds");
+    let mut acc = 0.0f32;
+    set.emit_stamps(|stamp, template| {
+        for segment in &template.segments {
+            let a = stamp.pos + stamp.rot.rotate(segment.start);
+            let b = stamp.pos + stamp.rot.rotate(segment.end);
+            let depth = stamp.depth_base.saturating_add(segment.depth_offset);
+            acc += a.x + a.y + b.x + b.y + depth as f32;
+        }
+    });
+    acc
+}
+
+fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u32) -> f32 {
+    let set = TemplateSet3D::build(
+        CompiledGrammar::compile(config),
+        GenerationParams::from(config),
+        template_iterations,
+    )
+    .expect("template set builds");
+    let mut acc = 0.0f32;
+    set.emit_stamps(|stamp, template| {
+        for segment in &template.segments {
+            let a = stamp.pos + stamp.rot * segment.start;
+            let b = stamp.pos + stamp.rot * segment.end;
+            acc += a.x + a.y + a.z + b.x + b.y + b.z;
+        }
+    });
+    acc
+}
+
+fn checksum_3d_stamped_with_topological_depth(
+    config: &GenerationConfig,
+    template_iterations: u32,
+) -> f32 {
+    let set = TemplateSet3D::build(
+        CompiledGrammar::compile(config),
+        GenerationParams::from(config),
+        template_iterations,
+    )
+    .expect("template set builds");
+    let mut acc = 0.0f32;
+    set.emit_stamps(|stamp, template| {
+        for segment in &template.segments {
+            let a = stamp.pos + stamp.rot * segment.start;
+            let b = stamp.pos + stamp.rot * segment.end;
+            let depth = stamp.depth_base.saturating_add(segment.depth_offset);
+            acc += a.x + a.y + a.z + b.x + b.y + b.z + depth as f32;
+        }
+    });
+    acc
+}
+
 /// Benchmarks segment generation cost, not parsing or rendering.
 ///
 /// Each case emphasizes a different turtle path so optimization wins and
@@ -56,6 +140,9 @@ fn bench_generation(c: &mut Criterion) {
         group.bench_function("dragon", |b| {
             b.iter(|| black_box(checksum_2d(black_box(&config))));
         });
+        group.bench_function("dragon_stamped", |b| {
+            b.iter(|| black_box(checksum_2d_stamped(black_box(&config), 10)));
+        });
 
         // Plant-style 2D branching covers non-right-angle turns, stack traffic,
         // ignored symbols, and topological depth metadata that affect emitted segments.
@@ -75,6 +162,14 @@ fn bench_generation(c: &mut Criterion) {
         group.bench_function("plant_a", |b| {
             b.iter(|| black_box(checksum_2d_with_topological_depth(black_box(&config))));
         });
+        group.bench_function("plant_a_stamped", |b| {
+            b.iter(|| {
+                black_box(checksum_2d_stamped_with_topological_depth(
+                    black_box(&config),
+                    4,
+                ))
+            });
+        });
 
         // Synthetic forward-heavy 2D isolates F/f movement so regressions in
         // the most direct segment-emission path are not hidden by rotations.
@@ -90,6 +185,9 @@ fn bench_generation(c: &mut Criterion) {
         .expect("balanced config");
         group.bench_function("synthetic_2d_forward_heavy", |b| {
             b.iter(|| black_box(checksum_2d(black_box(&config))));
+        });
+        group.bench_function("synthetic_2d_forward_heavy_stamped", |b| {
+            b.iter(|| black_box(checksum_2d_stamped(black_box(&config), 4)));
         });
 
         group.finish();
@@ -117,6 +215,9 @@ fn bench_generation(c: &mut Criterion) {
         group.bench_function("branching_rotation_heavy", |b| {
             b.iter(|| black_box(checksum_3d(black_box(&config))));
         });
+        group.bench_function("branching_rotation_heavy_stamped", |b| {
+            b.iter(|| black_box(checksum_3d_stamped(black_box(&config), 5)));
+        });
 
         // Bracketless 3D Hilbert covers all rotation axes at 90 degrees, so
         // all-axis orientation cost is visible without stack traffic.
@@ -132,6 +233,9 @@ fn bench_generation(c: &mut Criterion) {
         .expect("balanced config");
         group.bench_function("hilbert_3d", |b| {
             b.iter(|| black_box(checksum_3d(black_box(&config))));
+        });
+        group.bench_function("hilbert_3d_stamped", |b| {
+            b.iter(|| black_box(checksum_3d_stamped(black_box(&config), 3)));
         });
 
         // Roll-heavy 3D tree exercises stack and topological depth-aware segment output;
@@ -152,6 +256,14 @@ fn bench_generation(c: &mut Criterion) {
         group.bench_function("tree_roll_heavy", |b| {
             b.iter(|| black_box(checksum_3d_with_topological_depth(black_box(&config))));
         });
+        group.bench_function("tree_roll_heavy_stamped", |b| {
+            b.iter(|| {
+                black_box(checksum_3d_stamped_with_topological_depth(
+                    black_box(&config),
+                    4,
+                ))
+            });
+        });
 
         // Synthetic forward-heavy 3D isolates F/f movement so the direct 3D
         // segment-emission path has a baseline without rotation or stack noise.
@@ -167,6 +279,9 @@ fn bench_generation(c: &mut Criterion) {
         .expect("balanced config");
         group.bench_function("synthetic_3d_forward_heavy", |b| {
             b.iter(|| black_box(checksum_3d(black_box(&config))));
+        });
+        group.bench_function("synthetic_3d_forward_heavy_stamped", |b| {
+            b.iter(|| black_box(checksum_3d_stamped(black_box(&config), 4)));
         });
 
         group.finish();

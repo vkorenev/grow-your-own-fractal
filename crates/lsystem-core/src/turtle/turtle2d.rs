@@ -12,19 +12,58 @@ pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = u8>> {
 }
 
 /// Turtle state plus the single symbol transition shared by `next` and `fold`,
-/// so the two iteration paths cannot drift apart.
-struct TurtleState2D {
+/// so the two iteration paths cannot drift apart. Template building drives it
+/// directly to capture the exit state after a rule expansion.
+pub(crate) struct TurtleState2D {
     rot_plus: Vec2,
     rot_minus: Vec2,
-    delta: Vec2,
-    position: Vec2,
-    topological_depth: u32,
-    stack: Vec<(Vec2, Vec2, u32)>,
+    inv_step: f32,
+    pub(crate) delta: Vec2,
+    pub(crate) position: Vec2,
+    pub(crate) topological_depth: u32,
+    pub(crate) stack: Vec<(Vec2, Vec2, u32)>,
 }
 
 impl TurtleState2D {
+    pub(crate) fn new(angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        let angle_rad = angle_deg.to_radians();
+        Self {
+            rot_plus: Vec2::from_angle(angle_rad),
+            rot_minus: Vec2::from_angle(-angle_rad),
+            inv_step: step.recip(),
+            delta: Vec2::from_angle(initial_heading_deg.to_radians()) * step,
+            position: Vec2::ZERO,
+            topological_depth: 0,
+            stack: Vec::new(),
+        }
+    }
+
+    /// Heading as a rotation (unit complex), relying on `delta` keeping its
+    /// initial `step` length (rotations preserve it up to f32 rounding, the
+    /// same drift the interpreter accumulates). Falls back to +X when the
+    /// heading is degenerate (`step == 0` or non-finite).
+    pub(crate) fn heading(&self) -> Vec2 {
+        let heading = self.delta * self.inv_step;
+        if heading.is_finite() {
+            heading
+        } else {
+            Vec2::X
+        }
+    }
+
+    /// Exactly normalized [`Self::heading`], for one-time captures whose
+    /// result is reused many times (template exit rotations).
+    pub(crate) fn normalized_heading(&self) -> Vec2 {
+        (self.delta * self.inv_step).normalize_or(Vec2::X)
+    }
+
+    /// Composes a rotation into the heading, preserving `delta`'s length.
+    pub(crate) fn compose_heading(&mut self, rot: Vec2) {
+        self.delta = self.delta.rotate(rot);
+    }
+
     #[inline]
-    fn apply(&mut self, symbol: u8) -> Option<Segment2DWithTopologicalDepth> {
+    pub(crate) fn apply(&mut self, symbol: u8) -> Option<Segment2DWithTopologicalDepth> {
         match symbol {
             b'F' => {
                 let next = self.position + self.delta;
@@ -74,17 +113,9 @@ impl TurtleState2D {
 
 impl<I: Iterator<Item = u8>> Segments2DWithTopologicalDepth<I> {
     pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
-        let angle_rad = angle_deg.to_radians();
         Self {
             symbols,
-            state: TurtleState2D {
-                rot_plus: Vec2::from_angle(angle_rad),
-                rot_minus: Vec2::from_angle(-angle_rad),
-                delta: Vec2::from_angle(initial_heading_deg.to_radians()) * step,
-                position: Vec2::ZERO,
-                topological_depth: 0,
-                stack: Vec::new(),
-            },
+            state: TurtleState2D::new(angle_deg, step, initial_heading_deg),
         }
     }
 }
