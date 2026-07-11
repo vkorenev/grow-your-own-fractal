@@ -13,8 +13,9 @@ pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = u8>> {
 }
 
 /// Turtle state plus the single symbol transition shared by `next` and `fold`,
-/// so the two iteration paths cannot drift apart.
-struct TurtleState3D {
+/// so the two iteration paths cannot drift apart. Template building drives it
+/// directly to capture the exit state after a rule expansion.
+pub(crate) struct TurtleState3D {
     rot_yaw_plus: Quat,
     rot_yaw_minus: Quat,
     rot_pitch_down: Quat,
@@ -23,15 +24,49 @@ struct TurtleState3D {
     rot_roll_left: Quat,
     rot_uturn: Quat,
     step: f32,
-    position: Vec3,
-    orientation: Quat,
-    topological_depth: u32,
-    stack: Vec<(Vec3, Quat, u32)>,
+    pub(crate) position: Vec3,
+    pub(crate) orientation: Quat,
+    pub(crate) topological_depth: u32,
+    pub(crate) stack: Vec<(Vec3, Quat, u32)>,
 }
 
 impl TurtleState3D {
+    pub(crate) fn new(angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        let angle_rad = angle_deg.to_radians();
+        Self {
+            rot_yaw_plus: Quat::from_rotation_z(angle_rad),
+            rot_yaw_minus: Quat::from_rotation_z(-angle_rad),
+            rot_pitch_down: Quat::from_rotation_y(angle_rad),
+            rot_pitch_up: Quat::from_rotation_y(-angle_rad),
+            rot_roll_right: Quat::from_rotation_x(angle_rad),
+            rot_roll_left: Quat::from_rotation_x(-angle_rad),
+            rot_uturn: Quat::from_rotation_z(std::f32::consts::PI),
+            step,
+            position: Vec3::ZERO,
+            orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
+            topological_depth: 0,
+            stack: Vec::new(),
+        }
+    }
+
+    /// Heading as a rotation; the 3D analog of `TurtleState2D::heading`.
+    pub(crate) fn heading(&self) -> Quat {
+        self.orientation
+    }
+
+    /// Exactly normalized [`Self::heading`], for one-time captures whose
+    /// result is reused many times (template exit rotations).
+    pub(crate) fn normalized_heading(&self) -> Quat {
+        self.orientation.normalize()
+    }
+
+    /// Composes a rotation into the heading.
+    pub(crate) fn compose_heading(&mut self, rot: Quat) {
+        self.orientation *= rot;
+    }
+
     #[inline]
-    fn apply(&mut self, symbol: u8) -> Option<Segment3DWithTopologicalDepth> {
+    pub(crate) fn apply(&mut self, symbol: u8) -> Option<Segment3DWithTopologicalDepth> {
         match symbol {
             b'F' => {
                 let forward = self.orientation * Vec3::X;
@@ -99,23 +134,9 @@ impl TurtleState3D {
 
 impl<I: Iterator<Item = u8>> Segments3DWithTopologicalDepth<I> {
     pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
-        let angle_rad = angle_deg.to_radians();
         Self {
             symbols,
-            state: TurtleState3D {
-                rot_yaw_plus: Quat::from_rotation_z(angle_rad),
-                rot_yaw_minus: Quat::from_rotation_z(-angle_rad),
-                rot_pitch_down: Quat::from_rotation_y(angle_rad),
-                rot_pitch_up: Quat::from_rotation_y(-angle_rad),
-                rot_roll_right: Quat::from_rotation_x(angle_rad),
-                rot_roll_left: Quat::from_rotation_x(-angle_rad),
-                rot_uturn: Quat::from_rotation_z(std::f32::consts::PI),
-                step,
-                position: Vec3::ZERO,
-                orientation: Quat::from_rotation_z(initial_heading_deg.to_radians()),
-                topological_depth: 0,
-                stack: Vec::new(),
-            },
+            state: TurtleState3D::new(angle_deg, step, initial_heading_deg),
         }
     }
 }

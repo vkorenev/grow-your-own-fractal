@@ -1,10 +1,203 @@
 use glam::{Vec2, Vec3, Vec4};
-use lsystem_core::{LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth};
+use lsystem_core::{
+    LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth, Stamp2D,
+    Stamp3D, StampStats, TemplateSet2D, TemplateSet3D,
+};
 
 use crate::line_renderer::{
     ColorParams, Segment2D, Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D,
     Transform,
 };
+
+/// Axis-aligned bounds accumulator over 2D segment endpoints.
+struct Bounds2D {
+    min: Vec2,
+    max: Vec2,
+}
+
+impl Bounds2D {
+    fn new() -> Self {
+        Self {
+            min: Vec2::INFINITY,
+            max: Vec2::NEG_INFINITY,
+        }
+    }
+
+    fn update(&mut self, a: Vec2, b: Vec2) {
+        self.min = self.min.min(a).min(b);
+        self.max = self.max.max(a).max(b);
+    }
+
+    /// Falls back to the unit box when no endpoints were seen, so empty
+    /// geometry still yields a usable viewport.
+    fn finish(self) -> ([f32; 2], [f32; 2]) {
+        if self.min.x.is_infinite() {
+            ([-1.0, -1.0], [1.0, 1.0])
+        } else {
+            (self.min.to_array(), self.max.to_array())
+        }
+    }
+}
+
+/// Axis-aligned bounds accumulator over 3D segment endpoints.
+struct Bounds3D {
+    min: Vec3,
+    max: Vec3,
+}
+
+impl Bounds3D {
+    fn new() -> Self {
+        Self {
+            min: Vec3::INFINITY,
+            max: Vec3::NEG_INFINITY,
+        }
+    }
+
+    fn update(&mut self, a: Vec3, b: Vec3) {
+        self.min = self.min.min(a).min(b);
+        self.max = self.max.max(a).max(b);
+    }
+
+    /// Falls back to the unit box when no endpoints were seen, so empty
+    /// geometry still yields a usable viewport.
+    fn finish(self) -> ([f32; 3], [f32; 3]) {
+        if self.min.x.is_infinite() {
+            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
+        } else {
+            (self.min.to_array(), self.max.to_array())
+        }
+    }
+}
+
+/// Two-phase view of a stamped scene.
+///
+/// Phase 1 ([`Self::collect`]) walks the boundary expansion once and keeps
+/// only the stamps, so the exact segment total and maximum topological depth
+/// are known before any geometry is materialized. Phase 2
+/// ([`Self::segments`] / [`Self::depth_segments`]) streams transformed
+/// records in traversal order — the order the gradient shaders index by —
+/// yielding exactly [`Self::total_segments`] items, which lets callers size a
+/// GPU buffer up front and fill it in a single pass.
+pub struct StampedScene2D<'a> {
+    set: &'a TemplateSet2D,
+    stamps: Vec<Stamp2D>,
+    stats: StampStats,
+}
+
+impl<'a> StampedScene2D<'a> {
+    pub fn collect(set: &'a TemplateSet2D) -> Self {
+        let mut stamps = Vec::new();
+        let mut running: u64 = 0;
+        let stats = set.emit_stamps(|stamp, template| {
+            debug_assert_eq!(
+                u64::from(stamp.order_base),
+                running,
+                "stamps must stream in traversal order"
+            );
+            running += template.segments.len() as u64;
+            stamps.push(stamp);
+        });
+        Self { set, stamps, stats }
+    }
+
+    pub fn total_segments(&self) -> u64 {
+        self.stats.total_segments
+    }
+
+    pub fn max_topological_depth(&self) -> u32 {
+        self.stats.max_depth
+    }
+
+    /// World-space segments in traversal order.
+    pub fn segments(&self) -> impl Iterator<Item = Segment2D> + '_ {
+        let templates = self.set.templates();
+        self.stamps.iter().flat_map(move |stamp| {
+            templates[stamp.template as usize]
+                .segments
+                .iter()
+                .map(move |segment| Segment2D {
+                    start: stamp.pos + stamp.rot.rotate(segment.start),
+                    end: stamp.pos + stamp.rot.rotate(segment.end),
+                })
+        })
+    }
+
+    /// World-space segments with topological depth, in traversal order.
+    pub fn depth_segments(&self) -> impl Iterator<Item = TopologicalDepthSegment2D> + '_ {
+        let templates = self.set.templates();
+        self.stamps.iter().flat_map(move |stamp| {
+            templates[stamp.template as usize]
+                .segments
+                .iter()
+                .map(move |segment| TopologicalDepthSegment2D {
+                    start: stamp.pos + stamp.rot.rotate(segment.start),
+                    end: stamp.pos + stamp.rot.rotate(segment.end),
+                    topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
+                })
+        })
+    }
+}
+
+/// Two-phase view of a stamped scene; see [`StampedScene2D`].
+pub struct StampedScene3D<'a> {
+    set: &'a TemplateSet3D,
+    stamps: Vec<Stamp3D>,
+    stats: StampStats,
+}
+
+impl<'a> StampedScene3D<'a> {
+    pub fn collect(set: &'a TemplateSet3D) -> Self {
+        let mut stamps = Vec::new();
+        let mut running: u64 = 0;
+        let stats = set.emit_stamps(|stamp, template| {
+            debug_assert_eq!(
+                u64::from(stamp.order_base),
+                running,
+                "stamps must stream in traversal order"
+            );
+            running += template.segments.len() as u64;
+            stamps.push(stamp);
+        });
+        Self { set, stamps, stats }
+    }
+
+    pub fn total_segments(&self) -> u64 {
+        self.stats.total_segments
+    }
+
+    pub fn max_topological_depth(&self) -> u32 {
+        self.stats.max_depth
+    }
+
+    /// World-space segments in traversal order.
+    pub fn segments(&self) -> impl Iterator<Item = Segment3D> + '_ {
+        let templates = self.set.templates();
+        self.stamps.iter().flat_map(move |stamp| {
+            templates[stamp.template as usize]
+                .segments
+                .iter()
+                .map(move |segment| Segment3D {
+                    start: stamp.pos + stamp.rot * segment.start,
+                    end: stamp.pos + stamp.rot * segment.end,
+                })
+        })
+    }
+
+    /// World-space segments with topological depth, in traversal order.
+    pub fn depth_segments(&self) -> impl Iterator<Item = TopologicalDepthSegment3D> + '_ {
+        let templates = self.set.templates();
+        self.stamps.iter().flat_map(move |stamp| {
+            templates[stamp.template as usize]
+                .segments
+                .iter()
+                .map(move |segment| TopologicalDepthSegment3D {
+                    start: stamp.pos + stamp.rot * segment.start,
+                    end: stamp.pos + stamp.rot * segment.end,
+                    topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
+                })
+        })
+    }
+}
 
 pub struct SegmentData {
     pub segments: Vec<Segment2D>,
@@ -13,39 +206,25 @@ pub struct SegmentData {
 }
 
 pub struct SegmentDataBuilder {
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
+    bounds: Bounds2D,
     segments: Vec<Segment2D>,
 }
 
 impl SegmentDataBuilder {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
+            bounds: Bounds2D::new(),
             segments: Vec::new(),
         }
     }
 
     pub fn push_segment(&mut self, [a, b]: [Vec2; 2]) {
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
+        self.bounds.update(a, b);
         self.segments.push(Segment2D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0], [1.0, 1.0])
-        } else {
-            ([self.min_x, self.min_y], [self.max_x, self.max_y])
-        };
-
+        let (bounds_min, bounds_max) = self.bounds.finish();
         SegmentData {
             segments: self.segments,
             bounds_min,
@@ -66,6 +245,24 @@ pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> Segmen
     builder.finish()
 }
 
+/// CPU-stamped alternative to [`geometry_to_segments`]: transforms each
+/// stamp's template segments into world space in a tight per-segment loop,
+/// skipping per-symbol interpretation of the template-depth iterations.
+pub fn stamped_geometry_to_segments(set: &TemplateSet2D) -> SegmentData {
+    let scene = StampedScene2D::collect(set);
+    let mut bounds = Bounds2D::new();
+    let segments = scene
+        .segments()
+        .inspect(|segment| bounds.update(segment.start, segment.end))
+        .collect();
+    let (bounds_min, bounds_max) = bounds.finish();
+    SegmentData {
+        segments,
+        bounds_min,
+        bounds_max,
+    }
+}
+
 pub struct TopologicalDepthSegmentData {
     pub segments: Vec<TopologicalDepthSegment2D>,
     pub bounds_min: [f32; 2],
@@ -80,10 +277,7 @@ impl TopologicalDepthSegmentData {
 }
 
 pub struct TopologicalDepthSegmentDataBuilder {
-    min_x: f32,
-    min_y: f32,
-    max_x: f32,
-    max_y: f32,
+    bounds: Bounds2D,
     max_topological_depth: u32,
     segments: Vec<TopologicalDepthSegment2D>,
 }
@@ -91,10 +285,7 @@ pub struct TopologicalDepthSegmentDataBuilder {
 impl TopologicalDepthSegmentDataBuilder {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
+            bounds: Bounds2D::new(),
             max_topological_depth: 0,
             segments: Vec::new(),
         }
@@ -102,10 +293,7 @@ impl TopologicalDepthSegmentDataBuilder {
 
     pub fn push_segment(&mut self, segment: Segment2DWithTopologicalDepth) {
         let [a, b] = segment.points;
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
+        self.bounds.update(a, b);
         self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
         self.segments.push(TopologicalDepthSegment2D {
             start: a,
@@ -115,12 +303,7 @@ impl TopologicalDepthSegmentDataBuilder {
     }
 
     pub fn finish(self) -> TopologicalDepthSegmentData {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0], [1.0, 1.0])
-        } else {
-            ([self.min_x, self.min_y], [self.max_x, self.max_y])
-        };
-
+        let (bounds_min, bounds_max) = self.bounds.finish();
         TopologicalDepthSegmentData {
             segments: self.segments,
             bounds_min,
@@ -144,6 +327,23 @@ pub fn geometry_to_depth_segments(
     builder.finish()
 }
 
+/// CPU-stamped alternative to [`geometry_to_depth_segments`].
+pub fn stamped_geometry_to_depth_segments(set: &TemplateSet2D) -> TopologicalDepthSegmentData {
+    let scene = StampedScene2D::collect(set);
+    let mut bounds = Bounds2D::new();
+    let segments = scene
+        .depth_segments()
+        .inspect(|segment| bounds.update(segment.start, segment.end))
+        .collect();
+    let (bounds_min, bounds_max) = bounds.finish();
+    TopologicalDepthSegmentData {
+        segments,
+        bounds_min,
+        bounds_max,
+        max_topological_depth: scene.max_topological_depth(),
+    }
+}
+
 pub struct SegmentData3D {
     pub segments: Vec<Segment3D>,
     pub bounds_min: [f32; 3],
@@ -151,48 +351,25 @@ pub struct SegmentData3D {
 }
 
 pub struct SegmentDataBuilder3D {
-    min_x: f32,
-    min_y: f32,
-    min_z: f32,
-    max_x: f32,
-    max_y: f32,
-    max_z: f32,
+    bounds: Bounds3D,
     segments: Vec<Segment3D>,
 }
 
 impl SegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            min_z: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
-            max_z: f32::NEG_INFINITY,
+            bounds: Bounds3D::new(),
             segments: Vec::new(),
         }
     }
 
     pub fn push_segment(&mut self, [a, b]: [Vec3; 2]) {
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.min_z = self.min_z.min(a.z).min(b.z);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
-        self.max_z = self.max_z.max(a.z).max(b.z);
+        self.bounds.update(a, b);
         self.segments.push(Segment3D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData3D {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
-        } else {
-            (
-                [self.min_x, self.min_y, self.min_z],
-                [self.max_x, self.max_y, self.max_z],
-            )
-        };
-
+        let (bounds_min, bounds_max) = self.bounds.finish();
         SegmentData3D {
             segments: self.segments,
             bounds_min,
@@ -213,6 +390,22 @@ pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> Seg
     builder.finish()
 }
 
+/// CPU-stamped alternative to [`geometry_to_segments_3d`].
+pub fn stamped_geometry_to_segments_3d(set: &TemplateSet3D) -> SegmentData3D {
+    let scene = StampedScene3D::collect(set);
+    let mut bounds = Bounds3D::new();
+    let segments = scene
+        .segments()
+        .inspect(|segment| bounds.update(segment.start, segment.end))
+        .collect();
+    let (bounds_min, bounds_max) = bounds.finish();
+    SegmentData3D {
+        segments,
+        bounds_min,
+        bounds_max,
+    }
+}
+
 pub struct TopologicalDepthSegmentData3D {
     pub segments: Vec<TopologicalDepthSegment3D>,
     pub bounds_min: [f32; 3],
@@ -227,12 +420,7 @@ impl TopologicalDepthSegmentData3D {
 }
 
 pub struct TopologicalDepthSegmentDataBuilder3D {
-    min_x: f32,
-    min_y: f32,
-    min_z: f32,
-    max_x: f32,
-    max_y: f32,
-    max_z: f32,
+    bounds: Bounds3D,
     max_topological_depth: u32,
     segments: Vec<TopologicalDepthSegment3D>,
 }
@@ -240,12 +428,7 @@ pub struct TopologicalDepthSegmentDataBuilder3D {
 impl TopologicalDepthSegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
-            min_x: f32::INFINITY,
-            min_y: f32::INFINITY,
-            min_z: f32::INFINITY,
-            max_x: f32::NEG_INFINITY,
-            max_y: f32::NEG_INFINITY,
-            max_z: f32::NEG_INFINITY,
+            bounds: Bounds3D::new(),
             max_topological_depth: 0,
             segments: Vec::new(),
         }
@@ -253,12 +436,7 @@ impl TopologicalDepthSegmentDataBuilder3D {
 
     pub fn push_segment(&mut self, segment: Segment3DWithTopologicalDepth) {
         let [a, b] = segment.points;
-        self.min_x = self.min_x.min(a.x).min(b.x);
-        self.min_y = self.min_y.min(a.y).min(b.y);
-        self.min_z = self.min_z.min(a.z).min(b.z);
-        self.max_x = self.max_x.max(a.x).max(b.x);
-        self.max_y = self.max_y.max(a.y).max(b.y);
-        self.max_z = self.max_z.max(a.z).max(b.z);
+        self.bounds.update(a, b);
         self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
         self.segments.push(TopologicalDepthSegment3D {
             start: a,
@@ -268,15 +446,7 @@ impl TopologicalDepthSegmentDataBuilder3D {
     }
 
     pub fn finish(self) -> TopologicalDepthSegmentData3D {
-        let (bounds_min, bounds_max) = if self.min_x.is_infinite() {
-            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
-        } else {
-            (
-                [self.min_x, self.min_y, self.min_z],
-                [self.max_x, self.max_y, self.max_z],
-            )
-        };
-
+        let (bounds_min, bounds_max) = self.bounds.finish();
         TopologicalDepthSegmentData3D {
             segments: self.segments,
             bounds_min,
@@ -298,6 +468,23 @@ pub fn geometry_to_depth_segments_3d(
     let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
     segments.for_each(|segment| builder.push_segment(segment));
     builder.finish()
+}
+
+/// CPU-stamped alternative to [`geometry_to_depth_segments_3d`].
+pub fn stamped_geometry_to_depth_segments_3d(set: &TemplateSet3D) -> TopologicalDepthSegmentData3D {
+    let scene = StampedScene3D::collect(set);
+    let mut bounds = Bounds3D::new();
+    let segments = scene
+        .depth_segments()
+        .inspect(|segment| bounds.update(segment.start, segment.end))
+        .collect();
+    let (bounds_min, bounds_max) = bounds.finish();
+    TopologicalDepthSegmentData3D {
+        segments,
+        bounds_min,
+        bounds_max,
+        max_topological_depth: scene.max_topological_depth(),
+    }
 }
 
 /// Builds the GPU color uniform for the selected line color mode.
@@ -376,7 +563,10 @@ pub fn viewport_transform(
 
 #[cfg(test)]
 mod tests {
-    use lsystem_core::{Dimensions, GenerationConfig, Rgb, compile_generation, generate};
+    use lsystem_core::{
+        CompiledGrammar, Dimensions, GenerationConfig, GenerationParams, Rgb, compile_generation,
+        generate, generate_3d_with_topological_depth, generate_with_topological_depth,
+    };
     use std::collections::BTreeMap;
 
     use super::*;
@@ -418,6 +608,263 @@ mod tests {
     fn hex_rgba(hex: Rgb) -> Vec4 {
         let [r, g, b] = hex.to_array();
         Vec4::new(r, g, b, 1.0)
+    }
+
+    #[test]
+    fn stamped_plain_segments_match_interpreted() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F++F++F".to_string(),
+            3,
+            60.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('F', "F-F++F-F".to_string())]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet2D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("set builds");
+
+        let (grammar, params) = compile_generation(&config);
+        let stamped = stamped_geometry_to_segments(&set);
+        let interpreted = geometry_to_segments(generate(&grammar, &params));
+
+        assert_eq!(stamped.segments.len(), interpreted.segments.len());
+        for axis in 0..2 {
+            assert!((stamped.bounds_min[axis] - interpreted.bounds_min[axis]).abs() < 1e-3);
+            assert!((stamped.bounds_max[axis] - interpreted.bounds_max[axis]).abs() < 1e-3);
+        }
+        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
+            assert!(s.start.distance(i.start) < 1e-3);
+            assert!(s.end.distance(i.end) < 1e-3);
+        }
+
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "X".to_string(),
+            3,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet3D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("set builds");
+
+        let (grammar, params) = compile_generation(&config);
+        let stamped = stamped_geometry_to_segments_3d(&set);
+        let interpreted = geometry_to_segments_3d(lsystem_core::generate_3d(&grammar, &params));
+
+        assert_eq!(stamped.segments.len(), interpreted.segments.len());
+        for axis in 0..3 {
+            assert!((stamped.bounds_min[axis] - interpreted.bounds_min[axis]).abs() < 1e-3);
+            assert!((stamped.bounds_max[axis] - interpreted.bounds_max[axis]).abs() < 1e-3);
+        }
+        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
+            assert!(s.start.distance(i.start) < 1e-3);
+            assert!(s.end.distance(i.end) < 1e-3);
+        }
+    }
+
+    #[test]
+    fn stamped_scene_counts_match_stats() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "X".to_string(),
+            5,
+            23.4,
+            1.0,
+            90.0,
+            BTreeMap::from([
+                ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet2D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("set builds");
+        let scene = StampedScene2D::collect(&set);
+
+        assert!(scene.total_segments() > 0);
+        assert_eq!(scene.segments().count() as u64, scene.total_segments());
+        assert_eq!(
+            scene.depth_segments().count() as u64,
+            scene.total_segments()
+        );
+        let per_segment_max = scene
+            .depth_segments()
+            .map(|segment| segment.topological_depth)
+            .max()
+            .unwrap_or(0);
+        assert_eq!(scene.max_topological_depth(), per_segment_max);
+    }
+
+    #[test]
+    fn stamped_scene_3d_counts_match_stats() {
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "A".to_string(),
+            5,
+            40.0,
+            1.0,
+            90.0,
+            BTreeMap::from([
+                ('A', r"F[+/A]/[-/A]F[&/A]/[^/A]".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet3D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("set builds");
+        let scene = StampedScene3D::collect(&set);
+
+        assert!(scene.total_segments() > 0);
+        assert_eq!(scene.segments().count() as u64, scene.total_segments());
+        assert_eq!(
+            scene.depth_segments().count() as u64,
+            scene.total_segments()
+        );
+        let per_segment_max = scene
+            .depth_segments()
+            .map(|segment| segment.topological_depth)
+            .max()
+            .unwrap_or(0);
+        assert_eq!(scene.max_topological_depth(), per_segment_max);
+    }
+
+    #[test]
+    fn empty_stamped_scene_reports_zero_segments_and_fallback_bounds() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "A".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        let set = TemplateSet2D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            1,
+        )
+        .expect("set builds");
+
+        let scene = StampedScene2D::collect(&set);
+        assert_eq!(scene.total_segments(), 0);
+        assert_eq!(scene.max_topological_depth(), 0);
+        assert_eq!(scene.segments().count(), 0);
+
+        let data = stamped_geometry_to_segments(&set);
+        assert!(data.segments.is_empty());
+        assert_eq!(data.bounds_min, [-1.0, -1.0]);
+        assert_eq!(data.bounds_max, [1.0, 1.0]);
+
+        let depth_data = stamped_geometry_to_depth_segments(&set);
+        assert!(depth_data.segments.is_empty());
+        assert_eq!(depth_data.max_topological_depth(), 0);
+        assert_eq!(depth_data.bounds_min, [-1.0, -1.0]);
+        assert_eq!(depth_data.bounds_max, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn stamped_2d_depth_segments_match_interpreted() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "X".to_string(),
+            5,
+            23.4,
+            1.0,
+            90.0,
+            BTreeMap::from([
+                ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet2D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("set builds");
+
+        let (grammar, params) = compile_generation(&config);
+        let stamped = stamped_geometry_to_depth_segments(&set);
+        let interpreted =
+            geometry_to_depth_segments(generate_with_topological_depth(&grammar, &params));
+
+        assert_eq!(stamped.segments.len(), interpreted.segments.len());
+        assert_eq!(
+            stamped.max_topological_depth(),
+            interpreted.max_topological_depth()
+        );
+        for axis in 0..2 {
+            assert!((stamped.bounds_min[axis] - interpreted.bounds_min[axis]).abs() < 1e-3);
+            assert!((stamped.bounds_max[axis] - interpreted.bounds_max[axis]).abs() < 1e-3);
+        }
+        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
+            assert_eq!(s.topological_depth, i.topological_depth);
+            assert!(s.start.distance(i.start) < 1e-3);
+            assert!(s.end.distance(i.end) < 1e-3);
+        }
+    }
+
+    #[test]
+    fn stamped_3d_depth_segments_match_interpreted() {
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "A".to_string(),
+            5,
+            40.0,
+            1.0,
+            90.0,
+            BTreeMap::from([
+                ('A', r"F[+/A]/[-/A]F[&/A]/[^/A]".to_string()),
+                ('F', "FF".to_string()),
+            ]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet3D::build(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("set builds");
+
+        let (grammar, params) = compile_generation(&config);
+        let stamped = stamped_geometry_to_depth_segments_3d(&set);
+        let interpreted =
+            geometry_to_depth_segments_3d(generate_3d_with_topological_depth(&grammar, &params));
+
+        assert_eq!(stamped.segments.len(), interpreted.segments.len());
+        assert_eq!(
+            stamped.max_topological_depth(),
+            interpreted.max_topological_depth()
+        );
+        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
+            assert_eq!(s.topological_depth, i.topological_depth);
+            assert!(s.start.distance(i.start) < 1e-3);
+            assert!(s.end.distance(i.end) < 1e-3);
+        }
     }
 
     #[test]

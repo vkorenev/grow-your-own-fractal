@@ -62,10 +62,25 @@ than caching resolved values inside the editor document.
 `lsystem-core` owns the grammar and turtle semantics:
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
-- `grammar.rs` provides a lazy expansion iterator that borrows a compiled
-  grammar (`CompiledGrammar::compile`) rather than owning it.
+- `grammar.rs` compiles a validated config once into a `CompiledGrammar`
+  (shared byte arena plus rule table, unreachable rules dropped) and provides
+  lazy expansion iterators that borrow the compiled value.
 - `turtle/turtle2d.rs` yields 2D line segments from expanded symbols.
 - `turtle/turtle3d.rs` yields 3D line segments using quaternion orientation.
+- `template.rs` provides the alternative stamped generation path: per-rule
+  geometry templates (a rule expanded a fixed number of iterations in the
+  local frame, with its exit transform) plus a placement walk that streams
+  stamps in traversal order. `TemplateSet2D/3D::build` consumes a
+  `CompiledGrammar` plus `GenerationParams` (everything from the config
+  except the grammar), all analysis happens in the byte domain, and the set
+  owns both, so stamping needs no config re-supply. A stamp's `order_base`
+  is the running segment count, so it doubles as the offset into a flat
+  traversal-ordered segment buffer for GPU consumers. Template sets are
+  small, budget-bounded collections; stamps stay streamed.
+  `build_within_budget` picks the largest template depth whose templates fit
+  a segment budget (`DEFAULT_TEMPLATE_SEGMENT_BUDGET` for interactive
+  consumers) and hands the grammar back when none fits, so callers fall back
+  to the interpreter path, which remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
   `GenerationConfig::new` is the only way to build a generation config; it
   enforces single-letter rule keys and bracket balance on the axiom and every
@@ -150,7 +165,13 @@ offscreen exports.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   2D/3D line pipelines, color uniforms, and surface frame handling.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters.
+  maps `LineColorConfig` into shader color parameters. The `stamped_*`
+  variants build the same segment data from core templates and stamps,
+  replacing per-symbol interpretation of the template-depth iterations with a
+  tight per-segment transform loop. All geometry consumers — both apps'
+  scene builds, PNG/APNG offscreen export, and core SVG export — generate
+  through the stamped path and fall back to the interpreter when no template
+  depth fits the budget.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature.
 - `wgpu_util.rs` centralizes instance/device setup and error logging for native
@@ -195,7 +216,10 @@ when geometry changes and update only color uniforms for color-only edits.
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/
 roll/auto-rotate/reset operations, and rebuilds GPU state after surface loss
-while preserving CPU-side scene, camera, and color state.
+while preserving CPU-side scene, camera, and color state. Scene rebuilds
+generate through the stamped path with interpreter fallback (see the
+renderer-bridge notes above); the generation log line reports the chosen
+`template_iterations` (0 = interpreter).
 
 ## Export Behavior
 

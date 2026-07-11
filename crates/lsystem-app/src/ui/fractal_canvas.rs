@@ -2,7 +2,10 @@ use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
 use lsystem_app_model::ConfigDefaults;
-use lsystem_core::{ColorConfig, Config, Dimensions, compile_generation};
+use lsystem_core::{
+    ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, Dimensions, TemplateSet2D, TemplateSet3D,
+    compile_generation,
+};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -12,6 +15,8 @@ use lsystem_renderer::lsystem_bridge::{
     SegmentData, SegmentData3D, SegmentDataBuilder, SegmentDataBuilder3D,
     TopologicalDepthSegmentData, TopologicalDepthSegmentData3D, TopologicalDepthSegmentDataBuilder,
     TopologicalDepthSegmentDataBuilder3D, color_params_from_config,
+    stamped_geometry_to_depth_segments, stamped_geometry_to_depth_segments_3d,
+    stamped_geometry_to_segments, stamped_geometry_to_segments_3d,
 };
 use std::fmt;
 use std::sync::{
@@ -347,69 +352,85 @@ pub(super) async fn build_scene(
             // Depth geometry is decided by fractal structure, not color mode, so color
             // changes after this build never require a geometry rebuild.
             let use_topological_depth = config.generation.has_stack_directives();
-            let mut segments_seen = 0usize;
+
+            // The stamped walk is a tight synchronous loop with no yield or
+            // cancellation points; it is fast enough that checking
+            // cancellation only around it keeps responsiveness acceptable.
+            // The per-segment interpreter fallback keeps its cooperative
+            // yields.
+            let set = TemplateSet3D::build_within_budget(
+                grammar,
+                params,
+                DEFAULT_TEMPLATE_SEGMENT_BUDGET,
+            );
 
             if use_topological_depth {
-                let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
-                for segment in lsystem_core::generate_3d_with_topological_depth(&grammar, &params) {
-                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
+                let data = match &set {
+                    Ok(set) => stamped_geometry_to_depth_segments_3d(set),
+                    Err(grammar) => {
+                        let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
+                        let mut segments_seen = 0usize;
+                        for segment in
+                            lsystem_core::generate_3d_with_topological_depth(grammar, &params)
+                        {
+                            if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                                yield_generation().await;
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                            }
+                            builder.push_segment(segment);
+                            segments_seen = segments_seen.wrapping_add(1);
                         }
-                        yield_generation().await;
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
-                        }
+                        builder.finish()
                     }
-                    builder.push_segment(segment);
-                    segments_seen = segments_seen.wrapping_add(1);
-                }
+                };
 
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;
                 }
 
-                log_generation_duration(started, segments_seen);
+                log_generation_duration(started, data.segments.len());
 
                 SceneBuildResult::Ready {
                     generation,
-                    scene: Scene::from_depth_segment_data_3d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
-                    ),
+                    scene: Scene::from_depth_segment_data_3d(&colors, data, camera, generation),
                 }
             } else {
-                let mut builder = SegmentDataBuilder3D::new();
-                for segment in lsystem_core::generate_3d(&grammar, &params) {
-                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
+                let data = match &set {
+                    Ok(set) => stamped_geometry_to_segments_3d(set),
+                    Err(grammar) => {
+                        let mut builder = SegmentDataBuilder3D::new();
+                        let mut segments_seen = 0usize;
+                        for segment in lsystem_core::generate_3d(grammar, &params) {
+                            if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                                yield_generation().await;
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                            }
+                            builder.push_segment(segment);
+                            segments_seen = segments_seen.wrapping_add(1);
                         }
-                        yield_generation().await;
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
-                        }
+                        builder.finish()
                     }
-                    builder.push_segment(segment);
-                    segments_seen = segments_seen.wrapping_add(1);
-                }
+                };
 
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;
                 }
 
-                log_generation_duration(started, segments_seen);
+                log_generation_duration(started, data.segments.len());
 
                 SceneBuildResult::Ready {
                     generation,
-                    scene: Scene::from_segment_data_3d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
-                    ),
+                    scene: Scene::from_segment_data_3d(&colors, data, camera, generation),
                 }
             }
         }
@@ -417,69 +438,81 @@ pub(super) async fn build_scene(
             // Depth geometry is decided by fractal structure, not color mode, so color
             // changes after this build never require a geometry rebuild.
             let use_topological_depth = config.generation.has_stack_directives();
-            let mut segments_seen = 0usize;
+
+            // See the 3D branch for the stamped-path cancellation tradeoff.
+            let set = TemplateSet2D::build_within_budget(
+                grammar,
+                params,
+                DEFAULT_TEMPLATE_SEGMENT_BUDGET,
+            );
 
             if use_topological_depth {
-                let mut builder = TopologicalDepthSegmentDataBuilder::new();
-                for segment in lsystem_core::generate_with_topological_depth(&grammar, &params) {
-                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
+                let data = match &set {
+                    Ok(set) => stamped_geometry_to_depth_segments(set),
+                    Err(grammar) => {
+                        let mut builder = TopologicalDepthSegmentDataBuilder::new();
+                        let mut segments_seen = 0usize;
+                        for segment in
+                            lsystem_core::generate_with_topological_depth(grammar, &params)
+                        {
+                            if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                                yield_generation().await;
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                            }
+                            builder.push_segment(segment);
+                            segments_seen = segments_seen.wrapping_add(1);
                         }
-                        yield_generation().await;
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
-                        }
+                        builder.finish()
                     }
-                    builder.push_segment(segment);
-                    segments_seen = segments_seen.wrapping_add(1);
-                }
+                };
 
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;
                 }
 
-                log_generation_duration(started, segments_seen);
+                log_generation_duration(started, data.segments.len());
 
                 SceneBuildResult::Ready {
                     generation,
-                    scene: Scene::from_depth_segment_data_2d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
-                    ),
+                    scene: Scene::from_depth_segment_data_2d(&colors, data, camera, generation),
                 }
             } else {
-                let mut builder = SegmentDataBuilder::new();
-                for segment in lsystem_core::generate(&grammar, &params) {
-                    if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
+                let data = match &set {
+                    Ok(set) => stamped_geometry_to_segments(set),
+                    Err(grammar) => {
+                        let mut builder = SegmentDataBuilder::new();
+                        let mut segments_seen = 0usize;
+                        for segment in lsystem_core::generate(grammar, &params) {
+                            if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                                yield_generation().await;
+                                if is_cancelled(generation, &current_generation) {
+                                    return SceneBuildResult::Cancelled;
+                                }
+                            }
+                            builder.push_segment(segment);
+                            segments_seen = segments_seen.wrapping_add(1);
                         }
-                        yield_generation().await;
-                        if is_cancelled(generation, &current_generation) {
-                            return SceneBuildResult::Cancelled;
-                        }
+                        builder.finish()
                     }
-                    builder.push_segment(segment);
-                    segments_seen = segments_seen.wrapping_add(1);
-                }
+                };
 
                 if is_cancelled(generation, &current_generation) {
                     return SceneBuildResult::Cancelled;
                 }
 
-                log_generation_duration(started, segments_seen);
+                log_generation_duration(started, data.segments.len());
 
                 SceneBuildResult::Ready {
                     generation,
-                    scene: Scene::from_segment_data_2d(
-                        &colors,
-                        builder.finish(),
-                        camera,
-                        generation,
-                    ),
+                    scene: Scene::from_segment_data_2d(&colors, data, camera, generation),
                 }
             }
         }

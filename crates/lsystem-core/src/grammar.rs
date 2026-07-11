@@ -33,7 +33,7 @@ const EFFECTS: [bool; 256] = {
 /// Half-open arena spans for one expandable string: the string itself and
 /// its effect-filtered copy. Bundling both into one struct makes it
 /// impossible for a symbol to have one span without the other.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct RuleSpans {
     full: (u32, u32),
     effects: (u32, u32),
@@ -88,6 +88,7 @@ impl<'a> RuleSlices<'a> {
 /// an effect-filtered copy. Effects-only expansion streams terminal (depth-0)
 /// spans from the filtered copies and drops pass-through bytes emitted at
 /// depth > 0 via the effects table.
+#[derive(Debug)]
 pub struct CompiledGrammar {
     arena: Vec<u8>,
     rules: Box<[(u8, RuleSpans)]>,
@@ -98,6 +99,10 @@ impl CompiledGrammar {
     /// Compiles a validated config's axiom and reachable rules. The config's
     /// construction invariant (balanced axiom and RHSs, letter rule keys)
     /// carries over: every expansion of a compiled grammar is balanced.
+    ///
+    /// Only the grammar fields (axiom and rules) affect the result; turtle
+    /// parameters play no role, so a compiled grammar stays valid across
+    /// angle/step/heading changes.
     pub fn compile(config: &GenerationConfig) -> Self {
         Self::compile_raw(config.axiom(), config.rules())
     }
@@ -173,8 +178,10 @@ impl CompiledGrammar {
         rules
     }
 
-    /// Full expansion: every expanded symbol is yielded.
-    #[cfg(test)]
+    /// Full expansion: every expanded symbol is yielded. The stamp placement
+    /// walk depends on this flavor: ruled symbols must surface at the
+    /// template boundary instead of being stripped. Tests use it as the
+    /// expansion oracle.
     pub(crate) fn expand(&self, iterations: u32) -> ExpandIter<'_> {
         let axiom = self.axiom.to_slices(&self.arena);
         ExpandIter {
@@ -209,6 +216,46 @@ impl CompiledGrammar {
             // Starts empty; the first `next`/`fold` call fills it in.
             terminal: Default::default(),
         }
+    }
+
+    /// Effects-only expansion of one ruled symbol, as if it were the axiom.
+    /// `symbol` must be a rule key of this grammar and `iterations >= 1`.
+    /// Template building expands each ruled symbol this way.
+    pub(crate) fn expand_rule_effects(&self, symbol: u8, iterations: u32) -> ExpandIter<'_> {
+        let rules = self.slice_rules();
+        let entry = rules[symbol as usize].expect("symbol must be a rule key");
+        // Expanding the symbol `iterations` times leaves its RHS
+        // `iterations - 1` levels; `child` picks the effects span exactly
+        // when the RHS streams terminally, matching the frame pushes in
+        // `next` and `fold`.
+        let depth = iterations
+            .checked_sub(1)
+            .expect("iterations must be at least 1");
+        ExpandIter {
+            stack: vec![Frame {
+                remaining: entry.child(depth, true).iter(),
+                depth,
+            }],
+            effects_only: true,
+            rules,
+            terminal: Default::default(),
+        }
+    }
+
+    /// Returns the byte IDs of all compiled rules. Every one is reachable
+    /// when the grammar came from [`CompiledGrammar::compile`].
+    pub(crate) fn ruled_symbols(&self) -> impl Iterator<Item = u8> + '_ {
+        self.rules.iter().map(|&(key, _)| key)
+    }
+
+    /// Returns the RHS bytes of a rule. `symbol` must be a rule key.
+    pub(crate) fn rule_rhs(&self, symbol: u8) -> &[u8] {
+        let &(_, spans) = self
+            .rules
+            .iter()
+            .find(|&&(key, _)| key == symbol)
+            .expect("symbol must be a rule key");
+        &self.arena[spans.full.0 as usize..spans.full.1 as usize]
     }
 }
 
@@ -459,6 +506,32 @@ mod tests {
     }
 
     #[test]
+    fn expand_rule_effects_matches_single_symbol_axiom_expansion() {
+        let rules: BTreeMap<char, String> = [
+            ('X', "F+Y&ä".to_string()),
+            ('Y', "F[-X]^f".to_string()),
+            ('ä', "F/Z".to_string()),
+        ]
+        .into();
+        // Axiom "XY" keeps X, Y, and (transitively via X's RHS) ä reachable,
+        // so none of the rules under test are dropped during compilation.
+        let grammar = CompiledGrammar::compile_raw("XY", &rules);
+        for symbol in *b"XY" {
+            for iterations in 1..=3 {
+                let single = CompiledGrammar::compile_raw(&(symbol as char).to_string(), &rules);
+                let expected: Vec<u8> = single.expand_effects(iterations).collect();
+                let actual: Vec<u8> = grammar.expand_rule_effects(symbol, iterations).collect();
+
+                assert_eq!(
+                    actual, expected,
+                    "symbol={} iterations={iterations}",
+                    symbol as char
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fold_matches_repeated_next_after_partial_terminal_consumption() {
         let rules: BTreeMap<char, String> = [('F', "F+F-X".to_string())].into();
         let grammar = CompiledGrammar::compile_raw("F", &rules);
@@ -679,9 +752,8 @@ mod tests {
     fn compile_arena_matches_compiling_without_the_dropped_rule() {
         // Dropping an unreachable rule must not change the arena bytes or
         // spans produced for the rules that remain.
-        let with_dead_rule: BTreeMap<char, String> =
-            [('F', "F-F".to_string()), ('X', "FF".to_string())].into();
-        let without_dead_rule: BTreeMap<char, String> = [('F', "F-F".to_string())].into();
+        let with_dead_rule = [('F', "F-F".to_string()), ('X', "FF".to_string())].into();
+        let without_dead_rule = [('F', "F-F".to_string())].into();
 
         let a = CompiledGrammar::compile_raw("F", &with_dead_rule);
         let b = CompiledGrammar::compile_raw("F", &without_dead_rule);
@@ -693,9 +765,8 @@ mod tests {
     fn compile_drops_dead_rule_with_a_unique_non_ascii_key() {
         // A dropped rule's key must never consume a non-ASCII ID: it is
         // filtered out before `char_to_id` sees it.
-        let with_dead_rule: BTreeMap<char, String> =
-            [('F', "F-F".to_string()), ('ä', "FF".to_string())].into();
-        let without_dead_rule: BTreeMap<char, String> = [('F', "F-F".to_string())].into();
+        let with_dead_rule = [('F', "F-F".to_string()), ('ä', "FF".to_string())].into();
+        let without_dead_rule = [('F', "F-F".to_string())].into();
 
         let a = CompiledGrammar::compile_raw("F", &with_dead_rule);
         let b = CompiledGrammar::compile_raw("F", &without_dead_rule);

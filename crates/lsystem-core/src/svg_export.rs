@@ -1,8 +1,9 @@
 use glam::Vec2;
 
 use crate::{
-    ColorConfig, Config, GenerationConfig, LineColorConfig, Segment2DWithTopologicalDepth,
-    compile_generation, generate, generate_with_topological_depth,
+    ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig, LineColorConfig,
+    Segment2DWithTopologicalDepth, TemplateSet2D, compile_generation, generate,
+    generate_with_topological_depth,
 };
 
 /// Generate an SVG string for the given config.
@@ -12,12 +13,30 @@ use crate::{
 pub fn export_svg(config: &Config) -> String {
     let colors = config.colors;
     let (grammar, params) = compile_generation(&config.generation);
+    let set = TemplateSet2D::build_within_budget(grammar, params, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
     if colors.line.needs_topological_depth() && config.generation.has_stack_directives() {
-        // for_each drives the pipeline's specialized `fold`; `collect` would
-        // pull every symbol one at a time through `next`.
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
-        generate_with_topological_depth(&grammar, &params)
-            .for_each(|segment| segments.push(segment));
+        match &set {
+            Ok(set) => {
+                set.emit_stamps(|stamp, template| {
+                    for segment in &template.segments {
+                        segments.push(Segment2DWithTopologicalDepth {
+                            points: [
+                                stamp.pos + stamp.rot.rotate(segment.start),
+                                stamp.pos + stamp.rot.rotate(segment.end),
+                            ],
+                            topological_depth: stamp
+                                .depth_base
+                                .saturating_add(segment.depth_offset),
+                        });
+                    }
+                });
+            }
+            // for_each drives the pipeline's specialized `fold`; `collect`
+            // would pull every symbol one at a time through `next`.
+            Err(grammar) => generate_with_topological_depth(grammar, &params)
+                .for_each(|segment| segments.push(segment)),
+        }
         return export_svg_with_segments(
             &config.generation,
             &colors,
@@ -26,9 +45,21 @@ pub fn export_svg(config: &Config) -> String {
         );
     }
 
-    // for_each drives the pipeline's specialized `fold` (see above).
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
-    generate(&grammar, &params).for_each(|segment| segments.push(segment));
+    match &set {
+        Ok(set) => {
+            set.emit_stamps(|stamp, template| {
+                for segment in &template.segments {
+                    segments.push([
+                        stamp.pos + stamp.rot.rotate(segment.start),
+                        stamp.pos + stamp.rot.rotate(segment.end),
+                    ]);
+                }
+            });
+        }
+        // for_each drives the pipeline's specialized `fold` (see above).
+        Err(grammar) => generate(grammar, &params).for_each(|segment| segments.push(segment)),
+    }
     export_svg_with_segments(
         &config.generation,
         &colors,
