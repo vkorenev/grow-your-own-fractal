@@ -143,7 +143,8 @@ pub const DEFAULT_TEMPLATE_SEGMENT_BUDGET: u64 = 65_536;
 /// Returns the largest template iteration count in `1..=iterations` whose
 /// total template segment count stays within `max_template_segments`, or 0
 /// when even one iteration exceeds the budget (callers then fall back to the
-/// interpreter path).
+/// interpreter path). The total counts every segment a built set stores,
+/// including the built-in one-segment unit-`F` template.
 pub fn choose_template_iterations(
     grammar: &CompiledGrammar,
     iterations: u32,
@@ -174,10 +175,11 @@ pub fn choose_template_iterations(
         for &(symbol, v) in &updates {
             yields[symbol as usize] = v;
         }
+        // Start at 1 for the built-in unit-F template every set stores.
         let total = ruled
             .iter()
             .map(|&symbol| yields[symbol as usize])
-            .fold(0u64, |a, x| a.saturating_add(x));
+            .fold(1u64, |a, x| a.saturating_add(x));
         if total <= max_template_segments {
             best = m;
         }
@@ -763,8 +765,9 @@ mod tests {
 
     #[test]
     fn build_within_budget_picks_largest_fitting_depth() {
-        // Koch's only ruled symbol is F with 4^m template segments: budget 20
-        // fits m=2 (16), and budget 3 fits no depth at all.
+        // Koch's only ruled symbol is F with 4^m template segments, plus the
+        // unit-F template: budget 20 fits m=2 (16 + 1), and budget 3 fits no
+        // depth at all (m=1 needs 4 + 1).
         let config = koch();
         let set = TemplateSet2D::build_within_budget(
             CompiledGrammar::compile(&config),
@@ -800,6 +803,52 @@ mod tests {
         assert_eq!(
             choose_template_iterations(&grammar, config.iterations, u64::MAX),
             4
+        );
+    }
+
+    #[test]
+    fn budget_counts_the_built_in_unit_template() {
+        // Koch at m=2 stores 16 ruled + 1 unit segments: a budget of exactly
+        // 16 no longer fits m=2, while 17 does.
+        let config = koch();
+        let grammar = CompiledGrammar::compile(&config);
+        assert_eq!(
+            choose_template_iterations(&grammar, config.iterations, 16),
+            1
+        );
+        assert_eq!(
+            choose_template_iterations(&grammar, config.iterations, 17),
+            2
+        );
+
+        // A ruleless grammar still stores the one-segment unit template, so
+        // budget 0 fits no depth and budget 1 fits every depth.
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F".to_string(),
+            2,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        let grammar = CompiledGrammar::compile(&config);
+        assert_eq!(
+            choose_template_iterations(&grammar, config.iterations, 0),
+            0
+        );
+        assert_eq!(
+            choose_template_iterations(&grammar, config.iterations, 1),
+            2
+        );
+        assert!(
+            TemplateSet2D::build_within_budget(
+                CompiledGrammar::compile(&config),
+                GenerationParams::from(&config),
+                0,
+            )
+            .is_err()
         );
     }
 }
