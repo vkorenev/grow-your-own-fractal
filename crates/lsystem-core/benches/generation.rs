@@ -37,7 +37,7 @@ fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
 /// Stamped counterparts include template building and the placement walk, so
 /// they measure the full alternative pipeline, matching the interpreter
 /// checksums segment for segment (modulo f32 rounding).
-fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u32) -> f32 {
+fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
     let set = TemplateSet2D::build(
         CompiledGrammar::compile(config),
         GenerationParams::from(config),
@@ -57,7 +57,7 @@ fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u32) -> f
 
 fn checksum_2d_stamped_with_topological_depth(
     config: &GenerationConfig,
-    template_iterations: u32,
+    template_iterations: u16,
 ) -> f32 {
     let set = TemplateSet2D::build(
         CompiledGrammar::compile(config),
@@ -77,7 +77,7 @@ fn checksum_2d_stamped_with_topological_depth(
     acc
 }
 
-fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u32) -> f32 {
+fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
     let set = TemplateSet3D::build(
         CompiledGrammar::compile(config),
         GenerationParams::from(config),
@@ -97,7 +97,7 @@ fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u32) -> f
 
 fn checksum_3d_stamped_with_topological_depth(
     config: &GenerationConfig,
-    template_iterations: u32,
+    template_iterations: u16,
 ) -> f32 {
     let set = TemplateSet3D::build(
         CompiledGrammar::compile(config),

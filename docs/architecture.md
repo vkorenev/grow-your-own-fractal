@@ -57,6 +57,12 @@ ConfigSource::parse
 rendering and export paths resolve a concrete `Config` at their boundary rather
 than caching resolved values inside the editor document.
 
+Iteration counts use `u16` throughout the authored editor model and resolved
+core model, so TOML values outside `0..=65535` are invalid. The interactive
+apps additionally clamp iterations to a smaller segment-budget-derived
+maximum. The type bound limits iteration-linear work; the segment cap remains
+necessary because expanded output can grow exponentially.
+
 ## Core Model
 
 `lsystem-core` owns the grammar and turtle semantics:
@@ -89,7 +95,10 @@ than caching resolved values inside the editor document.
   The axiom and rules are read-only after construction. `GenerationParams`
   projects out the scalar parameters needed for generation beyond the
   grammar itself (`iterations`/`angle`/`step`/`initial_heading`),
-  independent of axiom/rules.
+  independent of axiom/rules. Rewrite and template iteration counts use
+  `u16`; output counts, traversal order, and topological depth retain their
+  wider types because they measure generated structure rather than rewrite
+  rounds.
 - `svg_export.rs` exports resolved 2D configs when the `svg` feature is enabled.
 
 `generate`/`generate_with_topological_depth`/`generate_3d`/

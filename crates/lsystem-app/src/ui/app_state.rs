@@ -38,7 +38,7 @@ pub(super) enum Message {
     ApplyConfig,
     RevertConfig,
     ResetConfig,
-    IterationsChanged(u32),
+    IterationsChanged(u16),
     AngleChanged(f32),
     BackgroundDefaultToggled(bool),
     BackgroundColorChanged(Rgb),
@@ -85,8 +85,8 @@ pub(super) enum Message {
 pub(super) struct FractalApp {
     pub(super) config_workspace: ConfigWorkspace,
     pub(super) toml: iced::widget::text_editor::Content,
-    pub(super) iterations: u32,
-    pub(super) max_iterations: u32,
+    pub(super) iterations: u16,
+    pub(super) max_iterations: u16,
     pub(super) png_width: u32,
     pub(super) png_width_text: String,
     pub(super) png_height: u32,
@@ -588,7 +588,7 @@ impl FractalApp {
             generation.has_stack_directives(),
         );
         self.max_iterations =
-            lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg) as u32;
+            lsystem_core::max_safe_iterations(&generation.axiom, &generation.rules, max_seg);
     }
 
     pub(super) fn selected_editor_config(&self) -> &EditorConfig {

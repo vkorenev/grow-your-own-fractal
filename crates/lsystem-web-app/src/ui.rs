@@ -100,6 +100,29 @@ impl SpinnerValue for u32 {
     }
 }
 
+impl SpinnerValue for u16 {
+    fn parse(text: &str) -> Option<Self> {
+        text.trim().parse().ok()
+    }
+
+    fn to_f64(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn from_f64(v: f64) -> Self {
+        // `as` saturates at the type bounds, so stepping below 0 lands on 0.
+        v.round() as u16
+    }
+
+    fn format(self, _decimals: Option<u8>) -> String {
+        self.to_string()
+    }
+
+    fn input_mode() -> &'static str {
+        "numeric"
+    }
+}
+
 /// Numeric text input flanked by − and + buttons.
 ///
 /// `value` — the authoritative value (controlled from outside).
@@ -248,5 +271,19 @@ where
                 }
             }).collect_view()}
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpinnerValue;
+
+    #[test]
+    fn u16_spinner_value_enforces_and_saturates_at_type_bounds() {
+        assert_eq!(<u16 as SpinnerValue>::parse("0"), Some(0));
+        assert_eq!(<u16 as SpinnerValue>::parse("65535"), Some(u16::MAX));
+        assert_eq!(<u16 as SpinnerValue>::parse("65536"), None);
+        assert_eq!(<u16 as SpinnerValue>::from_f64(-1.0), 0);
+        assert_eq!(<u16 as SpinnerValue>::from_f64(65_536.0), u16::MAX);
     }
 }

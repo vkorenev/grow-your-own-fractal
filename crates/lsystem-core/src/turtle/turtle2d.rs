@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn koch_segment_count() {
-        for (iters, expected) in [(0u32, 3usize), (1, 12), (2, 48), (3, 192), (4, 768)] {
+        for (iters, expected) in [(0u16, 3usize), (1, 12), (2, 48), (3, 192), (4, 768)] {
             let cfg = GenerationConfig::new(
                 Dimensions::TwoD,
                 "F++F++F".to_string(),
@@ -340,7 +340,7 @@ mod tests {
         // Segment-length check: each drawn step must be within 1e-4 of 1.0,
         // catching delta length drift independently of endpoint closure.
         let rules = BTreeMap::from([('F', "F-F++F-F".to_string())]);
-        for iters in 4u32..=6 {
+        for iters in 4u16..=6 {
             let config = GenerationConfig::new(
                 Dimensions::TwoD,
                 "F++F++F".to_string(),

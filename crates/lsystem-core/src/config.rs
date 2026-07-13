@@ -200,7 +200,11 @@ pub struct Config {
 pub struct GenerationConfig {
     pub dimensions: Dimensions,
     axiom: String,
-    pub iterations: u32,
+    /// Number of grammar rewrite rounds.
+    ///
+    /// The `u16` domain bounds iteration-linear analysis, but does not make
+    /// every representable expansion feasible; output can grow exponentially.
+    pub iterations: u16,
     /// Turn angle in degrees.
     pub angle: f32,
     /// Length of each forward step.
@@ -222,7 +226,7 @@ impl GenerationConfig {
     pub fn new(
         dimensions: Dimensions,
         axiom: String,
-        iterations: u32,
+        iterations: u16,
         angle: f32,
         step: f32,
         initial_heading: f32,
@@ -281,7 +285,10 @@ pub(crate) fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) 
 /// these values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GenerationParams {
-    pub iterations: u32,
+    /// Number of grammar rewrite rounds.
+    ///
+    /// This representation bound is independent of output-size limits.
+    pub iterations: u16,
     pub angle: f32,
     pub step: f32,
     pub initial_heading: f32,
@@ -320,6 +327,25 @@ mod generation_config {
             .expect("balanced config");
         assert_eq!(config.axiom(), "F[+F]F");
         assert_eq!(config.rules()[&'F'], "F[-F]+[F]");
+    }
+
+    #[test]
+    fn iteration_endpoints_are_preserved_in_generation_params() {
+        for iterations in [0, u16::MAX] {
+            let config = GenerationConfig::new(
+                Dimensions::TwoD,
+                "F".to_string(),
+                iterations,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::new(),
+            )
+            .expect("balanced config");
+
+            assert_eq!(config.iterations, iterations);
+            assert_eq!(GenerationParams::from(&config).iterations, iterations);
+        }
     }
 
     #[test]

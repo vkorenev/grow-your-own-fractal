@@ -11,7 +11,7 @@ use lsystem_renderer::wgpu_util::create_headless_device;
 
 struct RenderBenchCase {
     fractal_name: &'static str,
-    iterations: RangeInclusive<u32>,
+    iterations: RangeInclusive<u16>,
     image_size: (u32, u32),
     colors: ColorConfig,
 }
@@ -25,7 +25,7 @@ fn bench_offscreen_render(c: &mut Criterion) {
     let camera = Camera::default();
 
     let mut bench_render_case =
-        |case: RenderBenchCase, generation_for_iterations: &dyn Fn(u32) -> GenerationConfig| {
+        |case: RenderBenchCase, generation_for_iterations: &dyn Fn(u16) -> GenerationConfig| {
             let (width, height) = case.image_size;
             let group_name = format!("offscreen_rgba_{}_{}x{}", case.fractal_name, width, height);
             let mut group = c.benchmark_group(group_name);
