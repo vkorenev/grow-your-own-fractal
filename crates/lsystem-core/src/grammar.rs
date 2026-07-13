@@ -8,7 +8,7 @@ const MAX_NON_ASCII_SYMBOLS: usize = (u8::MAX - NON_ASCII_BASE + 1) as usize;
 
 struct Frame<'a> {
     remaining: std::slice::Iter<'a, u8>,
-    depth: u32,
+    depth: u16,
 }
 
 /// Bytes with a turtle effect. Expansion in effects-only mode drops every
@@ -62,7 +62,7 @@ impl<'a> RuleSlices<'a> {
     /// The span a rule application should push for a child at `child_depth`:
     /// the effects-filtered copy iff the child enters depth 0 in
     /// effects-only mode, otherwise the full span.
-    fn child(self, child_depth: u32, effects_only: bool) -> &'a [u8] {
+    fn child(self, child_depth: u16, effects_only: bool) -> &'a [u8] {
         if child_depth == 0 && effects_only {
             self.effects
         } else {
@@ -182,7 +182,7 @@ impl CompiledGrammar {
     /// walk depends on this flavor: ruled symbols must surface at the
     /// template boundary instead of being stripped. Tests use it as the
     /// expansion oracle.
-    pub(crate) fn expand(&self, iterations: u32) -> ExpandIter<'_> {
+    pub(crate) fn expand(&self, iterations: u16) -> ExpandIter<'_> {
         let axiom = self.axiom.to_slices(&self.arena);
         ExpandIter {
             stack: vec![Frame {
@@ -197,7 +197,7 @@ impl CompiledGrammar {
     }
 
     /// Effects-only expansion: symbols with no turtle effect are stripped.
-    pub(crate) fn expand_effects(&self, iterations: u32) -> ExpandIter<'_> {
+    pub(crate) fn expand_effects(&self, iterations: u16) -> ExpandIter<'_> {
         let axiom = self.axiom.to_slices(&self.arena);
         // At zero iterations the axiom frame itself streams terminally, so an
         // effects-only expansion starts on the filtered copy.
@@ -221,7 +221,7 @@ impl CompiledGrammar {
     /// Effects-only expansion of one ruled symbol, as if it were the axiom.
     /// `symbol` must be a rule key of this grammar and `iterations >= 1`.
     /// Template building expands each ruled symbol this way.
-    pub(crate) fn expand_rule_effects(&self, symbol: u8, iterations: u32) -> ExpandIter<'_> {
+    pub(crate) fn expand_rule_effects(&self, symbol: u8, iterations: u16) -> ExpandIter<'_> {
         let rules = self.slice_rules();
         let entry = rules[symbol as usize].expect("symbol must be a rule key");
         // Expanding the symbol `iterations` times leaves its RHS
@@ -362,9 +362,9 @@ fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 
 ///
 /// Uses symbolic growth tracking: iterates the per-character segment yield one step at
 /// a time without materialising any strings. Saturating arithmetic prevents overflow for
-/// fast-growing systems. Hard-capped at 30 so the loop always terminates.
-pub fn max_safe_iterations(axiom: &str, rules: &BTreeMap<char, String>, max_segments: u64) -> u32 {
-    const HARD_MAX: u32 = 30;
+/// fast-growing systems. Hard-capped at 30 as the interactive workload-policy ceiling.
+pub fn max_safe_iterations(axiom: &str, rules: &BTreeMap<char, String>, max_segments: u64) -> u16 {
+    const HARD_MAX: u16 = 30;
 
     let axiom_counts: BTreeMap<char, u64> = axiom.chars().fold(BTreeMap::new(), |mut m, c| {
         *m.entry(c).or_insert(0) += 1;
@@ -553,10 +553,18 @@ mod tests {
         // Koch snowflake: 3 F's at iter 0, multiplied by 4 each iteration.
         let rules = koch_rules();
         let grammar = CompiledGrammar::compile_raw("F++F++F", &rules);
-        for iter in 0..=4u32 {
+        for iter in 0..=4u16 {
             let f_count = grammar.expand(iter).filter(|&b| b == b'F').count();
-            assert_eq!(f_count, 3 * 4usize.pow(iter), "iter {iter}");
+            assert_eq!(f_count, 3 * 4usize.pow(u32::from(iter)), "iter {iter}");
         }
+    }
+
+    #[test]
+    fn fixed_point_expansion_terminates_at_max_iterations() {
+        let rules: BTreeMap<char, String> = [('F', "F".to_string())].into();
+        let grammar = CompiledGrammar::compile_raw("F", &rules);
+
+        assert_eq!(grammar.expand_effects(u16::MAX).count(), 1);
     }
 
     fn sierpinski_rules() -> BTreeMap<char, String> {

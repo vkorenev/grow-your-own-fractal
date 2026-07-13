@@ -81,7 +81,7 @@ pub struct Template3D {
 pub struct TemplateSet2D {
     templates: Vec<Template2D>,
     symbol_to_template: [Option<u16>; 256],
-    template_iterations: u32,
+    template_iterations: u16,
     grammar: CompiledGrammar,
     params: GenerationParams,
 }
@@ -95,7 +95,7 @@ pub struct TemplateSet2D {
 pub struct TemplateSet3D {
     templates: Vec<Template3D>,
     symbol_to_template: [Option<u16>; 256],
-    template_iterations: u32,
+    template_iterations: u16,
     grammar: CompiledGrammar,
     params: GenerationParams,
 }
@@ -147,13 +147,9 @@ pub const DEFAULT_TEMPLATE_SEGMENT_BUDGET: u64 = 65_536;
 /// including the built-in one-segment unit-`F` template.
 pub fn choose_template_iterations(
     grammar: &CompiledGrammar,
-    iterations: u32,
+    iterations: u16,
     max_template_segments: u64,
-) -> u32 {
-    // Mirrors max_safe_iterations' hard cap so the loop terminates even for
-    // core-level configs with absurd iteration counts.
-    const HARD_MAX: u32 = 30;
-
+) -> u16 {
     let ruled: Vec<u8> = grammar.ruled_symbols().collect();
 
     // yields[b] = number of drawn segments symbol `b` produces when expanded
@@ -162,7 +158,7 @@ pub fn choose_template_iterations(
     yields[b'F' as usize] = 1;
     let mut updates: Vec<(u8, u64)> = Vec::with_capacity(ruled.len());
     let mut best = 0;
-    for m in 1..=iterations.min(HARD_MAX) {
+    for m in 1..=iterations {
         updates.clear();
         for &symbol in &ruled {
             let v = grammar
@@ -205,7 +201,7 @@ macro_rules! impl_template_set {
             pub fn build(
                 grammar: CompiledGrammar,
                 params: GenerationParams,
-                template_iterations: u32,
+                template_iterations: u16,
             ) -> Result<Self, CompiledGrammar> {
                 if template_iterations == 0 || template_iterations > params.iterations {
                     return Err(grammar);
@@ -298,7 +294,7 @@ macro_rules! impl_template_set {
             }
 
             /// The number of expansion levels each template precomputes.
-            pub fn template_iterations(&self) -> u32 {
+            pub fn template_iterations(&self) -> u16 {
                 self.template_iterations
             }
 
@@ -429,7 +425,7 @@ mod tests {
 
     fn build_2d(
         config: &GenerationConfig,
-        template_iterations: u32,
+        template_iterations: u16,
     ) -> Result<TemplateSet2D, CompiledGrammar> {
         TemplateSet2D::build(
             CompiledGrammar::compile(config),
@@ -440,7 +436,7 @@ mod tests {
 
     fn build_3d(
         config: &GenerationConfig,
-        template_iterations: u32,
+        template_iterations: u16,
     ) -> Result<TemplateSet3D, CompiledGrammar> {
         TemplateSet3D::build(
             CompiledGrammar::compile(config),
@@ -451,7 +447,7 @@ mod tests {
 
     fn stamped_segments_2d(
         config: &GenerationConfig,
-        template_iterations: u32,
+        template_iterations: u16,
     ) -> (Vec<Segment2DWithTopologicalDepth>, StampStats) {
         let set = build_2d(config, template_iterations).expect("set builds");
         let mut segments = Vec::new();
@@ -476,7 +472,7 @@ mod tests {
 
     fn stamped_segments_3d(
         config: &GenerationConfig,
-        template_iterations: u32,
+        template_iterations: u16,
     ) -> (Vec<Segment3DWithTopologicalDepth>, StampStats) {
         let set = build_3d(config, template_iterations).expect("set builds");
         let mut segments = Vec::new();
@@ -499,7 +495,7 @@ mod tests {
         (segments, stats)
     }
 
-    fn assert_matches_interpreter_2d(config: &GenerationConfig, template_iterations: u32) {
+    fn assert_matches_interpreter_2d(config: &GenerationConfig, template_iterations: u16) {
         let (grammar, params) = compile_generation(config);
         let interpreted: Vec<_> =
             crate::generate_with_topological_depth(&grammar, &params).collect();
@@ -522,7 +518,7 @@ mod tests {
         assert_eq!(stats.max_depth, max_depth);
     }
 
-    fn assert_matches_interpreter_3d(config: &GenerationConfig, template_iterations: u32) {
+    fn assert_matches_interpreter_3d(config: &GenerationConfig, template_iterations: u16) {
         let (grammar, params) = compile_generation(config);
         let interpreted: Vec<_> =
             crate::generate_3d_with_topological_depth(&grammar, &params).collect();
@@ -804,6 +800,28 @@ mod tests {
             choose_template_iterations(&grammar, config.iterations, u64::MAX),
             4
         );
+    }
+
+    #[test]
+    fn template_selection_can_exceed_interactive_hard_max() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F".to_string(),
+            31,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('F', "F".to_string())]),
+        )
+        .expect("balanced config");
+        let set = TemplateSet2D::build_within_budget(
+            CompiledGrammar::compile(&config),
+            GenerationParams::from(&config),
+            2,
+        )
+        .expect("fixed-point template fits the budget");
+
+        assert_eq!(set.template_iterations(), 31);
     }
 
     #[test]

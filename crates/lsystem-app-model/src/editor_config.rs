@@ -26,7 +26,7 @@ impl EditorConfig {
     ///
     /// This leaves `EditorConfig` unchanged and fills omitted defaultable fields
     /// from `defaults`. Authored values are preserved faithfully.
-    pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u32) -> Config {
+    pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u16) -> Config {
         let generation = self.generation.resolve(defaults, max_iterations);
         Config {
             name: self.name.clone(),
@@ -41,7 +41,7 @@ impl EditorConfig {
 pub struct EditorGenerationConfig {
     pub dimensions: Dimensions,
     pub axiom: String,
-    pub iterations: u32,
+    pub iterations: u16,
     pub angle: f32,
     pub step: Option<f32>,
     pub initial_heading: Option<f32>,
@@ -64,8 +64,8 @@ impl EditorGenerationConfig {
     /// Resolves authored generation fields with defaults into a runtime `GenerationConfig`.
     ///
     /// Fills omitted `step` and `initial_heading` from `defaults`, and clamps
-    /// `iterations` to `max_iterations`. Pass `u32::MAX` to skip clamping.
-    pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u32) -> GenerationConfig {
+    /// `iterations` to `max_iterations`. Pass `u16::MAX` to skip clamping.
+    pub fn resolve(&self, defaults: &ConfigDefaults, max_iterations: u16) -> GenerationConfig {
         GenerationConfig::new(
             self.dimensions,
             self.axiom.clone(),
@@ -177,7 +177,7 @@ struct RawMetadata {
 struct RawLSystem {
     dimensions: RawDimensions,
     axiom: String,
-    iterations: u32,
+    iterations: u16,
     #[serde(deserialize_with = "deserialize_number")]
     angle: f64,
     #[serde(default, deserialize_with = "deserialize_optional_number")]
@@ -381,7 +381,7 @@ impl ConfigSource {
         set_value_preserving_decor(&mut self.document["metadata"]["name"], Value::from(name));
     }
 
-    pub fn set_iterations(&mut self, iterations: u32) {
+    pub fn set_iterations(&mut self, iterations: u16) {
         set_value_preserving_decor(
             &mut self.document["l-system"]["iterations"],
             Value::from(i64::from(iterations)),
@@ -619,12 +619,12 @@ mod tests {
     fn parse_config(toml_str: &str) -> Result<Config, ParseConfigError> {
         Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?
             .editor_config()
-            .resolve(ConfigDefaults::embedded(), u32::MAX))
+            .resolve(ConfigDefaults::embedded(), u16::MAX))
     }
 
     fn resolve_doc(doc: &ConfigDocument) -> Config {
         doc.editor_config()
-            .resolve(ConfigDefaults::embedded(), u32::MAX)
+            .resolve(ConfigDefaults::embedded(), u16::MAX)
     }
 
     fn hex(s: &str) -> Rgb {
@@ -716,7 +716,7 @@ initial = "#408080"
     fn test_toml(
         dimensions: Dimensions,
         axiom: &str,
-        iterations: u32,
+        iterations: u16,
         angle: &str,
         step: &str,
         initial_heading: &str,
@@ -740,7 +740,7 @@ initial = "#408080"
     fn test_toml_with_dimensions(
         dimensions: &str,
         axiom: &str,
-        iterations: u32,
+        iterations: u16,
         angle: &str,
         step: &str,
         initial_heading: &str,
@@ -930,6 +930,42 @@ solid = "#00e680"
     }
 
     #[test]
+    fn iteration_endpoints_parse_and_resolve() {
+        for iterations in [0, u16::MAX] {
+            let toml =
+                NESTED_KOCH_TOML.replace("iterations = 4", &format!("iterations = {iterations}"));
+            let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+
+            assert_eq!(doc.editor_config().generation.iterations, iterations);
+            assert_eq!(
+                doc.editor_config()
+                    .resolve(ConfigDefaults::embedded(), u16::MAX)
+                    .generation
+                    .iterations,
+                iterations
+            );
+        }
+    }
+
+    #[test]
+    fn iteration_above_u16_max_is_rejected_during_deserialization() {
+        let toml = NESTED_KOCH_TOML.replace("iterations = 4", "iterations = 65536");
+        let error = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap_err();
+
+        assert!(matches!(error, ParseConfigError::TomlDeserialize(_)));
+    }
+
+    #[test]
+    fn set_iterations_round_trips_u16_max() {
+        let mut source = ConfigSource::parse(NESTED_KOCH_TOML).unwrap();
+        source.set_iterations(u16::MAX);
+        let doc = ConfigDocument::try_from(source).unwrap();
+
+        assert_eq!(doc.editor_config().generation.iterations, u16::MAX);
+        assert!(doc.to_toml_string().contains("iterations = 65535"));
+    }
+
+    #[test]
     fn editor_config_preserves_omitted_defaultable_fields() {
         let toml = NESTED_KOCH_TOML
             .replace("step = 1.0\n", "")
@@ -1046,7 +1082,7 @@ solid = "#00e680"
         )
         .unwrap();
 
-        let config = editor.resolve(&custom_defaults(), u32::MAX);
+        let config = editor.resolve(&custom_defaults(), u16::MAX);
 
         assert_eq!(config.generation.step, 2.5);
         assert_eq!(config.generation.initial_heading, 15.0);

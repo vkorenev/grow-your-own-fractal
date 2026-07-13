@@ -316,7 +316,7 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                     step=1.0
                     max=max_iterations
                     disabled=is_dirty
-                    on_commit=move |v: u32| {
+                    on_commit=move |v: u16| {
                         update_clean_config(
                             config_workspace, grammar_error,"iterations",
                             move |clean| clean.set_iterations(v),

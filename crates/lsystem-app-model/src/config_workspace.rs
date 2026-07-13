@@ -388,7 +388,7 @@ impl ConfigEntry {
 }
 
 impl CleanMut<'_> {
-    pub fn set_iterations(&mut self, iterations: u32) -> Result<(), ParseConfigError> {
+    pub fn set_iterations(&mut self, iterations: u16) -> Result<(), ParseConfigError> {
         self.0
             .update_last_applied_source(|source| source.set_iterations(iterations))
     }
@@ -534,7 +534,7 @@ solid = "#00e680"
     fn runtime_config(entry: &ConfigEntry) -> lsystem_core::Config {
         entry
             .editor_config()
-            .resolve(ConfigDefaults::embedded(), u32::MAX)
+            .resolve(ConfigDefaults::embedded(), u16::MAX)
     }
 
     #[test]
