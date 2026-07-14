@@ -86,10 +86,7 @@ pub(crate) fn SavePanel() -> impl IntoView {
         };
         async move {
             match fmt {
-                SaveFormat::Svg => {
-                    export_svg(config);
-                    Ok(())
-                }
+                SaveFormat::Svg => export_svg(config),
                 SaveFormat::Png | SaveFormat::Apng => {
                     let Some((device, queue, camera)) = gpu else {
                         return Err("Cannot save: GPU renderer not ready.".to_string());

@@ -71,8 +71,10 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
     match request {
         #[cfg(not(target_arch = "wasm32"))]
         ExportRequest::Svg { config, path } => {
-            let svg = lsystem_core::svg_export::export_svg(&config);
-            save_svg(svg, path)
+            match lsystem_core::svg_export::export_svg(&config) {
+                Ok(svg) => save_svg(svg, path),
+                Err(error) => ExportOutcome::Failed(error.to_string()),
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         ExportRequest::Png {
@@ -85,8 +87,10 @@ pub(crate) async fn handle_export(request: ExportRequest) -> ExportOutcome {
         #[cfg(target_arch = "wasm32")]
         ExportRequest::Svg(config) => {
             let filename = suggested_filename(&config.name, ExportKind::Svg);
-            let svg = lsystem_core::svg_export::export_svg(&config);
-            save_svg(svg, filename)
+            match lsystem_core::svg_export::export_svg(&config) {
+                Ok(svg) => save_svg(svg, filename),
+                Err(error) => ExportOutcome::Failed(error.to_string()),
+            }
         }
         #[cfg(target_arch = "wasm32")]
         ExportRequest::Png {

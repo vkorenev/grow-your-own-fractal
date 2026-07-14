@@ -89,7 +89,7 @@ impl<'a> RuleSlices<'a> {
 /// spans from the filtered copies and drops pass-through bytes emitted at
 /// depth > 0 via the effects table.
 #[derive(Debug)]
-pub struct CompiledGrammar {
+pub(crate) struct CompiledGrammar {
     arena: Vec<u8>,
     rules: Box<[(u8, RuleSpans)]>,
     axiom: RuleSpans,
@@ -103,7 +103,7 @@ impl CompiledGrammar {
     /// Only the grammar fields (axiom and rules) affect the result; turtle
     /// parameters play no role, so a compiled grammar stays valid across
     /// angle/step/heading changes.
-    pub fn compile(config: &GenerationConfig) -> Self {
+    pub(crate) fn compile(config: &GenerationConfig) -> Self {
         Self::compile_raw(config.axiom(), config.rules())
     }
 

@@ -17,7 +17,7 @@
 
 use glam::{Quat, Vec2, Vec3};
 
-use crate::config::GenerationParams;
+use crate::compiled_generation::{CompiledGeneration2D, CompiledGeneration3D};
 use crate::grammar::CompiledGrammar;
 use crate::turtle::turtle2d::TurtleState2D;
 use crate::turtle::turtle3d::TurtleState3D;
@@ -82,8 +82,7 @@ pub struct TemplateSet2D {
     templates: Vec<Template2D>,
     symbol_to_template: [Option<u16>; 256],
     template_iterations: u16,
-    grammar: CompiledGrammar,
-    params: GenerationParams,
+    generation: CompiledGeneration2D,
 }
 
 /// Templates for every ruled symbol of a compiled grammar, at a fixed count
@@ -96,8 +95,7 @@ pub struct TemplateSet3D {
     templates: Vec<Template3D>,
     symbol_to_template: [Option<u16>; 256],
     template_iterations: u16,
-    grammar: CompiledGrammar,
-    params: GenerationParams,
+    generation: CompiledGeneration3D,
 }
 
 /// Placement of one template in world space.
@@ -145,7 +143,7 @@ pub const DEFAULT_TEMPLATE_SEGMENT_BUDGET: u64 = 65_536;
 /// when even one iteration exceeds the budget (callers then fall back to the
 /// interpreter path). The total counts every segment a built set stores,
 /// including the built-in one-segment unit-`F` template.
-pub fn choose_template_iterations(
+pub(crate) fn choose_template_iterations(
     grammar: &CompiledGrammar,
     iterations: u16,
     max_template_segments: u64,
@@ -189,23 +187,27 @@ pub fn choose_template_iterations(
 /// the heading representation and `$rotate` names the rotation-apply method,
 /// so the logic exists once and the two instantiations cannot drift apart.
 macro_rules! impl_template_set {
-    ($Set:ident, $Template:ident, $Segment:ident, $Stamp:ident,
+    ($Set:ident, $Generation:ident, $Template:ident, $Segment:ident, $Stamp:ident,
      $Vec:ty, $Turtle:ty, $rot_identity:expr, $rotate:ident) => {
         impl $Set {
             /// Builds templates for every ruled symbol by expanding it
             /// `template_iterations` times through the turtle in the local
             /// frame. When `template_iterations` is outside
-            /// `1..=params.iterations`, returns the grammar back as the
-            /// error so the caller can reuse it for the interpreter
+            /// `1..=generation`'s iteration count, returns the generation
+            /// back as the error so the caller can reuse it for the interpreter
             /// fallback path.
             pub fn build(
-                grammar: CompiledGrammar,
-                params: GenerationParams,
+                generation: $Generation,
                 template_iterations: u16,
-            ) -> Result<Self, CompiledGrammar> {
-                if template_iterations == 0 || template_iterations > params.iterations {
-                    return Err(grammar);
+            ) -> Result<Self, $Generation> {
+                if template_iterations == 0
+                    || template_iterations > generation.inner.params.iterations
+                {
+                    return Err(generation);
                 }
+
+                let grammar = &generation.inner.grammar;
+                let params = generation.inner.params;
 
                 let unit_end = <$Vec>::X * params.step;
                 let mut templates = vec![$Template {
@@ -266,25 +268,24 @@ macro_rules! impl_template_set {
                     templates,
                     symbol_to_template,
                     template_iterations,
-                    grammar,
-                    params,
+                    generation,
                 })
             }
 
             /// Builds at the largest template depth whose total template
-            /// segment count fits `max_template_segments` (see
-            /// [`choose_template_iterations`] and
-            /// [`DEFAULT_TEMPLATE_SEGMENT_BUDGET`]). Returns the grammar
+            /// segment count fits `max_template_segments`. Returns the generation
             /// back as the error when no depth fits, so the caller can
             /// reuse it for the interpreter fallback path.
             pub fn build_within_budget(
-                grammar: CompiledGrammar,
-                params: GenerationParams,
+                generation: $Generation,
                 max_template_segments: u64,
-            ) -> Result<Self, CompiledGrammar> {
-                let template_iterations =
-                    choose_template_iterations(&grammar, params.iterations, max_template_segments);
-                Self::build(grammar, params, template_iterations)
+            ) -> Result<Self, $Generation> {
+                let template_iterations = choose_template_iterations(
+                    &generation.inner.grammar,
+                    generation.inner.params.iterations,
+                    max_template_segments,
+                );
+                Self::build(generation, template_iterations)
             }
 
             /// Built templates; index 0 is the built-in bare-`F` unit
@@ -304,14 +305,12 @@ macro_rules! impl_template_set {
             /// contributes segments, in traversal order. Placements of
             /// geometry-free templates advance the cursor but emit nothing.
             pub fn emit_stamps(&self, mut sink: impl FnMut($Stamp, &$Template)) -> StampStats {
+                let params = self.generation.inner.params;
+                let grammar = &self.generation.inner.grammar;
                 // The cursor is a plain turtle: effect symbols advance it via
                 // the shared apply() transition, so walk semantics cannot
                 // drift from the interpreter.
-                let mut state = <$Turtle>::new(
-                    self.params.angle,
-                    self.params.step,
-                    self.params.initial_heading,
-                );
+                let mut state = <$Turtle>::new(params.angle, params.step, params.initial_heading);
                 let mut order: u32 = 0;
                 let mut stats = StampStats {
                     total_segments: 0,
@@ -325,8 +324,8 @@ macro_rules! impl_template_set {
                     sink(stamp, template);
                 };
 
-                self.grammar
-                    .expand(self.params.iterations - self.template_iterations)
+                grammar
+                    .expand(params.iterations - self.template_iterations)
                     .for_each(|byte| {
                         let template_index =
                             if let Some(index) = self.symbol_to_template[byte as usize] {
@@ -389,6 +388,7 @@ macro_rules! impl_template_set {
 
 impl_template_set!(
     TemplateSet2D,
+    CompiledGeneration2D,
     Template2D,
     TemplateSegment2D,
     Stamp2D,
@@ -400,6 +400,7 @@ impl_template_set!(
 
 impl_template_set!(
     TemplateSet3D,
+    CompiledGeneration3D,
     Template3D,
     TemplateSegment3D,
     Stamp3D,
@@ -414,9 +415,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::test_util::{compile_2d, compile_3d};
     use crate::{
         Dimensions, GenerationConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
-        compile_generation,
     };
 
     // Composed rigid transforms round differently from the per-symbol
@@ -426,23 +427,15 @@ mod tests {
     fn build_2d(
         config: &GenerationConfig,
         template_iterations: u16,
-    ) -> Result<TemplateSet2D, CompiledGrammar> {
-        TemplateSet2D::build(
-            CompiledGrammar::compile(config),
-            GenerationParams::from(config),
-            template_iterations,
-        )
+    ) -> Result<TemplateSet2D, crate::CompiledGeneration2D> {
+        TemplateSet2D::build(compile_2d(config), template_iterations)
     }
 
     fn build_3d(
         config: &GenerationConfig,
         template_iterations: u16,
-    ) -> Result<TemplateSet3D, CompiledGrammar> {
-        TemplateSet3D::build(
-            CompiledGrammar::compile(config),
-            GenerationParams::from(config),
-            template_iterations,
-        )
+    ) -> Result<TemplateSet3D, crate::CompiledGeneration3D> {
+        TemplateSet3D::build(compile_3d(config), template_iterations)
     }
 
     fn stamped_segments_2d(
@@ -496,9 +489,7 @@ mod tests {
     }
 
     fn assert_matches_interpreter_2d(config: &GenerationConfig, template_iterations: u16) {
-        let (grammar, params) = compile_generation(config);
-        let interpreted: Vec<_> =
-            crate::generate_with_topological_depth(&grammar, &params).collect();
+        let interpreted: Vec<_> = compile_2d(config).depth_segments().collect();
         let (stamped, stats) = stamped_segments_2d(config, template_iterations);
 
         assert_eq!(stamped.len(), interpreted.len(), "segment count");
@@ -519,9 +510,7 @@ mod tests {
     }
 
     fn assert_matches_interpreter_3d(config: &GenerationConfig, template_iterations: u16) {
-        let (grammar, params) = compile_generation(config);
-        let interpreted: Vec<_> =
-            crate::generate_3d_with_topological_depth(&grammar, &params).collect();
+        let interpreted: Vec<_> = compile_3d(config).depth_segments().collect();
         let (stamped, stats) = stamped_segments_3d(config, template_iterations);
 
         assert_eq!(stamped.len(), interpreted.len(), "segment count");
@@ -765,22 +754,11 @@ mod tests {
         // unit-F template: budget 20 fits m=2 (16 + 1), and budget 3 fits no
         // depth at all (m=1 needs 4 + 1).
         let config = koch();
-        let set = TemplateSet2D::build_within_budget(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            20,
-        )
-        .expect("budget 20 fits depth 2");
+        let set = TemplateSet2D::build_within_budget(compile_2d(&config), 20)
+            .expect("budget 20 fits depth 2");
         assert_eq!(set.template_iterations(), 2);
 
-        assert!(
-            TemplateSet2D::build_within_budget(
-                CompiledGrammar::compile(&config),
-                GenerationParams::from(&config),
-                3,
-            )
-            .is_err()
-        );
+        assert!(TemplateSet2D::build_within_budget(compile_2d(&config), 3).is_err());
     }
 
     #[test]
@@ -814,12 +792,8 @@ mod tests {
             BTreeMap::from([('F', "F".to_string())]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build_within_budget(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("fixed-point template fits the budget");
+        let set = TemplateSet2D::build_within_budget(compile_2d(&config), 2)
+            .expect("fixed-point template fits the budget");
 
         assert_eq!(set.template_iterations(), 31);
     }
@@ -860,13 +834,43 @@ mod tests {
             choose_template_iterations(&grammar, config.iterations, 1),
             2
         );
-        assert!(
-            TemplateSet2D::build_within_budget(
-                CompiledGrammar::compile(&config),
-                GenerationParams::from(&config),
-                0,
-            )
-            .is_err()
-        );
+        assert!(TemplateSet2D::build_within_budget(compile_2d(&config), 0).is_err());
+    }
+
+    #[test]
+    fn failed_build_returns_generation_with_geometry_and_metadata() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F[+F]F".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        let generation = match build_2d(&config, 0) {
+            Ok(_) => panic!("depth zero must be invalid"),
+            Err(generation) => generation,
+        };
+        assert!(generation.has_stack_directives());
+        assert_eq!(generation.segments().count(), 3);
+
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F[+F]F".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        let generation = match TemplateSet3D::build_within_budget(compile_3d(&config), 0) {
+            Ok(_) => panic!("budget zero must not fit the unit template"),
+            Err(generation) => generation,
+        };
+        assert!(generation.has_stack_directives());
+        assert_eq!(generation.depth_segments().count(), 3);
     }
 }

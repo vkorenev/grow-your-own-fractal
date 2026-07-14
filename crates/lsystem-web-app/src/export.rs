@@ -6,11 +6,16 @@ use lsystem_renderer::animation_export::AnimationParams;
 use lsystem_renderer::camera::Camera;
 use wasm_bindgen::JsCast;
 
-pub(crate) fn export_svg(config: Config) {
+pub(crate) fn export_svg(config: Config) -> Result<(), String> {
     let filename = sanitize_filename(&config.name, "svg");
-    let svg = lsystem_core::svg_export::export_svg(&config);
+    let svg = lsystem_core::svg_export::export_svg(&config).map_err(|error| {
+        let error = format!("Failed to export SVG: {error}");
+        log::error!("{error}");
+        error
+    })?;
     let blob = gloo_file::Blob::new_with_options(svg.as_str(), Some("image/svg+xml"));
     download_blob(blob, filename);
+    Ok(())
 }
 
 pub(crate) async fn export_png(

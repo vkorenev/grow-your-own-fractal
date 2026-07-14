@@ -178,8 +178,8 @@ impl<I: Iterator<Item = u8>> Iterator for Segments2D<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{FoldOnly, collect_with_next};
-    use crate::{Dimensions, GenerationConfig, compile_generation};
+    use crate::test_util::{FoldOnly, collect_with_next, compile_2d};
+    use crate::{Dimensions, GenerationConfig};
     use std::collections::BTreeMap;
 
     fn gen_config(axiom: &str) -> GenerationConfig {
@@ -198,8 +198,8 @@ mod tests {
     #[test]
     fn single_f_draws_one_segment() {
         let cfg = gen_config("F");
-        let (grammar, params) = compile_generation(&cfg);
-        let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+        let generation = compile_2d(&cfg);
+        let segments: Vec<[Vec2; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!((a - Vec2::ZERO).length() < 1e-5);
@@ -209,8 +209,8 @@ mod tests {
     #[test]
     fn plus_turns_left() {
         let cfg = gen_config("F+F");
-        let (grammar, params) = compile_generation(&cfg);
-        let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+        let generation = compile_2d(&cfg);
+        let segments: Vec<[Vec2; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 2);
         let [a, b] = segments[1];
         assert!((a - Vec2::new(1.0, 0.0)).length() < 1e-5);
@@ -226,8 +226,8 @@ mod tests {
         //   ]   → restore position=(1,0), heading=0
         //   -F  → turn south (-90°), draw (1,0)→(1,-1)
         let cfg = gen_config("F[+F]-F");
-        let (grammar, params) = compile_generation(&cfg);
-        let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+        let generation = compile_2d(&cfg);
+        let segments: Vec<[Vec2; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 3);
         let [a3, b3] = segments[2];
         assert!(
@@ -253,8 +253,8 @@ mod tests {
                 BTreeMap::from([('F', "F-F++F-F".to_string())]),
             )
             .expect("balanced config");
-            let (grammar, params) = compile_generation(&cfg);
-            let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+            let generation = compile_2d(&cfg);
+            let segments: Vec<[Vec2; 2]> = generation.segments().collect();
             assert_eq!(segments.len(), expected, "iter {iters}");
         }
     }
@@ -262,8 +262,9 @@ mod tests {
     #[test]
     fn topological_depth_starts_at_zero_and_increments_per_drawn_segment() {
         let cfg = gen_config("FF");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_with_topological_depth(&grammar, &params)
+        let generation = compile_2d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -273,8 +274,9 @@ mod tests {
     #[test]
     fn topological_depth_restores_across_branches() {
         let cfg = gen_config("F[+F]F");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_with_topological_depth(&grammar, &params)
+        let generation = compile_2d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -284,8 +286,9 @@ mod tests {
     #[test]
     fn nested_branches_restore_topological_depth() {
         let cfg = gen_config("F[+F[+F]F]F");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_with_topological_depth(&grammar, &params)
+        let generation = compile_2d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -295,8 +298,9 @@ mod tests {
     #[test]
     fn non_drawing_forward_does_not_increment_topological_depth() {
         let cfg = gen_config("FfF");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_with_topological_depth(&grammar, &params)
+        let generation = compile_2d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -306,8 +310,8 @@ mod tests {
     #[test]
     fn pipe_u_turn_reverses_direction() {
         let cfg = gen_config("F|F");
-        let (grammar, params) = compile_generation(&cfg);
-        let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+        let generation = compile_2d(&cfg);
+        let segments: Vec<[Vec2; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 2);
         let [_, b0] = segments[0];
         let [a1, b1] = segments[1];
@@ -351,8 +355,8 @@ mod tests {
                 rules.clone(),
             )
             .expect("balanced config");
-            let (grammar, params) = compile_generation(&config);
-            let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+            let generation = compile_2d(&config);
+            let segments: Vec<[Vec2; 2]> = generation.segments().collect();
             let end = segments.last().expect("non-empty")[1];
             assert!(
                 end.length() < 1e-3,
@@ -374,8 +378,8 @@ mod tests {
         // end near Vec2::X, confirming delta survives repeated rotation without
         // significant direction or length drift.
         let cfg = gen_config("++++F");
-        let (grammar, params) = compile_generation(&cfg);
-        let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+        let generation = compile_2d(&cfg);
+        let segments: Vec<[Vec2; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!((a - Vec2::ZERO).length() < 1e-5, "starts at origin: {a}");
@@ -399,8 +403,8 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&config);
-        let segments: Vec<[Vec2; 2]> = crate::generate(&grammar, &params).collect();
+        let generation = compile_2d(&config);
+        let segments: Vec<[Vec2; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         let expected = Vec2::new(
@@ -451,15 +455,14 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&config);
-        let folded = crate::generate_with_topological_depth(&grammar, &params).fold(
-            Vec::new(),
-            |mut segments, segment| {
+        let generation = compile_2d(&config);
+        let folded = generation
+            .depth_segments()
+            .fold(Vec::new(), |mut segments, segment| {
                 segments.push(segment);
                 segments
-            },
-        );
-        let stepped = collect_with_next(crate::generate_with_topological_depth(&grammar, &params));
+            });
+        let stepped = collect_with_next(generation.depth_segments());
 
         assert_eq!(folded, stepped);
     }

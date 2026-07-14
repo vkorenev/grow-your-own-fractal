@@ -277,34 +277,6 @@ pub(crate) fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) 
     axiom.contains('[') || rules.values().any(|rhs| rhs.contains('['))
 }
 
-/// The scalar parameters of a [`GenerationConfig`] needed for generation
-/// beyond the grammar itself — expansion depth and turtle geometry —
-/// independent of its axiom/rules. Compiling a grammar depends only on
-/// axiom/rules, so this is kept separate rather than bundled with the
-/// compiled grammar — a compiled grammar stays valid across changes to
-/// these values.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GenerationParams {
-    /// Number of grammar rewrite rounds.
-    ///
-    /// This representation bound is independent of output-size limits.
-    pub iterations: u16,
-    pub angle: f32,
-    pub step: f32,
-    pub initial_heading: f32,
-}
-
-impl From<&GenerationConfig> for GenerationParams {
-    fn from(config: &GenerationConfig) -> Self {
-        Self {
-            iterations: config.iterations,
-            angle: config.angle,
-            step: config.step,
-            initial_heading: config.initial_heading,
-        }
-    }
-}
-
 #[cfg(test)]
 mod generation_config {
     use super::*;
@@ -330,7 +302,7 @@ mod generation_config {
     }
 
     #[test]
-    fn iteration_endpoints_are_preserved_in_generation_params() {
+    fn iteration_endpoints_are_preserved() {
         for iterations in [0, u16::MAX] {
             let config = GenerationConfig::new(
                 Dimensions::TwoD,
@@ -344,7 +316,6 @@ mod generation_config {
             .expect("balanced config");
 
             assert_eq!(config.iterations, iterations);
-            assert_eq!(GenerationParams::from(&config).iterations, iterations);
         }
     }
 
