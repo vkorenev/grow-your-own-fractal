@@ -199,8 +199,8 @@ impl<I: Iterator<Item = u8>> Iterator for Segments3D<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::{FoldOnly, collect_with_next};
-    use crate::{Dimensions, GenerationConfig, compile_generation};
+    use crate::test_util::{FoldOnly, collect_with_next, compile_3d};
+    use crate::{Dimensions, GenerationConfig};
     use std::collections::BTreeMap;
 
     fn make(axiom: &str, angle_deg: f32) -> Vec<[Vec3; 2]> {
@@ -242,8 +242,8 @@ mod tests {
         )
         .expect("balanced config");
 
-        let (grammar, params) = compile_generation(&cfg);
-        let segments: Vec<[Vec3; 2]> = crate::generate_3d(&grammar, &params).collect();
+        let generation = compile_3d(&cfg);
+        let segments: Vec<[Vec3; 2]> = generation.segments().collect();
         assert_eq!(segments.len(), 1);
         let [a, b] = segments[0];
         assert!(a.distance(Vec3::ZERO) < 1e-5);
@@ -284,16 +284,14 @@ mod tests {
             BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&config);
-        let folded = crate::generate_3d_with_topological_depth(&grammar, &params).fold(
-            Vec::new(),
-            |mut segments, segment| {
+        let generation = compile_3d(&config);
+        let folded = generation
+            .depth_segments()
+            .fold(Vec::new(), |mut segments, segment| {
                 segments.push(segment);
                 segments
-            },
-        );
-        let stepped =
-            collect_with_next(crate::generate_3d_with_topological_depth(&grammar, &params));
+            });
+        let stepped = collect_with_next(generation.depth_segments());
 
         assert_eq!(folded, stepped);
     }
@@ -339,8 +337,9 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&grammar, &params)
+        let generation = compile_3d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -359,8 +358,9 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&grammar, &params)
+        let generation = compile_3d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -379,8 +379,9 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&grammar, &params)
+        let generation = compile_3d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 
@@ -399,8 +400,9 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&cfg);
-        let depths: Vec<u32> = crate::generate_3d_with_topological_depth(&grammar, &params)
+        let generation = compile_3d(&cfg);
+        let depths: Vec<u32> = generation
+            .depth_segments()
             .map(|segment| segment.topological_depth)
             .collect();
 

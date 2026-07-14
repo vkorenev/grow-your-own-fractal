@@ -564,14 +564,28 @@ pub fn viewport_transform(
 #[cfg(test)]
 mod tests {
     use lsystem_core::{
-        CompiledGrammar, Dimensions, GenerationConfig, GenerationParams, Rgb, compile_generation,
-        generate, generate_3d_with_topological_depth, generate_with_topological_depth,
+        CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
+        GenerationConfig, Rgb,
     };
     use std::collections::BTreeMap;
 
     use super::*;
 
     const EPS: f32 = 1e-5;
+
+    fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
+        let CompiledGeneration::TwoD(generation) = config.compile() else {
+            panic!("expected a 2D generation config")
+        };
+        generation
+    }
+
+    fn compile_3d(config: &GenerationConfig) -> CompiledGeneration3D {
+        let CompiledGeneration::ThreeD(generation) = config.compile() else {
+            panic!("expected a 3D generation config")
+        };
+        generation
+    }
 
     struct FoldOnly<T> {
         items: std::vec::IntoIter<T>,
@@ -622,16 +636,10 @@ mod tests {
             BTreeMap::from([('F', "F-F++F-F".to_string())]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("set builds");
+        let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
 
-        let (grammar, params) = compile_generation(&config);
         let stamped = stamped_geometry_to_segments(&set);
-        let interpreted = geometry_to_segments(generate(&grammar, &params));
+        let interpreted = geometry_to_segments(compile_2d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         for axis in 0..2 {
@@ -653,16 +661,10 @@ mod tests {
             BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
         )
         .expect("balanced config");
-        let set = TemplateSet3D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("set builds");
+        let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
 
-        let (grammar, params) = compile_generation(&config);
         let stamped = stamped_geometry_to_segments_3d(&set);
-        let interpreted = geometry_to_segments_3d(lsystem_core::generate_3d(&grammar, &params));
+        let interpreted = geometry_to_segments_3d(compile_3d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         for axis in 0..3 {
@@ -690,12 +692,7 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("set builds");
+        let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
         let scene = StampedScene2D::collect(&set);
 
         assert!(scene.total_segments() > 0);
@@ -727,12 +724,7 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let set = TemplateSet3D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("set builds");
+        let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
         let scene = StampedScene3D::collect(&set);
 
         assert!(scene.total_segments() > 0);
@@ -761,12 +753,7 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            1,
-        )
-        .expect("set builds");
+        let set = TemplateSet2D::build(compile_2d(&config), 1).expect("set builds");
 
         let scene = StampedScene2D::collect(&set);
         assert_eq!(scene.total_segments(), 0);
@@ -800,17 +787,10 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("set builds");
+        let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
 
-        let (grammar, params) = compile_generation(&config);
         let stamped = stamped_geometry_to_depth_segments(&set);
-        let interpreted =
-            geometry_to_depth_segments(generate_with_topological_depth(&grammar, &params));
+        let interpreted = geometry_to_depth_segments(compile_2d(&config).depth_segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         assert_eq!(
@@ -843,17 +823,10 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let set = TemplateSet3D::build(
-            CompiledGrammar::compile(&config),
-            GenerationParams::from(&config),
-            2,
-        )
-        .expect("set builds");
+        let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
 
-        let (grammar, params) = compile_generation(&config);
         let stamped = stamped_geometry_to_depth_segments_3d(&set);
-        let interpreted =
-            geometry_to_depth_segments_3d(generate_3d_with_topological_depth(&grammar, &params));
+        let interpreted = geometry_to_depth_segments_3d(compile_3d(&config).depth_segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         assert_eq!(
@@ -1018,12 +991,11 @@ mod tests {
     #[test]
     fn empty_geometry_uses_fallback_bounds() {
         let config = cfg("A");
-        let (grammar, params) = compile_generation(&config);
         let SegmentData {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(generate(&grammar, &params));
+        } = geometry_to_segments(compile_2d(&config).segments());
         assert!(segments.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
@@ -1032,10 +1004,7 @@ mod tests {
     #[test]
     fn empty_depth_geometry_uses_fallback_bounds_and_zero_max_depth() {
         let config = cfg("A");
-        let (grammar, params) = compile_generation(&config);
-        let data = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
-            &grammar, &params,
-        ));
+        let data = geometry_to_depth_segments(compile_2d(&config).depth_segments());
 
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
@@ -1055,10 +1024,7 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&config);
-        let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
-            &grammar, &params,
-        ));
+        let data = geometry_to_depth_segments_3d(compile_3d(&config).depth_segments());
 
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
@@ -1069,12 +1035,11 @@ mod tests {
     #[test]
     fn single_segment_produces_one_segment_record_and_tight_bounds() {
         let config = cfg("F");
-        let (grammar, params) = compile_generation(&config);
         let SegmentData {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(generate(&grammar, &params));
+        } = geometry_to_segments(compile_2d(&config).segments());
         assert_eq!(segments.len(), 1);
         assert!(close(segments[0].start[0], 0.0) && close(segments[0].start[1], 0.0));
         assert!(close(segments[0].end[0], 1.0) && close(segments[0].end[1], 0.0));
@@ -1085,12 +1050,11 @@ mod tests {
     #[test]
     fn bounds_are_tight_over_all_segments() {
         let config = cfg("F+F-F");
-        let (grammar, params) = compile_generation(&config);
         let SegmentData {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(generate(&grammar, &params));
+        } = geometry_to_segments(compile_2d(&config).segments());
         assert_eq!(segments.len(), 3);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
@@ -1099,10 +1063,7 @@ mod tests {
     #[test]
     fn topological_depth_segments_preserve_depth_and_compute_max() {
         let config = cfg("F[+F]F");
-        let (grammar, params) = compile_generation(&config);
-        let data = geometry_to_depth_segments(lsystem_core::generate_with_topological_depth(
-            &grammar, &params,
-        ));
+        let data = geometry_to_depth_segments(compile_2d(&config).depth_segments());
 
         assert_eq!(data.segments.len(), 3);
         assert_eq!(data.segments[0].topological_depth, 0);
@@ -1125,10 +1086,7 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let (grammar, params) = compile_generation(&config);
-        let data = geometry_to_depth_segments_3d(lsystem_core::generate_3d_with_topological_depth(
-            &grammar, &params,
-        ));
+        let data = geometry_to_depth_segments_3d(compile_3d(&config).depth_segments());
 
         assert_eq!(data.segments.len(), 3);
         assert_eq!(data.segments[0].topological_depth, 0);

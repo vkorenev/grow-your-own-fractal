@@ -4,8 +4,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
-    Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, Dimensions, TemplateSet2D, TemplateSet3D,
-    compile_generation,
+    CompiledGeneration, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, TemplateSet2D, TemplateSet3D,
 };
 
 use crate::camera::Camera;
@@ -83,23 +82,17 @@ impl ExportScene {
     /// Generates the L-system geometry for `config` and uploads it to `device`.
     pub(crate) fn new(device: &wgpu::Device, queue: &wgpu::Queue, config: &Config) -> Self {
         let line = &config.colors.line;
-        let needs_depth =
-            line.needs_topological_depth() && config.generation.has_stack_directives();
-        let (grammar, params) = compile_generation(&config.generation);
-        match config.generation.dimensions {
-            Dimensions::TwoD => {
-                let set = TemplateSet2D::build_within_budget(
-                    grammar,
-                    params,
-                    DEFAULT_TEMPLATE_SEGMENT_BUDGET,
-                );
+        match config.generation.compile() {
+            CompiledGeneration::TwoD(generation) => {
+                let needs_depth =
+                    line.needs_topological_depth() && generation.has_stack_directives();
+                let set =
+                    TemplateSet2D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
                 let mut pipeline = LinePipeline2D::new(device, FORMAT);
                 let (color_params, bounds_min, bounds_max) = if needs_depth {
                     let data = match &set {
                         Ok(set) => stamped_geometry_to_depth_segments(set),
-                        Err(grammar) => geometry_to_depth_segments(
-                            lsystem_core::generate_with_topological_depth(grammar, &params),
-                        ),
+                        Err(generation) => geometry_to_depth_segments(generation.depth_segments()),
                     };
                     let cp = color_params_from_config(
                         line,
@@ -111,9 +104,7 @@ impl ExportScene {
                 } else {
                     let data = match &set {
                         Ok(set) => stamped_geometry_to_segments(set),
-                        Err(grammar) => {
-                            geometry_to_segments(lsystem_core::generate(grammar, &params))
-                        }
+                        Err(generation) => geometry_to_segments(generation.segments()),
                     };
                     let cp = color_params_from_config(line, data.segments.len() as u32, None);
                     pipeline.upload(device, queue, &data.segments, cp);
@@ -128,19 +119,18 @@ impl ExportScene {
                     color_params,
                 }
             }
-            Dimensions::ThreeD => {
-                let set = TemplateSet3D::build_within_budget(
-                    grammar,
-                    params,
-                    DEFAULT_TEMPLATE_SEGMENT_BUDGET,
-                );
+            CompiledGeneration::ThreeD(generation) => {
+                let needs_depth =
+                    line.needs_topological_depth() && generation.has_stack_directives();
+                let set =
+                    TemplateSet3D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
                 let mut pipeline = LinePipeline3D::new(device, FORMAT);
                 let (color_params, bounds_min, bounds_max) = if needs_depth {
                     let data = match &set {
                         Ok(set) => stamped_geometry_to_depth_segments_3d(set),
-                        Err(grammar) => geometry_to_depth_segments_3d(
-                            lsystem_core::generate_3d_with_topological_depth(grammar, &params),
-                        ),
+                        Err(generation) => {
+                            geometry_to_depth_segments_3d(generation.depth_segments())
+                        }
                     };
                     let cp = color_params_from_config(
                         line,
@@ -152,9 +142,7 @@ impl ExportScene {
                 } else {
                     let data = match &set {
                         Ok(set) => stamped_geometry_to_segments_3d(set),
-                        Err(grammar) => {
-                            geometry_to_segments_3d(lsystem_core::generate_3d(grammar, &params))
-                        }
+                        Err(generation) => geometry_to_segments_3d(generation.segments()),
                     };
                     let cp = color_params_from_config(line, data.segments.len() as u32, None);
                     pipeline.upload(device, queue, &data.segments, cp);

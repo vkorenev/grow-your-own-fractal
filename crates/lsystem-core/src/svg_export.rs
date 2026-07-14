@@ -1,20 +1,28 @@
 use glam::Vec2;
 
 use crate::{
-    ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig, LineColorConfig,
-    Segment2DWithTopologicalDepth, TemplateSet2D, compile_generation, generate,
-    generate_with_topological_depth,
+    ColorConfig, CompiledGeneration, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig,
+    LineColorConfig, Segment2DWithTopologicalDepth, TemplateSet2D,
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SvgExportError {
+    #[error("SVG export supports only 2D generations")]
+    ThreeDimensional,
+}
 
 /// Generate an SVG string for the given config.
 ///
 /// The SVG uses the natural turtle coordinate system, scaled to fit the fractal.
 /// Colors match the GPU render exactly.
-pub fn export_svg(config: &Config) -> String {
+pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
+    let CompiledGeneration::TwoD(generation) = config.generation.compile() else {
+        return Err(SvgExportError::ThreeDimensional);
+    };
     let colors = config.colors;
-    let (grammar, params) = compile_generation(&config.generation);
-    let set = TemplateSet2D::build_within_budget(grammar, params, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
-    if colors.line.needs_topological_depth() && config.generation.has_stack_directives() {
+    let has_stack_directives = generation.has_stack_directives();
+    let set = TemplateSet2D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+    if colors.line.needs_topological_depth() && has_stack_directives {
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
         match &set {
             Ok(set) => {
@@ -34,15 +42,16 @@ pub fn export_svg(config: &Config) -> String {
             }
             // for_each drives the pipeline's specialized `fold`; `collect`
             // would pull every symbol one at a time through `next`.
-            Err(grammar) => generate_with_topological_depth(grammar, &params)
+            Err(generation) => generation
+                .depth_segments()
                 .for_each(|segment| segments.push(segment)),
         }
-        return export_svg_with_segments(
+        return Ok(export_svg_with_segments(
             &config.generation,
             &colors,
             segments.iter().map(|segment| segment.points),
             build_depth_body(&segments, &colors.line),
-        );
+        ));
     }
 
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
@@ -58,14 +67,16 @@ pub fn export_svg(config: &Config) -> String {
             });
         }
         // for_each drives the pipeline's specialized `fold` (see above).
-        Err(grammar) => generate(grammar, &params).for_each(|segment| segments.push(segment)),
+        Err(generation) => generation
+            .segments()
+            .for_each(|segment| segments.push(segment)),
     }
-    export_svg_with_segments(
+    Ok(export_svg_with_segments(
         &config.generation,
         &colors,
         segments.iter().copied(),
         build_body(&segments, &colors.line),
-    )
+    ))
 }
 
 fn export_svg_with_segments(
@@ -278,6 +289,10 @@ mod tests {
         Rgb::try_from(s).unwrap()
     }
 
+    fn export_svg(config: &Config) -> String {
+        super::export_svg(config).expect("2D SVG export succeeds")
+    }
+
     #[test]
     fn solid_contains_svg_and_color() {
         let cfg = make_config("F+F", LineColorConfig::Solid(hex("#ff0000")));
@@ -411,5 +426,24 @@ mod tests {
         let svg = export_svg(&cfg);
 
         assert!(svg.contains("fill=\"#000000\""));
+    }
+
+    #[test]
+    fn three_dimensional_generation_is_rejected() {
+        let mut config = make_config("F", LineColorConfig::Solid(hex("#ff0000")));
+        config.generation = GenerationConfig::new(
+            crate::Dimensions::ThreeD,
+            "F".to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+
+        let error = super::export_svg(&config).expect_err("3D SVG export must fail");
+        assert_eq!(error, SvgExportError::ThreeDimensional);
+        assert_eq!(error.to_string(), "SVG export supports only 2D generations");
     }
 }

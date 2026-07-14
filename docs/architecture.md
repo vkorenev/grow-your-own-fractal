@@ -27,6 +27,8 @@ Runtime generation starts from a resolved `GenerationConfig`.
 
 ```text
 GenerationConfig
+  -> CompiledGeneration
+  -> typed 2D / 3D generation
   -> ExpandIter
   -> Segments2D / Segments3D
   -> renderer bridge segment records
@@ -68,50 +70,47 @@ necessary because expanded output can grow exponentially.
 `lsystem-core` owns the grammar and turtle semantics:
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
-- `grammar.rs` compiles a validated config once into a `CompiledGrammar`
-  (shared byte arena plus rule table, unreachable rules dropped) and provides
-  lazy expansion iterators that borrow the compiled value.
+- `compiled_generation.rs` is the runtime compilation boundary. It compiles
+  grammar, scalar parameters, and stack metadata together, then exposes an
+  opaque `CompiledGeneration::TwoD` or `::ThreeD` payload. Runtime consumers
+  match once at their boundary and can only pass the matching typed value to
+  2D or 3D generation and template APIs.
+- `grammar.rs` provides the crate-private compiled grammar representation
+  (shared byte arena plus rule table, unreachable rules dropped) and lazy
+  expansion iterators used by the typed generation façade.
 - `turtle/turtle2d.rs` yields 2D line segments from expanded symbols.
 - `turtle/turtle3d.rs` yields 3D line segments using quaternion orientation.
 - `template.rs` provides the alternative stamped generation path: per-rule
   geometry templates (a rule expanded a fixed number of iterations in the
   local frame, with its exit transform) plus a placement walk that streams
-  stamps in traversal order. `TemplateSet2D/3D::build` consumes a
-  `CompiledGrammar` plus `GenerationParams` (everything from the config
-  except the grammar), all analysis happens in the byte domain, and the set
-  owns both, so stamping needs no config re-supply. A stamp's `order_base`
-  is the running segment count, so it doubles as the offset into a flat
-  traversal-ordered segment buffer for GPU consumers. Template sets are
-  small, budget-bounded collections; stamps stay streamed.
+  stamps in traversal order. `TemplateSet2D/3D::build` consumes the matching
+  `CompiledGeneration2D/3D`; all analysis happens in the byte domain, and the
+  set owns the typed generation, so stamping needs no config re-supply. A
+  stamp's `order_base` is the running segment count, so it doubles as the
+  offset into a flat traversal-ordered segment buffer for GPU consumers.
+  Template sets are small, budget-bounded collections; stamps stay streamed.
   `build_within_budget` picks the largest template depth whose templates fit
   a segment budget (`DEFAULT_TEMPLATE_SEGMENT_BUDGET` for interactive
-  consumers) and hands the grammar back when none fits, so callers fall back
-  to the interpreter path, which remains the semantic oracle.
+  consumers) and hands the typed compiled generation back when none fits, so
+  callers fall back to the interpreter path, which remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
   `GenerationConfig::new` is the only way to build a generation config; it
   enforces single-letter rule keys and bracket balance on the axiom and every
   rule RHS, so every expansion is balanced and downstream code (turtle stack
   handling, templates) relies on that invariant instead of re-validating.
-  The axiom and rules are read-only after construction. `GenerationParams`
-  projects out the scalar parameters needed for generation beyond the
-  grammar itself (`iterations`/`angle`/`step`/`initial_heading`),
-  independent of axiom/rules. Rewrite and template iteration counts use
-  `u16`; output counts, traversal order, and topological depth retain their
-  wider types because they measure generated structure rather than rewrite
-  rounds.
-- `svg_export.rs` exports resolved 2D configs when the `svg` feature is enabled.
+  The axiom and rules are read-only after construction. Rewrite and template
+  iteration counts use `u16`; output counts, traversal order, and topological
+  depth retain their wider types because they measure generated structure
+  rather than rewrite rounds.
+- `svg_export.rs` exports resolved 2D configs when the `svg` feature is enabled
+  and explicitly rejects 3D input at its public runtime-config boundary.
 
-`generate`/`generate_with_topological_depth`/`generate_3d`/
-`generate_3d_with_topological_depth` (in `lib.rs`) take a `&CompiledGrammar`
-and `&GenerationParams` rather than compiling from a `&GenerationConfig`
-internally — callers compile the grammar once
-(`CompiledGrammar::compile(&config)`) and hold it across the call, which is
-what lets the returned iterator borrow it instead of owning it;
-`GenerationParams` is `Copy` and consumed by value into the turtle
-constructors, so it need not outlive the call. `grammar` and `params` should
-come from the same config — nothing enforces the pairing, so passing
-mismatched sources compiles and runs but produces geometry that doesn't
-correspond to any single config.
+`GenerationConfig::compile` snapshots grammar, scalar parameters, and stack
+metadata together, then returns `CompiledGeneration::TwoD` or `ThreeD`.
+Runtime boundaries exhaustively match that enum once. The dimension-specific
+payload exposes `segments()` and `depth_segments()` and can only be consumed by
+the matching template set, so grammar and parameters cannot be separated or
+combined across configs.
 
 3D turtle orientation is stored as a `glam::Quat`. Heading, left, and up vectors
 are derived from that orientation, and pitch/roll/yaw symbols compose in local
