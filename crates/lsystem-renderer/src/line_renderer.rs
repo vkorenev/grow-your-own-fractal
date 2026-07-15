@@ -147,6 +147,24 @@ struct GrowableVertexBuffer {
     count: u32,
 }
 
+pub(crate) struct StagingUnavailable;
+
+/// Writes exactly one record per pre-sized staging slot. Count mismatches are
+/// internal contract violations and panic in every build so callers can never
+/// report metadata for a partial upload.
+fn write_records<V: bytemuck::Pod>(
+    mut view: wgpu::WriteOnly<'_, [u8]>,
+    records: impl Iterator<Item = V>,
+) {
+    for record in records {
+        let mut chunk = view
+            .split_off(..std::mem::size_of::<V>())
+            .expect("more records than staging bytes");
+        chunk.copy_from_slice(bytemuck::bytes_of(&record));
+    }
+    assert!(view.is_empty(), "fewer records than staging bytes");
+}
+
 impl GrowableVertexBuffer {
     fn new() -> Self {
         Self {
@@ -163,22 +181,59 @@ impl GrowableVertexBuffer {
         segments: &[V],
         label: &str,
     ) {
+        // Data that already exists as a slice stays on `write_buffer`: on the
+        // browser WebGPU backend `write_buffer_with` allocates and zeroes an
+        // internal staging Vec, adding work without removing this copy.
         let required = std::mem::size_of_val(segments) as u64;
         if required > 0 {
-            if self.capacity < required {
-                self.capacity = required.next_power_of_two();
-                self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: self.capacity,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
+            self.ensure_capacity(device, required, label);
             if let Some(buffer) = &self.buffer {
                 queue.write_buffer(buffer, 0, bytemuck::cast_slice(segments));
             }
         }
         self.count = segments.len() as u32;
+    }
+
+    fn upload_from_iter<V: bytemuck::Pod>(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+        records: impl Iterator<Item = V>,
+        label: &str,
+    ) -> Result<(), StagingUnavailable> {
+        if count == 0 {
+            self.count = 0;
+            return Ok(());
+        }
+
+        let required = count as u64 * std::mem::size_of::<V>() as u64;
+        self.ensure_capacity(device, required, label);
+        let size = wgpu::BufferSize::new(required).expect("nonzero record upload size");
+        let Some(mut view) = queue.write_buffer_with(
+            self.buffer.as_ref().expect("capacity ensures a buffer"),
+            0,
+            size,
+        ) else {
+            self.count = 0;
+            return Err(StagingUnavailable);
+        };
+        write_records(view.slice(..), records);
+        drop(view);
+        self.count = count;
+        Ok(())
+    }
+
+    fn ensure_capacity(&mut self, device: &wgpu::Device, required: u64, label: &str) {
+        if self.capacity < required {
+            self.capacity = required.next_power_of_two();
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: self.capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
     }
 }
 
@@ -186,6 +241,36 @@ impl GrowableVertexBuffer {
 enum ActiveSegmentBuffer {
     Normal,
     TopologicalDepth,
+}
+
+struct PipelineUploadTarget<'a> {
+    vertex_buffer: &'a mut GrowableVertexBuffer,
+    active_segment_buffer: &'a mut ActiveSegmentBuffer,
+    color_params_buffer: &'a wgpu::Buffer,
+    label: &'static str,
+    target: ActiveSegmentBuffer,
+}
+
+impl PipelineUploadTarget<'_> {
+    fn upload<V: bytemuck::Pod>(
+        self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+        records: impl Iterator<Item = V>,
+        color_params: ColorParams,
+    ) -> Result<(), StagingUnavailable> {
+        let result = self
+            .vertex_buffer
+            .upload_from_iter(device, queue, count, records, self.label);
+        // Switch even on failure: the target buffer now has count zero, while
+        // leaving the other layout active could draw a stale incompatible scene.
+        *self.active_segment_buffer = self.target;
+        if result.is_ok() {
+            queue.write_buffer(self.color_params_buffer, 0, &color_params.uniform_bytes());
+        }
+        result
+    }
 }
 
 macro_rules! impl_uniform_bytes {
@@ -347,6 +432,24 @@ impl LinePipeline2D {
         queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
+    pub(crate) fn upload_from_iter(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+        segments: impl Iterator<Item = Segment2D>,
+        color_params: ColorParams,
+    ) -> Result<(), StagingUnavailable> {
+        PipelineUploadTarget {
+            vertex_buffer: &mut self.segment_buffer,
+            active_segment_buffer: &mut self.active_segment_buffer,
+            color_params_buffer: &self.color_params_buffer,
+            label: "lsystem_2d_segments",
+            target: ActiveSegmentBuffer::Normal,
+        }
+        .upload(device, queue, count, segments, color_params)
+    }
+
     pub fn upload_with_topological_depth(
         &mut self,
         device: &wgpu::Device,
@@ -362,6 +465,24 @@ impl LinePipeline2D {
         );
         self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
         queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
+    }
+
+    pub(crate) fn upload_depth_from_iter(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+        segments: impl Iterator<Item = TopologicalDepthSegment2D>,
+        color_params: ColorParams,
+    ) -> Result<(), StagingUnavailable> {
+        PipelineUploadTarget {
+            vertex_buffer: &mut self.depth_segment_buffer,
+            active_segment_buffer: &mut self.active_segment_buffer,
+            color_params_buffer: &self.color_params_buffer,
+            label: "lsystem_2d_topological_depth_segments",
+            target: ActiveSegmentBuffer::TopologicalDepth,
+        }
+        .upload(device, queue, count, segments, color_params)
     }
 
     pub fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
@@ -490,6 +611,24 @@ impl LinePipeline3D {
         queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
     }
 
+    pub(crate) fn upload_from_iter(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+        segments: impl Iterator<Item = Segment3D>,
+        color_params: ColorParams,
+    ) -> Result<(), StagingUnavailable> {
+        PipelineUploadTarget {
+            vertex_buffer: &mut self.segment_buffer,
+            active_segment_buffer: &mut self.active_segment_buffer,
+            color_params_buffer: &self.color_params_buffer,
+            label: "lsystem_3d_segments",
+            target: ActiveSegmentBuffer::Normal,
+        }
+        .upload(device, queue, count, segments, color_params)
+    }
+
     pub fn upload_with_topological_depth(
         &mut self,
         device: &wgpu::Device,
@@ -505,6 +644,24 @@ impl LinePipeline3D {
         );
         self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
         queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
+    }
+
+    pub(crate) fn upload_depth_from_iter(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        count: u32,
+        segments: impl Iterator<Item = TopologicalDepthSegment3D>,
+        color_params: ColorParams,
+    ) -> Result<(), StagingUnavailable> {
+        PipelineUploadTarget {
+            vertex_buffer: &mut self.depth_segment_buffer,
+            active_segment_buffer: &mut self.active_segment_buffer,
+            color_params_buffer: &self.color_params_buffer,
+            label: "lsystem_3d_topological_depth_segments",
+            target: ActiveSegmentBuffer::TopologicalDepth,
+        }
+        .upload(device, queue, count, segments, color_params)
     }
 
     pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
@@ -821,6 +978,51 @@ mod tests {
         push_f32(&mut bytes, params.value);
         push_f32(&mut bytes, 0.0);
         bytes
+    }
+
+    fn sample_segments() -> [Segment2D; 2] {
+        [
+            Segment2D {
+                start: glam::vec2(1.0, 2.0),
+                end: glam::vec2(3.0, 4.0),
+            },
+            Segment2D {
+                start: glam::vec2(-5.0, 6.0),
+                end: glam::vec2(7.0, -8.0),
+            },
+        ]
+    }
+
+    #[test]
+    fn write_records_fills_staging_bytes_sequentially() {
+        let segments = sample_segments();
+        let expected = bytemuck::cast_slice(&segments);
+        let mut bytes = vec![0u8; expected.len()];
+
+        write_records(wgpu::WriteOnly::from_mut(&mut bytes), segments.into_iter());
+
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "more records than staging bytes")]
+    fn write_records_panics_when_there_are_too_many_records() {
+        let segments = sample_segments();
+        let mut bytes = vec![0u8; std::mem::size_of::<Segment2D>()];
+
+        write_records(wgpu::WriteOnly::from_mut(&mut bytes), segments.into_iter());
+    }
+
+    #[test]
+    #[should_panic(expected = "fewer records than staging bytes")]
+    fn write_records_panics_when_there_are_too_few_records() {
+        let segments = sample_segments();
+        let mut bytes = vec![0u8; std::mem::size_of_val(&segments)];
+
+        write_records(
+            wgpu::WriteOnly::from_mut(&mut bytes),
+            segments.into_iter().take(1),
+        );
     }
 
     #[test]
