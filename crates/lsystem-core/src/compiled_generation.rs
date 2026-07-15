@@ -100,6 +100,14 @@ impl CompiledGeneration2D {
     pub fn has_stack_directives(&self) -> bool {
         self.inner.has_stack_directives
     }
+    /// Number of drawn segments in this generation without expanding it.
+    ///
+    /// The count is exact while representable and saturates at `u64::MAX`.
+    pub fn drawn_segment_count(&self) -> u64 {
+        self.inner
+            .grammar
+            .drawn_segment_count(self.inner.params.iterations)
+    }
     pub fn segments(&self) -> impl Iterator<Item = [Vec2; 2]> + '_ {
         let p = self.inner.params;
         turtle::turtle2d::Segments2D::new(
@@ -123,6 +131,14 @@ impl CompiledGeneration2D {
 impl CompiledGeneration3D {
     pub fn has_stack_directives(&self) -> bool {
         self.inner.has_stack_directives
+    }
+    /// Number of drawn segments in this generation without expanding it.
+    ///
+    /// The count is exact while representable and saturates at `u64::MAX`.
+    pub fn drawn_segment_count(&self) -> u64 {
+        self.inner
+            .grammar
+            .drawn_segment_count(self.inner.params.iterations)
     }
     pub fn segments(&self) -> impl Iterator<Item = [Vec3; 2]> + '_ {
         let p = self.inner.params;
@@ -200,6 +216,37 @@ mod tests {
                 .map(|segment| segment.topological_depth)
                 .collect::<Vec<_>>(),
             [0, 1, 1]
+        );
+    }
+
+    #[test]
+    fn typed_generations_count_their_paired_iteration_depth() {
+        let config = |dimensions| {
+            GenerationConfig::new(
+                dimensions,
+                "F".to_string(),
+                4,
+                90.0,
+                1.0,
+                0.0,
+                [('F', "FF".to_string())].into(),
+            )
+            .expect("valid config")
+        };
+
+        let CompiledGeneration::TwoD(two_d) = config(Dimensions::TwoD).compile() else {
+            panic!("expected 2D generation")
+        };
+        assert_eq!(two_d.drawn_segment_count(), 16);
+        assert_eq!(two_d.drawn_segment_count(), two_d.segments().count() as u64);
+
+        let CompiledGeneration::ThreeD(three_d) = config(Dimensions::ThreeD).compile() else {
+            panic!("expected 3D generation")
+        };
+        assert_eq!(three_d.drawn_segment_count(), 16);
+        assert_eq!(
+            three_d.drawn_segment_count(),
+            three_d.segments().count() as u64
         );
     }
 }

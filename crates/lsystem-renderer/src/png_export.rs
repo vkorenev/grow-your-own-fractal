@@ -5,6 +5,7 @@ use lsystem_core::Config;
 
 use crate::camera::Camera;
 use crate::offscreen::{ExportScene, ReadbackError, RenderTarget, validate_height, validate_width};
+use crate::scene_upload::SceneUploadError;
 use crate::wgpu_util::{self, CreateDeviceError};
 
 /// Minimum export width and height in pixels accepted by [`render_png`] and
@@ -40,6 +41,7 @@ pub enum ExportError {
     MapChannelClosed,
     Poll(wgpu::PollError),
     Encode(png::EncodingError),
+    SceneUpload(SceneUploadError),
 }
 
 impl Display for ExportError {
@@ -63,6 +65,7 @@ impl Display for ExportError {
             Self::MapChannelClosed => write!(f, "export readback callback was dropped"),
             Self::Poll(err) => write!(f, "failed to poll GPU device for export readback: {err}"),
             Self::Encode(err) => write!(f, "failed to encode PNG: {err}"),
+            Self::SceneUpload(err) => err.fmt(f),
         }
     }
 }
@@ -74,8 +77,15 @@ impl Error for ExportError {
             Self::Map(err) => Some(err),
             Self::Poll(err) => Some(err),
             Self::Encode(err) => Some(err),
+            Self::SceneUpload(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+impl From<SceneUploadError> for ExportError {
+    fn from(error: SceneUploadError) -> Self {
+        Self::SceneUpload(error)
     }
 }
 
@@ -135,7 +145,7 @@ pub async fn render_rgba(
     validate_width(width)?;
     validate_height(height)?;
 
-    let scene = ExportScene::new(device, queue, config);
+    let scene = ExportScene::new(device, queue, config)?;
     scene.write_camera(queue, camera, width, height);
 
     let target = RenderTarget::new(device, width, height);
@@ -188,13 +198,29 @@ mod tests {
         assert_eq!(&png[16..20], &2u32.to_be_bytes());
         assert_eq!(&png[20..24], &1u32.to_be_bytes());
     }
+
+    #[test]
+    fn scene_upload_errors_delegate_display_and_source() {
+        let scene_error = SceneUploadError::SegmentLimitExceeded {
+            total_segments: 12,
+            limit: 10,
+        };
+        let error = ExportError::from(scene_error);
+
+        assert_eq!(error.to_string(), scene_error.to_string());
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<SceneUploadError>()),
+            Some(&scene_error)
+        );
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod gpu_tests {
     use super::*;
     use lsystem_core::{Dimensions, GenerationConfig, LineColorConfig, Rgb};
-    use std::collections::BTreeMap;
 
     fn trivial_config() -> lsystem_core::Config {
         lsystem_core::Config {
@@ -202,11 +228,11 @@ mod gpu_tests {
             generation: GenerationConfig::new(
                 Dimensions::TwoD,
                 "F".to_string(),
-                0,
+                1,
                 90.0,
                 1.0,
                 0.0,
-                BTreeMap::new(),
+                [('F', "F".to_string())].into(),
             )
             .expect("balanced config"),
             colors: lsystem_core::ColorConfig {
@@ -280,6 +306,13 @@ mod gpu_tests {
         assert_eq!(export.height, 32);
         assert_eq!(export.rgba.len(), 64 * 32 * 4);
         assert_ne!(&export.rgba[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(
+            export
+                .rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel != [0, 0, 0, 255]),
+            "export must contain rendered line pixels"
+        );
     }
 
     fn depth_gradient_config(dimensions: Dimensions) -> lsystem_core::Config {
@@ -287,11 +320,11 @@ mod gpu_tests {
         config.generation = GenerationConfig::new(
             dimensions,
             "F[+F]F".to_string(),
-            0,
+            1,
             90.0,
             1.0,
             0.0,
-            BTreeMap::new(),
+            [('F', "F".to_string())].into(),
         )
         .expect("balanced config");
         config.colors.line = LineColorConfig::Gradient {
@@ -310,6 +343,47 @@ mod gpu_tests {
     #[test]
     fn rgba_export_renders_trivial_2d_config_without_png_encoding() {
         assert_rgba_renders_without_png_encoding(trivial_config());
+    }
+
+    #[test]
+    fn rgba_export_renders_stamped_2d_depth_geometry() {
+        assert_rgba_renders_without_png_encoding(depth_gradient_config(Dimensions::TwoD));
+    }
+
+    #[test]
+    fn over_cap_export_returns_scene_upload_error() {
+        let (device, queue) = pollster::block_on(crate::wgpu_util::create_headless_device(
+            "over_cap_export_device",
+            "over-cap export test",
+        ))
+        .expect("headless device");
+        let mut config = trivial_config();
+        config.generation = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F".to_string(),
+            30,
+            90.0,
+            1.0,
+            0.0,
+            [('F', "FF".to_string())].into(),
+        )
+        .expect("valid config");
+
+        let result = pollster::block_on(render_rgba(
+            &device,
+            &queue,
+            &config,
+            64,
+            32,
+            &crate::camera::Camera::default(),
+        ));
+        let Err(error) = result else {
+            panic!("over-cap export must fail")
+        };
+        assert!(matches!(
+            error,
+            ExportError::SceneUpload(SceneUploadError::SegmentLimitExceeded { .. })
+        ));
     }
 
     #[test]

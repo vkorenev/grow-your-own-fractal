@@ -10,27 +10,27 @@ use crate::line_renderer::{
 };
 
 /// Axis-aligned bounds accumulator over 2D segment endpoints.
-struct Bounds2D {
+pub(crate) struct Bounds2D {
     min: Vec2,
     max: Vec2,
 }
 
 impl Bounds2D {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             min: Vec2::INFINITY,
             max: Vec2::NEG_INFINITY,
         }
     }
 
-    fn update(&mut self, a: Vec2, b: Vec2) {
+    pub(crate) fn update(&mut self, a: Vec2, b: Vec2) {
         self.min = self.min.min(a).min(b);
         self.max = self.max.max(a).max(b);
     }
 
     /// Falls back to the unit box when no endpoints were seen, so empty
     /// geometry still yields a usable viewport.
-    fn finish(self) -> ([f32; 2], [f32; 2]) {
+    pub(crate) fn finish(self) -> ([f32; 2], [f32; 2]) {
         if self.min.x.is_infinite() {
             ([-1.0, -1.0], [1.0, 1.0])
         } else {
@@ -40,27 +40,27 @@ impl Bounds2D {
 }
 
 /// Axis-aligned bounds accumulator over 3D segment endpoints.
-struct Bounds3D {
+pub(crate) struct Bounds3D {
     min: Vec3,
     max: Vec3,
 }
 
 impl Bounds3D {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             min: Vec3::INFINITY,
             max: Vec3::NEG_INFINITY,
         }
     }
 
-    fn update(&mut self, a: Vec3, b: Vec3) {
+    pub(crate) fn update(&mut self, a: Vec3, b: Vec3) {
         self.min = self.min.min(a).min(b);
         self.max = self.max.max(a).max(b);
     }
 
     /// Falls back to the unit box when no endpoints were seen, so empty
     /// geometry still yields a usable viewport.
-    fn finish(self) -> ([f32; 3], [f32; 3]) {
+    pub(crate) fn finish(self) -> ([f32; 3], [f32; 3]) {
         if self.min.x.is_infinite() {
             ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
         } else {

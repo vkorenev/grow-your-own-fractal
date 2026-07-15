@@ -114,7 +114,7 @@ pub async fn render_animation(
     validate_width(width)?;
     validate_height(height)?;
 
-    let scene = ExportScene::new(device, queue, config);
+    let scene = ExportScene::new(device, queue, config)?;
     let target = RenderTarget::new(device, width, height);
     let background = config.colors.background.to_array();
     let base_color = scene.color_params();
@@ -302,7 +302,6 @@ mod tests {
 mod gpu_tests {
     use super::*;
     use lsystem_core::{Dimensions, GenerationConfig};
-    use std::collections::BTreeMap;
 
     fn trivial_config() -> lsystem_core::Config {
         lsystem_core::Config {
@@ -310,11 +309,11 @@ mod gpu_tests {
             generation: GenerationConfig::new(
                 Dimensions::TwoD,
                 "F".to_string(),
-                0,
+                1,
                 90.0,
                 1.0,
                 0.0,
-                BTreeMap::new(),
+                [('F', "F".to_string())].into(),
             )
             .expect("balanced config"),
             colors: lsystem_core::ColorConfig {
@@ -346,7 +345,7 @@ mod gpu_tests {
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);
         let decoder = png::Decoder::new(std::io::Cursor::new(export.bytes.as_slice()));
-        let reader = decoder.read_info().unwrap();
+        let mut reader = decoder.read_info().unwrap();
         let info = reader.info();
         assert_eq!((info.width, info.height), (256, 128));
         assert_eq!(
@@ -361,5 +360,16 @@ mod gpu_tests {
             .expect("missing frame control for first frame");
         assert_eq!(fc.delay_num, 1);
         assert_eq!(fc.delay_den, 12);
+
+        let mut pixels = vec![0; reader.output_buffer_size().expect("bounded APNG frame")];
+        let frame = reader
+            .next_frame(&mut pixels)
+            .expect("first APNG frame decodes");
+        assert!(
+            pixels[..frame.buffer_size()]
+                .chunks_exact(4)
+                .any(|pixel| pixel != [0, 0, 0, 255]),
+            "APNG frame must contain stamped line pixels"
+        );
     }
 }

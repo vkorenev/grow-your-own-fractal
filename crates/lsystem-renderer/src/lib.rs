@@ -15,4 +15,5 @@ pub mod lsystem_bridge;
 mod offscreen;
 #[cfg(feature = "png")]
 pub mod png_export;
+pub mod scene_upload;
 pub mod wgpu_util;

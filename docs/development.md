@@ -87,7 +87,8 @@ Run offscreen renderer microbenchmarks:
 cargo bench -p lsystem-renderer --features png --bench offscreen_render
 ```
 
-The renderer benchmark measures offscreen RGBA rendering and GPU readback. It
+The renderer benchmark measures config compilation, generation, scene/pipeline
+construction, staging upload, offscreen RGBA rendering, and GPU readback. It
 does not include PNG encoding time.
 
 ## Profiling

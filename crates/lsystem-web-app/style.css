@@ -117,7 +117,7 @@ textarea {
   touch-action: none;
 }
 
-.unsupported {
+.viewport-error {
   position: absolute;
   inset: 0;
   display: flex;
@@ -125,15 +125,23 @@ textarea {
   justify-content: center;
   padding: 24px;
   text-align: center;
-  background: #111318;
+  pointer-events: none;
 }
 
-.unsupported h2 {
+.viewport-error > div {
+  max-width: 560px;
+  padding: 20px 24px;
+  border-radius: 8px;
+  background: rgb(17 19 24 / 90%);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 35%);
+}
+
+.viewport-error h2 {
   margin: 0 0 8px;
   font-size: 22px;
 }
 
-.unsupported p {
+.viewport-error p {
   margin: 0;
   color: #b9c2cf;
 }
@@ -448,4 +456,3 @@ textarea {
   margin-left: 6px;
   vertical-align: middle;
 }
-

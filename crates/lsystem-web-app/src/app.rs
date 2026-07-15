@@ -1,6 +1,6 @@
 use crate::panels::grammar::GrammarRow;
 use crate::presets::max_iterations_for_editor_config;
-use crate::renderer::{CanvasRenderer, RenderStatus};
+use crate::renderer::{CanvasRenderer, RebuildRenderOutcome, RenderStatus};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
@@ -9,12 +9,45 @@ use lsystem_app_model::{
     advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols};
+use lsystem_renderer::scene_upload::SceneUploadError;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
 pub(crate) type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
 
 const ROTATION_STEP_DEG: f32 = 5.0;
+
+#[derive(Clone)]
+enum ViewportError {
+    RendererUnavailable(String),
+    SceneUpload(SceneUploadError),
+}
+
+impl ViewportError {
+    fn title(&self) -> &'static str {
+        match self {
+            Self::RendererUnavailable(_) => "GPU renderer unavailable",
+            Self::SceneUpload(_) => "Unable to render fractal",
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::RendererUnavailable(message) => message.clone(),
+            Self::SceneUpload(SceneUploadError::SegmentLimitExceeded {
+                total_segments,
+                limit,
+            }) => format!(
+                "This fractal generated {total_segments} segments, but this device can display at \
+                 most {limit}. Reduce the iteration count or simplify the grammar."
+            ),
+            Self::SceneUpload(SceneUploadError::StagingUnavailable) => {
+                "GPU staging memory could not be allocated. Reduce the iteration count or retry."
+                    .to_string()
+            }
+        }
+    }
+}
 
 /// Grammar-editor draft state. The draft signals live in `App` (not in the
 /// grammar panel) because `select_current_config` resyncs them on entry
@@ -92,7 +125,7 @@ pub(crate) fn App() -> impl IntoView {
     let workspace_error = RwSignal::new(None::<String>);
     let animation_error = RwSignal::new(None::<String>);
     let colors_error = RwSignal::new(None::<String>);
-    let gpu_error = RwSignal::new(None::<String>);
+    let viewport_error = RwSignal::new(None::<ViewportError>);
     let auto_rotate = RwSignal::new(true);
     let auto_rotate_speed = RwSignal::new(20.0f32);
     let hue_rotation = RwSignal::new(HueRotation::default());
@@ -185,24 +218,24 @@ pub(crate) fn App() -> impl IntoView {
             match renderer_state.recover_surface(canvas.clone()).await {
                 Ok(()) => {
                     let config = config_for_render();
-                    let status =
+                    let outcome =
                         renderer_state.set_config_preserving_camera_and_render(&canvas, &config);
-                    if let Some(reason) = status.unexpected_skip_reason() {
+                    if let Some(reason) = outcome.render_status.unexpected_skip_reason() {
                         log::error!("Skipped GPU frame after surface recovery: {reason}");
                     }
-                    if status == RenderStatus::SurfaceLost {
+                    if outcome.render_status == RenderStatus::SurfaceLost {
                         log::error!("GPU surface was lost again after recovery");
-                        gpu_error.set(Some(
-                            "GPU surface was lost again after recovery".to_string(),
-                        ));
+                        viewport_error.set(Some(ViewportError::RendererUnavailable(
+                            "GPU surface was lost again after recovery.".to_string(),
+                        )));
                     } else {
-                        gpu_error.set(None);
+                        update_viewport_error(viewport_error, outcome.rebuild_result);
                         renderer.update_value(|opt| *opt = Some(renderer_state));
                     }
                 }
                 Err(err) => {
                     log::error!("Failed to recover GPU surface: {err}");
-                    gpu_error.set(Some(err.to_string()));
+                    viewport_error.set(Some(ViewportError::RendererUnavailable(err.to_string())));
                 }
             }
         });
@@ -276,19 +309,22 @@ pub(crate) fn App() -> impl IntoView {
         wasm_bindgen_futures::spawn_local(async move {
             match CanvasRenderer::new(canvas.clone()).await {
                 Ok(new_renderer) => {
-                    gpu_error.set(None);
                     renderer.update_value(|opt| *opt = Some(new_renderer));
                     let config = config_for_render();
-                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                        r.set_config_and_render(c, &config)
-                    });
+                    with_renderer_for_rebuild(
+                        canvas,
+                        renderer,
+                        recover_after_render,
+                        viewport_error,
+                        |r, c| r.set_config_and_render(c, &config),
+                    );
                     if animation_active.get_untracked() {
                         start_animation_loop();
                     }
                 }
                 Err(err) => {
                     log::error!("Failed to initialize GPU renderer: {err}");
-                    gpu_error.set(Some(err.to_string()));
+                    viewport_error.set(Some(ViewportError::RendererUnavailable(err.to_string())));
                 }
             }
         });
@@ -331,13 +367,19 @@ pub(crate) fn App() -> impl IntoView {
             };
             let generation_changed = prev.is_none_or(|p| p.0 != current.0);
             let config = config_for_render();
-            with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                if generation_changed {
-                    r.set_config_and_render(c, &config)
-                } else {
+            if generation_changed {
+                with_renderer_for_rebuild(
+                    canvas,
+                    renderer,
+                    recover_after_render,
+                    viewport_error,
+                    |r, c| r.set_config_and_render(c, &config),
+                );
+            } else {
+                with_renderer(canvas, renderer, recover_after_render, |r, c| {
                     r.set_colors_and_render(c, &config)
-                }
-            });
+                });
+            }
         },
         false,
     );
@@ -661,16 +703,26 @@ pub(crate) fn App() -> impl IntoView {
                         }
                     }
                 />
-                <div class:hidden=move || gpu_error.get().is_none() class="unsupported">
+                <div
+                    class:hidden=move || viewport_error.get().is_none()
+                    class="viewport-error"
+                    role="alert"
+                >
                     <div>
-                        <h2>"GPU rendering is not available in this browser."</h2>
+                        <h2>
+                            {move || {
+                                viewport_error
+                                    .get()
+                                    .map(|error| error.title())
+                                    .unwrap_or_default()
+                            }}
+                        </h2>
                         <p>
                             {move || {
-                                gpu_error
+                                viewport_error
                                     .get()
-                                    .unwrap_or_else(|| {
-                                        "Try a browser with WebGPU or WebGL2 enabled.".to_string()
-                                    })
+                                    .map(|error| error.message())
+                                    .unwrap_or_default()
                             }}
                         </p>
                     </div>
@@ -731,6 +783,35 @@ pub(crate) fn with_renderer<F, H>(
     if let Some(Some(status)) = status {
         recover_after_render(status, canvas);
     }
+}
+
+fn with_renderer_for_rebuild<F, H>(
+    canvas: web_sys::HtmlCanvasElement,
+    renderer: RendererState,
+    recover_after_render: H,
+    viewport_error: RwSignal<Option<ViewportError>>,
+    render: F,
+) where
+    F: FnOnce(&mut CanvasRenderer, &web_sys::HtmlCanvasElement) -> RebuildRenderOutcome,
+    H: Fn(RenderStatus, web_sys::HtmlCanvasElement),
+{
+    with_renderer(
+        canvas,
+        renderer,
+        recover_after_render,
+        |renderer, canvas| {
+            let outcome = render(renderer, canvas);
+            update_viewport_error(viewport_error, outcome.rebuild_result);
+            outcome.render_status
+        },
+    );
+}
+
+fn update_viewport_error(
+    viewport_error: RwSignal<Option<ViewportError>>,
+    rebuild_result: Result<(), SceneUploadError>,
+) {
+    viewport_error.set(rebuild_result.err().map(ViewportError::SceneUpload));
 }
 
 async fn next_animation_frame() -> Result<f64, &'static str> {

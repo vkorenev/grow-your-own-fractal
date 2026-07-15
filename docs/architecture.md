@@ -29,19 +29,19 @@ Runtime generation starts from a resolved `GenerationConfig`.
 GenerationConfig
   -> CompiledGeneration
   -> typed 2D / 3D generation
-  -> ExpandIter
-  -> Segments2D / Segments3D
-  -> renderer bridge segment records
+  -> template stamps or interpreted Segments2D / Segments3D
+  -> renderer scene upload
   -> wgpu instance buffer
 ```
 
 The expansion and turtle layers are streaming iterators. They do not build the
 full expanded string or an intermediate vertex list before yielding geometry.
-The renderer bridge collects only the GPU instance records needed for upload.
-Do not introduce another collection of expanded symbols, raw geometry, or
-vertices; the renderer bridge's segment-instance `Vec` is the intentional
-collection point before GPU upload. Adding another large collection breaks the
-memory-bounded property for high iteration counts.
+For stamped web and offscreen rendering, transformed segment records stream
+directly into wgpu staging memory; only the bounded stamp list remains in CPU
+memory. The native Iced app generates without GPU access, and interpreter
+fallback remains the semantic oracle, so those paths intentionally collect one
+bounded segment-instance `Vec` and upload it as a slice. Do not add another
+collection of expanded symbols, raw geometry, or vertices to either path.
 
 Config editing has a separate parse/validate/resolve pipeline.
 
@@ -64,6 +64,11 @@ core model, so TOML values outside `0..=65535` are invalid. The interactive
 apps additionally clamp iterations to a smaller segment-budget-derived
 maximum. The type bound limits iteration-linear work; the segment cap remains
 necessary because expanded output can grow exponentially.
+
+Compiled generations can calculate their exact drawn-segment count with a
+saturating byte-domain recurrence before expansion. Renderer scene upload uses
+that count to enforce the actual plain/depth record-layout cap before template
+construction, stamp collection, interpreter generation, or pipeline mutation.
 
 ## Core Model
 
@@ -171,23 +176,26 @@ offscreen exports.
   layout.
 - `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
-  2D/3D line pipelines, color uniforms, and surface frame handling.
+  2D/3D line pipelines, color uniforms, and surface frame handling. Existing
+  segment slices use `Queue::write_buffer`; stamped iterators use
+  `Queue::write_buffer_with` to fill mapped staging memory directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters. The `stamped_*`
-  variants build the same segment data from core templates and stamps,
-  replacing per-symbol interpretation of the template-depth iterations with a
-  tight per-segment transform loop. All geometry consumers — both apps'
-  scene builds, PNG/APNG offscreen export, and core SVG export — generate
-  through the stamped path and fall back to the interpreter when no template
-  depth fits the budget.
+  maps `LineColorConfig` into shader color parameters. Its two-phase stamped
+  scenes collect stamps and then stream transformed records in traversal order.
+- `scene_upload.rs` is the public renderer operation for web and offscreen
+  scene generation/upload. It owns template selection and interpreter fallback,
+  clamps depth requests for bracketless grammars, enforces layout-keyed caps,
+  and returns opaque successful-upload metadata. A cap error preserves the
+  previous pipeline scene; a staging error clears the attempted target layout.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
-  output with an offscreen target behind the `png` feature.
+  output with an offscreen target behind the `png` feature. Segment-limit and
+  staging failures surface as typed export errors instead of empty images.
 - `wgpu_util.rs` centralizes instance/device setup and error logging for native
   and browser targets.
 
 Line rendering is instanced: one GPU record represents one segment, and the
 shader selects the start or end point from `vertex_index`. Buffers grow to the
-next power-of-two capacity and are reused through `Queue::write_buffer`.
+next power-of-two capacity and are reused across slice and staging uploads.
 
 The 2D and 3D line pipelines are separate because they use different vertex
 entry points, vertex-buffer layouts, and transform uniforms, so they live in
@@ -224,10 +232,17 @@ when geometry changes and update only color uniforms for color-only edits.
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/
 roll/auto-rotate/reset operations, and rebuilds GPU state after surface loss
-while preserving CPU-side scene, camera, and color state. Scene rebuilds
-generate through the stamped path with interpreter fallback (see the
-renderer-bridge notes above); the generation log line reports the chosen
-`template_iterations` (0 = interpreter).
+while preserving camera and color state. Scene rebuild uploads immediately and
+retains only opaque bounds/count/layout/method metadata, not segment vectors.
+Before any successful upload and after either upload error, the renderer uses a
+dimensionless no-upload state. That state selects and mutates neither line
+pipeline, so the canvas clears and presents only the configured background;
+the app displays a structured, actionable viewport error for the failed upload.
+A later successful upload restores its 2D or 3D scene metadata and clears that
+error, including when the successful scene has zero segments. The generation
+log reports the chosen `template_iterations` (0 = interpreter), while the
+upload-frame metric measures from successful rebuild completion through the
+next submitted frame's GPU completion.
 
 ## Export Behavior
 

@@ -154,21 +154,9 @@ pub(crate) fn choose_template_iterations(
     // `m` times.
     let mut yields = [0u64; 256];
     yields[b'F' as usize] = 1;
-    let mut updates: Vec<(u8, u64)> = Vec::with_capacity(ruled.len());
     let mut best = 0;
     for m in 1..=iterations {
-        updates.clear();
-        for &symbol in &ruled {
-            let v = grammar
-                .rule_rhs(symbol)
-                .iter()
-                .map(|&byte| yields[byte as usize])
-                .fold(0u64, |a, x| a.saturating_add(x));
-            updates.push((symbol, v));
-        }
-        for &(symbol, v) in &updates {
-            yields[symbol as usize] = v;
-        }
+        yields = grammar.advance_drawn_segment_yields(&yields);
         // Start at 1 for the built-in unit-F template every set stores.
         let total = ruled
             .iter()
@@ -667,6 +655,52 @@ mod tests {
     fn tree_roll_3d_stamped_matches_interpreter_with_depths() {
         for m in 1..=3 {
             assert_matches_interpreter_3d(&tree_roll_3d(), m);
+        }
+    }
+
+    #[test]
+    fn drawn_segment_counts_match_fixtures_across_iteration_depths() {
+        for mut config in [koch(), dragon(), plant()] {
+            let max_iterations = config.iterations;
+            for iterations in 0..=max_iterations {
+                config.iterations = iterations;
+                let generation = compile_2d(&config);
+                let counted = generation.drawn_segment_count();
+                assert_eq!(
+                    counted,
+                    generation.segments().count() as u64,
+                    "2D count at iteration {iterations}"
+                );
+                if iterations > 0 {
+                    let set = TemplateSet2D::build(generation, 1).expect("template set builds");
+                    assert_eq!(
+                        counted,
+                        set.emit_stamps(|_, _| {}).total_segments,
+                        "2D stamp stats at iteration {iterations}"
+                    );
+                }
+            }
+        }
+
+        let mut config = hilbert_3d();
+        let max_iterations = config.iterations;
+        for iterations in 0..=max_iterations {
+            config.iterations = iterations;
+            let generation = compile_3d(&config);
+            let counted = generation.drawn_segment_count();
+            assert_eq!(
+                counted,
+                generation.segments().count() as u64,
+                "3D count at iteration {iterations}"
+            );
+            if iterations > 0 {
+                let set = TemplateSet3D::build(generation, 1).expect("template set builds");
+                assert_eq!(
+                    counted,
+                    set.emit_stamps(|_, _| {}).total_segments,
+                    "3D stamp stats at iteration {iterations}"
+                );
+            }
         }
     }
 
