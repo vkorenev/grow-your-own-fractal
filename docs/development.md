@@ -113,8 +113,8 @@ RUSTFLAGS="-C link-arg=-Wl,--no-rosegment" CARGO_PROFILE_BENCH_DEBUG=true cargo 
 
 ## Full Verification
 
-Run the same checks CI runs when a change affects code, build configuration,
-rustdoc, or web app behavior:
+For Rust code, build configuration, or rustdoc changes, the normal local
+pre-submit verification is the relevant subset of these Cargo checks:
 
 ```sh
 cargo fmt --check --all
@@ -124,14 +124,36 @@ cargo test --workspace --all-features --all-targets
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
 cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
 cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
+```
+
+CI also runs release Trunk builds for both web apps. Running them locally is
+usually unnecessary for a Rust-only refactor when the native and wasm Cargo
+checks above succeed. A local Trunk build is worth the additional time when a
+change affects:
+
+- a `Trunk.toml`, HTML entry point, static asset, public path, or deployment
+  URL;
+- wasm startup, JavaScript bindings, browser-only feature gates, or code that
+  is exercised only when the final wasm artifact is linked;
+- dependencies, build scripts, generated shader bindings, or wgpu integration
+  in a way that could fail during release linking or bundling;
+- release artifact contents or size; or
+- a Trunk-build failure seen in CI.
+
+For an app-specific change, run only its corresponding command:
+
+```sh
 trunk build --release --config crates/lsystem-app/Trunk.toml
 trunk build --release --config crates/lsystem-web-app/Trunk.toml
 ```
 
+Run both commands for cross-cutting web, renderer, dependency, or deployment
+changes. Otherwise, rely on CI for the final Trunk-build coverage.
+
 For documentation-only changes that do not affect rustdoc or build scripts,
 spellcheck/link review may be enough. For code changes, prefer the smallest
-relevant command while iterating, then run the full affected verification before
-submitting.
+relevant command while iterating, then run the full affected verification
+before submitting.
 
 ## Continuous Integration
 
