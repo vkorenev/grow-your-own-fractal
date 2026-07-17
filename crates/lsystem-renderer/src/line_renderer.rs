@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use encase::UniformBuffer;
-use lsystem_core::Dimensions;
+use lsystem_core::{D2, D3, Dimension, Dimensions};
 use wgpu::util::DeviceExt;
 
 pub use crate::generated_shader_2d::{
@@ -13,6 +14,7 @@ pub use crate::generated_shader_3d::{Mvp, Segment3D, TopologicalDepthSegment3D};
 
 use crate::generated_shader_2d;
 use crate::generated_shader_3d;
+use crate::lsystem_bridge::BoundsPoint;
 use crate::wgpu_util;
 
 impl Default for Mvp {
@@ -23,38 +25,89 @@ impl Default for Mvp {
     }
 }
 
-/// Maximum number of line segments that fit in the platform-selected wgpu max buffer size.
-/// Each 2D segment occupies one `Segment2D` instance record.
-const MAX_SEGMENTS_2D: u64 =
-    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<Segment2D>() as u64;
-
-/// Maximum number of topological-depth 2D line segments that fit in the max buffer size.
-const MAX_DEPTH_SEGMENTS_2D: u64 =
-    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<TopologicalDepthSegment2D>() as u64;
-
-/// Maximum number of 3D line segments that fit in the platform-selected wgpu max buffer size.
-/// Each 3D segment occupies one `Segment3D` instance record.
-const MAX_SEGMENTS_3D: u64 =
-    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<Segment3D>() as u64;
-
-/// Maximum number of topological-depth 3D line segments that fit in the max buffer size.
-const MAX_DEPTH_SEGMENTS_3D: u64 =
-    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<TopologicalDepthSegment3D>() as u64;
+/// Maximum number of records of `R` that fit in the platform-selected wgpu max buffer size.
+pub(crate) const fn record_limit<R>() -> u64 {
+    wgpu_util::MAX_BUFFER_SIZE_BYTES / std::mem::size_of::<R>() as u64
+}
 
 /// Returns the segment cap appropriate for the given dimensions.
 pub fn max_segments_for(dimensions: Dimensions) -> u64 {
     match dimensions {
-        Dimensions::ThreeD => MAX_SEGMENTS_3D,
-        Dimensions::TwoD => MAX_SEGMENTS_2D,
+        Dimensions::ThreeD => record_limit::<Segment3D>(),
+        Dimensions::TwoD => record_limit::<Segment2D>(),
     }
 }
 
 /// Returns the segment cap appropriate for the dimensions and whether topological depth is used.
 pub fn max_segments_for_line_color(dimensions: Dimensions, uses_topological_depth: bool) -> u64 {
     match dimensions {
-        Dimensions::TwoD if uses_topological_depth => MAX_DEPTH_SEGMENTS_2D,
-        Dimensions::ThreeD if uses_topological_depth => MAX_DEPTH_SEGMENTS_3D,
+        Dimensions::TwoD if uses_topological_depth => record_limit::<TopologicalDepthSegment2D>(),
+        Dimensions::ThreeD if uses_topological_depth => record_limit::<TopologicalDepthSegment3D>(),
         _ => max_segments_for(dimensions),
+    }
+}
+
+/// Renderer capabilities selected by a type-level spatial dimension.
+pub trait RenderDimension: Dimension<Point: BoundsPoint> {
+    type PlainRecord: bytemuck::Pod;
+    type DepthRecord: bytemuck::Pod;
+
+    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point;
+    fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord;
+    fn depth_record(
+        start: Self::Point,
+        end: Self::Point,
+        topological_depth: u32,
+    ) -> Self::DepthRecord;
+}
+
+impl RenderDimension for D2 {
+    type PlainRecord = Segment2D;
+    type DepthRecord = TopologicalDepthSegment2D;
+
+    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point {
+        rotation.rotate(point)
+    }
+
+    fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord {
+        Segment2D { start, end }
+    }
+
+    fn depth_record(
+        start: Self::Point,
+        end: Self::Point,
+        topological_depth: u32,
+    ) -> Self::DepthRecord {
+        TopologicalDepthSegment2D {
+            start,
+            end,
+            topological_depth,
+        }
+    }
+}
+
+impl RenderDimension for D3 {
+    type PlainRecord = Segment3D;
+    type DepthRecord = TopologicalDepthSegment3D;
+
+    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point {
+        rotation * point
+    }
+
+    fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord {
+        Segment3D { start, end }
+    }
+
+    fn depth_record(
+        start: Self::Point,
+        end: Self::Point,
+        topological_depth: u32,
+    ) -> Self::DepthRecord {
+        TopologicalDepthSegment3D {
+            start,
+            end,
+            topological_depth,
+        }
     }
 }
 
@@ -332,18 +385,26 @@ fn create_line_pipeline(
     })
 }
 
-pub struct LinePipeline2D {
+pub struct LinePipeline<D: RenderDimension> {
     pipeline: wgpu::RenderPipeline,
     depth_pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
+    view_buffer: wgpu::Buffer,
     color_params_buffer: wgpu::Buffer,
-    bind_group: generated_shader_2d::bind_groups::BindGroup0,
+    bind_group: wgpu::BindGroup,
     segment_buffer: GrowableVertexBuffer,
     depth_segment_buffer: GrowableVertexBuffer,
     active_segment_buffer: ActiveSegmentBuffer,
+    segment_label: &'static str,
+    depth_segment_label: &'static str,
+    draw_label: &'static str,
+    depth_draw_label: &'static str,
+    dimension: PhantomData<fn() -> D>,
 }
 
-impl LinePipeline2D {
+pub type LinePipeline2D = LinePipeline<D2>;
+pub type LinePipeline3D = LinePipeline<D3>;
+
+impl LinePipeline<D2> {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lsystem_2d_shader"),
@@ -377,6 +438,7 @@ impl LinePipeline2D {
                 transform: uniform_buffer.as_entire_buffer_binding(),
             },
         );
+        let bind_group = bind_group.inner().clone();
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lsystem_2d_pipeline_layout"),
@@ -407,125 +469,25 @@ impl LinePipeline2D {
             generated_shader_2d::fragment_state(&shader, &fragment_entry),
         );
 
-        Self {
+        Self::from_parts(
             pipeline,
             depth_pipeline,
             uniform_buffer,
             color_params_buffer,
             bind_group,
-            segment_buffer: GrowableVertexBuffer::new(),
-            depth_segment_buffer: GrowableVertexBuffer::new(),
-            active_segment_buffer: ActiveSegmentBuffer::Normal,
-        }
-    }
-
-    pub fn upload(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        segments: &[Segment2D],
-        color_params: ColorParams,
-    ) {
-        self.segment_buffer
-            .upload(device, queue, segments, "lsystem_2d_segments");
-        self.active_segment_buffer = ActiveSegmentBuffer::Normal;
-        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
-    }
-
-    pub(crate) fn upload_from_iter(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        count: u32,
-        segments: impl Iterator<Item = Segment2D>,
-        color_params: ColorParams,
-    ) -> Result<(), StagingUnavailable> {
-        PipelineUploadTarget {
-            vertex_buffer: &mut self.segment_buffer,
-            active_segment_buffer: &mut self.active_segment_buffer,
-            color_params_buffer: &self.color_params_buffer,
-            label: "lsystem_2d_segments",
-            target: ActiveSegmentBuffer::Normal,
-        }
-        .upload(device, queue, count, segments, color_params)
-    }
-
-    pub fn upload_with_topological_depth(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        segments: &[TopologicalDepthSegment2D],
-        color_params: ColorParams,
-    ) {
-        self.depth_segment_buffer.upload(
-            device,
-            queue,
-            segments,
+            "lsystem_2d_segments",
             "lsystem_2d_topological_depth_segments",
-        );
-        self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
-        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
-    }
-
-    pub(crate) fn upload_depth_from_iter(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        count: u32,
-        segments: impl Iterator<Item = TopologicalDepthSegment2D>,
-        color_params: ColorParams,
-    ) -> Result<(), StagingUnavailable> {
-        PipelineUploadTarget {
-            vertex_buffer: &mut self.depth_segment_buffer,
-            active_segment_buffer: &mut self.active_segment_buffer,
-            color_params_buffer: &self.color_params_buffer,
-            label: "lsystem_2d_topological_depth_segments",
-            target: ActiveSegmentBuffer::TopologicalDepth,
-        }
-        .upload(device, queue, count, segments, color_params)
+            "lsystem_2d_line_draw",
+            "lsystem_2d_depth_line_draw",
+        )
     }
 
     pub fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
-        queue.write_buffer(&self.uniform_buffer, 0, &transform.uniform_bytes());
-    }
-
-    pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
-        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
-    }
-
-    pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[(0, self.bind_group.inner())];
-        match self.active_segment_buffer {
-            ActiveSegmentBuffer::Normal => draw_line_list(
-                render_pass,
-                &self.pipeline,
-                bind_groups,
-                &self.segment_buffer,
-                "lsystem_2d_line_draw",
-            ),
-            ActiveSegmentBuffer::TopologicalDepth => draw_line_list(
-                render_pass,
-                &self.depth_pipeline,
-                bind_groups,
-                &self.depth_segment_buffer,
-                "lsystem_2d_depth_line_draw",
-            ),
-        }
+        self.write_view_bytes(queue, &transform.uniform_bytes());
     }
 }
 
-pub struct LinePipeline3D {
-    pipeline: wgpu::RenderPipeline,
-    depth_pipeline: wgpu::RenderPipeline,
-    mvp_buffer: wgpu::Buffer,
-    color_params_buffer: wgpu::Buffer,
-    bind_group: generated_shader_3d::bind_groups::BindGroup0,
-    segment_buffer: GrowableVertexBuffer,
-    depth_segment_buffer: GrowableVertexBuffer,
-    active_segment_buffer: ActiveSegmentBuffer,
-}
-
-impl LinePipeline3D {
+impl LinePipeline<D3> {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lsystem_3d_shader"),
@@ -556,6 +518,7 @@ impl LinePipeline3D {
                 mvp: mvp_buffer.as_entire_buffer_binding(),
             },
         );
+        let bind_group = bind_group.inner().clone();
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lsystem_3d_pipeline_layout"),
@@ -586,29 +549,69 @@ impl LinePipeline3D {
             generated_shader_3d::fragment_state(&shader, &fragment_entry),
         );
 
-        Self {
+        Self::from_parts(
             pipeline,
             depth_pipeline,
             mvp_buffer,
             color_params_buffer,
             bind_group,
+            "lsystem_3d_segments",
+            "lsystem_3d_topological_depth_segments",
+            "lsystem_3d_line_draw",
+            "lsystem_3d_depth_line_draw",
+        )
+    }
+
+    pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
+        self.write_view_bytes(queue, &mvp.uniform_bytes());
+    }
+}
+
+impl<D: RenderDimension> LinePipeline<D> {
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
+        pipeline: wgpu::RenderPipeline,
+        depth_pipeline: wgpu::RenderPipeline,
+        view_buffer: wgpu::Buffer,
+        color_params_buffer: wgpu::Buffer,
+        bind_group: wgpu::BindGroup,
+        segment_label: &'static str,
+        depth_segment_label: &'static str,
+        draw_label: &'static str,
+        depth_draw_label: &'static str,
+    ) -> Self {
+        Self {
+            pipeline,
+            depth_pipeline,
+            view_buffer,
+            color_params_buffer,
+            bind_group,
             segment_buffer: GrowableVertexBuffer::new(),
             depth_segment_buffer: GrowableVertexBuffer::new(),
             active_segment_buffer: ActiveSegmentBuffer::Normal,
+            segment_label,
+            depth_segment_label,
+            draw_label,
+            depth_draw_label,
+            dimension: PhantomData,
         }
+    }
+
+    fn write_view_bytes(&self, queue: &wgpu::Queue, bytes: &[u8]) {
+        queue.write_buffer(&self.view_buffer, 0, bytes);
     }
 
     pub fn upload(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        segments: &[Segment3D],
+        segments: &[D::PlainRecord],
         color_params: ColorParams,
     ) {
         self.segment_buffer
-            .upload(device, queue, segments, "lsystem_3d_segments");
+            .upload(device, queue, segments, self.segment_label);
         self.active_segment_buffer = ActiveSegmentBuffer::Normal;
-        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
+        self.write_color_params(queue, color_params);
     }
 
     pub(crate) fn upload_from_iter(
@@ -616,14 +619,14 @@ impl LinePipeline3D {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         count: u32,
-        segments: impl Iterator<Item = Segment3D>,
+        segments: impl Iterator<Item = D::PlainRecord>,
         color_params: ColorParams,
     ) -> Result<(), StagingUnavailable> {
         PipelineUploadTarget {
             vertex_buffer: &mut self.segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
             color_params_buffer: &self.color_params_buffer,
-            label: "lsystem_3d_segments",
+            label: self.segment_label,
             target: ActiveSegmentBuffer::Normal,
         }
         .upload(device, queue, count, segments, color_params)
@@ -633,17 +636,13 @@ impl LinePipeline3D {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        segments: &[TopologicalDepthSegment3D],
+        segments: &[D::DepthRecord],
         color_params: ColorParams,
     ) {
-        self.depth_segment_buffer.upload(
-            device,
-            queue,
-            segments,
-            "lsystem_3d_topological_depth_segments",
-        );
+        self.depth_segment_buffer
+            .upload(device, queue, segments, self.depth_segment_label);
         self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
-        queue.write_buffer(&self.color_params_buffer, 0, &color_params.uniform_bytes());
+        self.write_color_params(queue, color_params);
     }
 
     pub(crate) fn upload_depth_from_iter(
@@ -651,21 +650,17 @@ impl LinePipeline3D {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         count: u32,
-        segments: impl Iterator<Item = TopologicalDepthSegment3D>,
+        segments: impl Iterator<Item = D::DepthRecord>,
         color_params: ColorParams,
     ) -> Result<(), StagingUnavailable> {
         PipelineUploadTarget {
             vertex_buffer: &mut self.depth_segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
             color_params_buffer: &self.color_params_buffer,
-            label: "lsystem_3d_topological_depth_segments",
+            label: self.depth_segment_label,
             target: ActiveSegmentBuffer::TopologicalDepth,
         }
         .upload(device, queue, count, segments, color_params)
-    }
-
-    pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
-        queue.write_buffer(&self.mvp_buffer, 0, &mvp.uniform_bytes());
     }
 
     pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
@@ -673,21 +668,21 @@ impl LinePipeline3D {
     }
 
     pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[(0, self.bind_group.inner())];
+        let bind_groups: &[(u32, &wgpu::BindGroup)] = &[(0, &self.bind_group)];
         match self.active_segment_buffer {
             ActiveSegmentBuffer::Normal => draw_line_list(
                 render_pass,
                 &self.pipeline,
                 bind_groups,
                 &self.segment_buffer,
-                "lsystem_3d_line_draw",
+                self.draw_label,
             ),
             ActiveSegmentBuffer::TopologicalDepth => draw_line_list(
                 render_pass,
                 &self.depth_pipeline,
                 bind_groups,
                 &self.depth_segment_buffer,
-                "lsystem_3d_depth_line_draw",
+                self.depth_draw_label,
             ),
         }
     }
@@ -991,6 +986,45 @@ mod tests {
                 end: glam::vec2(7.0, -8.0),
             },
         ]
+    }
+
+    #[test]
+    fn render_dimension_2d_rotates_and_constructs_records() {
+        let start = glam::vec2(1.0, 2.0);
+        let end = glam::vec2(3.0, 4.0);
+
+        let rotated = D2::rotate(glam::Vec2::from_angle(std::f32::consts::FRAC_PI_2), start);
+        assert!(rotated.abs_diff_eq(glam::vec2(-2.0, 1.0), 1.0e-6));
+
+        let plain = D2::plain_record(start, end);
+        assert_eq!(plain.start, start);
+        assert_eq!(plain.end, end);
+
+        let depth = D2::depth_record(start, end, 7);
+        assert_eq!(depth.start, start);
+        assert_eq!(depth.end, end);
+        assert_eq!(depth.topological_depth, 7);
+    }
+
+    #[test]
+    fn render_dimension_3d_rotates_and_constructs_records() {
+        let start = glam::vec3(1.0, 2.0, 3.0);
+        let end = glam::vec3(4.0, 5.0, 6.0);
+
+        let rotated = D3::rotate(
+            glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            start,
+        );
+        assert!(rotated.abs_diff_eq(glam::vec3(-2.0, 1.0, 3.0), 1.0e-6));
+
+        let plain = D3::plain_record(start, end);
+        assert_eq!(plain.start, start);
+        assert_eq!(plain.end, end);
+
+        let depth = D3::depth_record(start, end, 11);
+        assert_eq!(depth.start, start);
+        assert_eq!(depth.end, end);
+        assert_eq!(depth.topological_depth, 11);
     }
 
     #[test]
