@@ -112,8 +112,9 @@ impl Camera {
         self.zoom = clamped;
     }
 
+    /// Orbits in response to a screen-space drag, making the model follow the pointer.
     pub fn orbit_by_pixels(&mut self, dx: f32, dy: f32) {
-        self.orbit_by(dx * ORBIT_DEG_PER_PIXEL, -dy * ORBIT_DEG_PER_PIXEL);
+        self.orbit_by(-dx * ORBIT_DEG_PER_PIXEL, dy * ORBIT_DEG_PER_PIXEL);
     }
 
     pub fn orbit_by(&mut self, d_azimuth: f32, d_elevation: f32) {
@@ -346,6 +347,16 @@ mod tests {
         assert!(cam.elevation <= 89.0, "elevation={}", cam.elevation);
         cam.orbit_by(0.0, -999.0);
         assert!(cam.elevation >= -89.0, "elevation={}", cam.elevation);
+    }
+
+    #[test]
+    fn pixel_orbit_makes_model_follow_drag() {
+        let mut cam = Camera::new();
+
+        cam.orbit_by_pixels(10.0, 5.0);
+
+        assert!((cam.azimuth - -3.0).abs() < 1e-6);
+        assert!((cam.elevation - 21.5).abs() < 1e-6);
     }
 
     fn bounding_box_corners(min: [f32; 3], max: [f32; 3]) -> [[f32; 3]; 8] {

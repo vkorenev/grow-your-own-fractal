@@ -174,7 +174,10 @@ offscreen exports.
   vertex buffer layouts, and shader entry states are built from generated
   helpers, and each pipeline layout wraps that one generated bind group
   layout.
-- `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom.
+- `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom. Pointer
+  orbiting uses direct-manipulation semantics, so the model follows the drag.
+  The browser passes CSS-pixel deltas without device-pixel-ratio scaling, which
+  keeps orbit sensitivity consistent across display densities.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   2D/3D line pipelines, color uniforms, and surface frame handling. Existing
   segment slices use `Queue::write_buffer`; stamped iterators use
@@ -243,6 +246,11 @@ error, including when the successful scene has zero segments. The generation
 log reports the chosen `template_iterations` (0 = interpreter), while the
 upload-frame metric measures from successful rebuild completion through the
 next submitted frame's GPU completion.
+
+Both app layers temporarily suspend 3D camera auto-rotation during a pointer
+orbit interaction without disabling the user's auto-rotate setting. Hue
+rotation continues independently, and camera auto-rotation resumes when the
+interaction ends.
 
 ## Export Behavior
 

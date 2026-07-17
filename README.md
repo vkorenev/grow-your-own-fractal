@@ -15,7 +15,7 @@ The browser app is available on
 - Fast GPU-accelerated rendering.
 - Built-in 2D and 3D presets with editable TOML configs.
 - Open and save custom configs.
-- Pan and zoom 2D fractals; orbit, roll, and auto-rotate 3D fractals.
+- Pan and zoom 2D fractals; grab and drag to orbit, roll, and auto-rotate 3D fractals.
 - Solid, gradient (including topological-depth mode), and hue-cycle line colors (with animatable hue rotation).
 - Save still images as SVG (2D) or PNG, and animations as APNG.
 

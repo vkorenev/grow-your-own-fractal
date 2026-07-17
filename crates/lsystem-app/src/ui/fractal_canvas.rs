@@ -1,6 +1,6 @@
 use iced::mouse;
 use iced::widget::{container, shader};
-use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme};
+use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme, window};
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
     ColorConfig, CompiledGeneration, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, TemplateSet2D,
@@ -615,6 +615,7 @@ struct FractalProgram {
 #[derive(Default)]
 struct FractalState {
     dragging: bool,
+    orbit_dragging: bool,
     last_cursor: Option<Point>,
 }
 
@@ -634,20 +635,38 @@ impl shader::Program<Message> for FractalProgram {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let position = cursor_over(cursor, bounds)?;
                 state.dragging = true;
+                state.orbit_dragging = is_3d;
                 state.last_cursor = Some(position);
-                Some(shader::Action::capture())
+                if state.orbit_dragging {
+                    Some(shader::Action::publish(Message::FractalOrbitStarted).and_capture())
+                } else {
+                    Some(shader::Action::capture())
+                }
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.dragging => {
+                let orbit_dragging = state.orbit_dragging;
                 state.dragging = false;
+                state.orbit_dragging = false;
                 state.last_cursor = None;
-                Some(shader::Action::capture())
+                if orbit_dragging {
+                    Some(shader::Action::publish(Message::FractalOrbitEnded).and_capture())
+                } else {
+                    Some(shader::Action::capture())
+                }
+            }
+            Event::Window(window::Event::Unfocused) if state.dragging => {
+                let orbit_dragging = state.orbit_dragging;
+                state.dragging = false;
+                state.orbit_dragging = false;
+                state.last_cursor = None;
+                orbit_dragging.then(|| shader::Action::publish(Message::FractalOrbitEnded))
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
                 let position = cursor_position(cursor)?;
                 let previous = state.last_cursor.replace(position).unwrap_or(position);
                 let dx = position.x - previous.x;
                 let dy = position.y - previous.y;
-                let msg = if is_3d {
+                let msg = if state.orbit_dragging {
                     Message::FractalOrbit { dx, dy }
                 } else {
                     Message::FractalPan {
