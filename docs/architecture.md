@@ -188,9 +188,13 @@ offscreen exports.
   The browser passes CSS-pixel deltas without device-pixel-ratio scaling, which
   keeps orbit sensitivity consistent across display densities.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
-  2D/3D line pipelines, color uniforms, and surface frame handling. Existing
-  segment slices use `Queue::write_buffer`; stamped iterators use
-  `Queue::write_buffer_with` to fill mapped staging memory directly.
+  the marker-keyed `LinePipeline<D>`, color uniforms, and surface frame
+  handling. `RenderDimension` maps `D2`/`D3` to their plain and depth record
+  layouts and rotation operations. Generated shader and bind-group
+  construction plus view-uniform writes remain specialized, while buffer
+  uploads, color writes, and draw dispatch are shared. Existing segment slices
+  use `Queue::write_buffer`; stamped iterators use `Queue::write_buffer_with`
+  to fill mapped staging memory directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
   maps `LineColorConfig` into shader color parameters. Its two-phase stamped
   scenes collect stamps and then stream transformed records in traversal order.
@@ -209,11 +213,12 @@ Line rendering is instanced: one GPU record represents one segment, and the
 shader selects the start or end point from `vertex_index`. Buffers grow to the
 next power-of-two capacity and are reused across slice and staging uploads.
 
-The 2D and 3D line pipelines are separate because they use different vertex
-entry points, vertex-buffer layouts, and transform uniforms, so they live in
-separate `shader_2d.wesl`/`shader_3d.wesl` modules. Both import the shared
-`common.wesl` module for the color uniform model, and they share the same
-segment-buffer strategy.
+The 2D and 3D shaders remain separate because they use different vertex entry
+points, vertex-buffer layouts, and transform uniforms, so they live in
+`shader_2d.wesl`/`shader_3d.wesl`. Their specialized constructors feed those
+dimension-specific resources into one `LinePipeline<D>` implementation; the
+`LinePipeline2D` and `LinePipeline3D` aliases keep concrete call sites concise.
+Both shaders import `common.wesl` for the color uniform model.
 
 ## Color And Depth
 
