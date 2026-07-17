@@ -1,17 +1,9 @@
 use glam::{Quat, Vec3};
 
-use crate::Segment3DWithTopologicalDepth;
+use super::Turtle;
+use crate::{D3, Segment3DWithTopologicalDepth};
 
 /// Heading = `orientation * Vec3::X`, left = `* Vec3::Y`, up = `* Vec3::Z`.
-pub(crate) struct Segments3D<I: Iterator<Item = u8>> {
-    inner: Segments3DWithTopologicalDepth<I>,
-}
-
-pub(crate) struct Segments3DWithTopologicalDepth<I: Iterator<Item = u8>> {
-    symbols: I,
-    state: TurtleState3D,
-}
-
 /// Turtle state plus the single symbol transition shared by `next` and `fold`,
 /// so the two iteration paths cannot drift apart. Template building drives it
 /// directly to capture the exit state after a rule expansion.
@@ -132,67 +124,12 @@ impl TurtleState3D {
     }
 }
 
-impl<I: Iterator<Item = u8>> Segments3DWithTopologicalDepth<I> {
-    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
-        Self {
-            symbols,
-            state: TurtleState3D::new(angle_deg, step, initial_heading_deg),
-        }
-    }
-}
+impl Turtle for TurtleState3D {
+    type Dimension = D3;
 
-impl<I: Iterator<Item = u8>> Iterator for Segments3DWithTopologicalDepth<I> {
-    type Item = Segment3DWithTopologicalDepth;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let symbol = self.symbols.next()?;
-            if let Some(segment) = self.state.apply(symbol) {
-                return Some(segment);
-            }
-        }
-    }
-
-    fn fold<B, F>(self, init: B, mut f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        let mut state = self.state;
-        self.symbols
-            .fold(init, |acc, symbol| match state.apply(symbol) {
-                Some(segment) => f(acc, segment),
-                None => acc,
-            })
-    }
-}
-
-impl<I: Iterator<Item = u8>> Segments3D<I> {
-    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
-        Self {
-            inner: Segments3DWithTopologicalDepth::new(
-                symbols,
-                angle_deg,
-                step,
-                initial_heading_deg,
-            ),
-        }
-    }
-}
-
-impl<I: Iterator<Item = u8>> Iterator for Segments3D<I> {
-    type Item = [Vec3; 2];
-
-    fn next(&mut self) -> Option<[Vec3; 2]> {
-        self.inner.next().map(|segment| segment.points)
-    }
-
-    fn fold<B, F>(self, init: B, mut f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        self.inner.fold(init, |acc, segment| f(acc, segment.points))
+    #[inline]
+    fn apply(&mut self, symbol: u8) -> Option<Segment3DWithTopologicalDepth> {
+        TurtleState3D::apply(self, symbol)
     }
 }
 
@@ -200,6 +137,7 @@ impl<I: Iterator<Item = u8>> Iterator for Segments3D<I> {
 mod tests {
     use super::*;
     use crate::test_util::{FoldOnly, collect_with_next, compile_3d};
+    use crate::turtle::DepthSegments;
     use crate::{Dimensions, GenerationConfig};
     use std::collections::BTreeMap;
 
@@ -208,7 +146,12 @@ mod tests {
     }
 
     fn make_with_heading(axiom: &str, angle_deg: f32, initial_heading_deg: f32) -> Vec<[Vec3; 2]> {
-        Segments3D::new(axiom.bytes(), angle_deg, 1.0, initial_heading_deg).collect()
+        DepthSegments::new(
+            axiom.bytes(),
+            TurtleState3D::new(angle_deg, 1.0, initial_heading_deg),
+        )
+        .map(|segment| segment.points)
+        .collect()
     }
 
     #[test]
@@ -252,16 +195,18 @@ mod tests {
 
     #[test]
     fn fold_uses_symbol_fold_for_plain_and_depth_segments() {
-        let plain = Segments3D::new(FoldOnly::new(br"F[+/F]f-F".iter().copied()), 90.0, 1.0, 0.0)
-            .fold(Vec::new(), |mut segments, segment| {
-                segments.push(segment);
-                segments
-            });
-        let with_depth = Segments3DWithTopologicalDepth::new(
+        let plain = DepthSegments::new(
             FoldOnly::new(br"F[+/F]f-F".iter().copied()),
-            90.0,
-            1.0,
-            0.0,
+            TurtleState3D::new(90.0, 1.0, 0.0),
+        )
+        .map(|segment| segment.points)
+        .fold(Vec::new(), |mut segments, segment| {
+            segments.push(segment);
+            segments
+        });
+        let with_depth = DepthSegments::new(
+            FoldOnly::new(br"F[+/F]f-F".iter().copied()),
+            TurtleState3D::new(90.0, 1.0, 0.0),
         )
         .fold(Vec::new(), |mut segments, segment| {
             segments.push(segment);

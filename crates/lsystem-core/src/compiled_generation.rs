@@ -1,8 +1,11 @@
 use std::marker::PhantomData;
 
-use glam::{Vec2, Vec3};
-
-use crate::{D2, D3, Dimension, config::GenerationConfig, grammar::CompiledGrammar, turtle};
+use crate::{
+    D2, D3, Dimension,
+    config::GenerationConfig,
+    grammar::CompiledGrammar,
+    turtle::{DepthSegments, turtle2d::TurtleState2D, turtle3d::TurtleState3D},
+};
 
 #[derive(Debug)]
 pub enum AnyCompiledGeneration {
@@ -75,6 +78,37 @@ pub type Segment2DWithTopologicalDepth = SegmentWithTopologicalDepth<D2>;
 /// position and orientation saved/restored by branch stack operations.
 pub type Segment3DWithTopologicalDepth = SegmentWithTopologicalDepth<D3>;
 
+#[doc(hidden)]
+pub trait GenerationDimension: Dimension {
+    fn depth_segments(
+        generation: &CompiledGeneration<Self>,
+    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_;
+}
+
+impl GenerationDimension for D2 {
+    fn depth_segments(
+        generation: &CompiledGeneration<Self>,
+    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_ {
+        let p = generation.params;
+        DepthSegments::new(
+            generation.grammar.expand_effects(p.iterations),
+            TurtleState2D::new(p.angle, p.step, p.initial_heading),
+        )
+    }
+}
+
+impl GenerationDimension for D3 {
+    fn depth_segments(
+        generation: &CompiledGeneration<Self>,
+    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_ {
+        let p = generation.params;
+        DepthSegments::new(
+            generation.grammar.expand_effects(p.iterations),
+            TurtleState3D::new(p.angle, p.step, p.initial_heading),
+        )
+    }
+}
+
 impl GenerationConfig {
     pub fn compile(&self) -> AnyCompiledGeneration {
         match self.dimensions {
@@ -111,46 +145,13 @@ impl<D: Dimension> CompiledGeneration<D> {
     }
 }
 
-impl CompiledGeneration<D2> {
-    pub fn segments(&self) -> impl Iterator<Item = [Vec2; 2]> + '_ {
-        let p = self.params;
-        turtle::turtle2d::Segments2D::new(
-            self.grammar.expand_effects(p.iterations),
-            p.angle,
-            p.step,
-            p.initial_heading,
-        )
+impl<D: GenerationDimension> CompiledGeneration<D> {
+    pub fn segments(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
+        D::depth_segments(self).map(|segment| segment.points)
     }
 
-    pub fn depth_segments(&self) -> impl Iterator<Item = Segment2DWithTopologicalDepth> + '_ {
-        let p = self.params;
-        turtle::turtle2d::Segments2DWithTopologicalDepth::new(
-            self.grammar.expand_effects(p.iterations),
-            p.angle,
-            p.step,
-            p.initial_heading,
-        )
-    }
-}
-
-impl CompiledGeneration<D3> {
-    pub fn segments(&self) -> impl Iterator<Item = [Vec3; 2]> + '_ {
-        let p = self.params;
-        turtle::turtle3d::Segments3D::new(
-            self.grammar.expand_effects(p.iterations),
-            p.angle,
-            p.step,
-            p.initial_heading,
-        )
-    }
-    pub fn depth_segments(&self) -> impl Iterator<Item = Segment3DWithTopologicalDepth> + '_ {
-        let p = self.params;
-        turtle::turtle3d::Segments3DWithTopologicalDepth::new(
-            self.grammar.expand_effects(p.iterations),
-            p.angle,
-            p.step,
-            p.initial_heading,
-        )
+    pub fn depth_segments(&self) -> impl Iterator<Item = SegmentWithTopologicalDepth<D>> + '_ {
+        D::depth_segments(self)
     }
 }
 

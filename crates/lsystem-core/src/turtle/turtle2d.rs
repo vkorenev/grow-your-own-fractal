@@ -1,15 +1,7 @@
 use glam::Vec2;
 
-use crate::Segment2DWithTopologicalDepth;
-
-pub(crate) struct Segments2D<I: Iterator<Item = u8>> {
-    inner: Segments2DWithTopologicalDepth<I>,
-}
-
-pub(crate) struct Segments2DWithTopologicalDepth<I: Iterator<Item = u8>> {
-    symbols: I,
-    state: TurtleState2D,
-}
+use super::Turtle;
+use crate::{D2, Segment2DWithTopologicalDepth};
 
 /// Turtle state plus the single symbol transition shared by `next` and `fold`,
 /// so the two iteration paths cannot drift apart. Template building drives it
@@ -111,67 +103,12 @@ impl TurtleState2D {
     }
 }
 
-impl<I: Iterator<Item = u8>> Segments2DWithTopologicalDepth<I> {
-    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
-        Self {
-            symbols,
-            state: TurtleState2D::new(angle_deg, step, initial_heading_deg),
-        }
-    }
-}
+impl Turtle for TurtleState2D {
+    type Dimension = D2;
 
-impl<I: Iterator<Item = u8>> Iterator for Segments2DWithTopologicalDepth<I> {
-    type Item = Segment2DWithTopologicalDepth;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let symbol = self.symbols.next()?;
-            if let Some(segment) = self.state.apply(symbol) {
-                return Some(segment);
-            }
-        }
-    }
-
-    fn fold<B, F>(self, init: B, mut f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        let mut state = self.state;
-        self.symbols
-            .fold(init, |acc, symbol| match state.apply(symbol) {
-                Some(segment) => f(acc, segment),
-                None => acc,
-            })
-    }
-}
-
-impl<I: Iterator<Item = u8>> Segments2D<I> {
-    pub(crate) fn new(symbols: I, angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
-        Self {
-            inner: Segments2DWithTopologicalDepth::new(
-                symbols,
-                angle_deg,
-                step,
-                initial_heading_deg,
-            ),
-        }
-    }
-}
-
-impl<I: Iterator<Item = u8>> Iterator for Segments2D<I> {
-    type Item = [Vec2; 2];
-
-    fn next(&mut self) -> Option<[Vec2; 2]> {
-        self.inner.next().map(|segment| segment.points)
-    }
-
-    fn fold<B, F>(self, init: B, mut f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        self.inner.fold(init, |acc, segment| f(acc, segment.points))
+    #[inline]
+    fn apply(&mut self, symbol: u8) -> Option<Segment2DWithTopologicalDepth> {
+        TurtleState2D::apply(self, symbol)
     }
 }
 
@@ -179,6 +116,7 @@ impl<I: Iterator<Item = u8>> Iterator for Segments2D<I> {
 mod tests {
     use super::*;
     use crate::test_util::{FoldOnly, collect_with_next, compile_2d};
+    use crate::turtle::DepthSegments;
     use crate::{Dimensions, GenerationConfig};
     use std::collections::BTreeMap;
 
@@ -420,16 +358,18 @@ mod tests {
 
     #[test]
     fn fold_uses_symbol_fold_for_plain_and_depth_segments() {
-        let plain = Segments2D::new(FoldOnly::new(b"F[+F]f-F".iter().copied()), 90.0, 1.0, 0.0)
-            .fold(Vec::new(), |mut segments, segment| {
-                segments.push(segment);
-                segments
-            });
-        let with_depth = Segments2DWithTopologicalDepth::new(
+        let plain = DepthSegments::new(
             FoldOnly::new(b"F[+F]f-F".iter().copied()),
-            90.0,
-            1.0,
-            0.0,
+            TurtleState2D::new(90.0, 1.0, 0.0),
+        )
+        .map(|segment| segment.points)
+        .fold(Vec::new(), |mut segments, segment| {
+            segments.push(segment);
+            segments
+        });
+        let with_depth = DepthSegments::new(
+            FoldOnly::new(b"F[+F]f-F".iter().copied()),
+            TurtleState2D::new(90.0, 1.0, 0.0),
         )
         .fold(Vec::new(), |mut segments, segment| {
             segments.push(segment);
