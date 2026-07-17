@@ -101,8 +101,8 @@ impl Scene {
     ) -> Self {
         let geometry = SceneGeometry::TwoD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
         };
         Self {
             color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
@@ -123,8 +123,8 @@ impl Scene {
     ) -> Self {
         let geometry = SceneGeometry::ThreeD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
         };
         Self {
             color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
@@ -146,8 +146,8 @@ impl Scene {
         let max_topological_depth = data.max_topological_depth();
         let geometry = SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
             max_topological_depth,
         };
         Self {
@@ -174,8 +174,8 @@ impl Scene {
         let max_topological_depth = data.max_topological_depth();
         let geometry = SceneGeometry::ThreeDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
             max_topological_depth,
         };
         Self {
