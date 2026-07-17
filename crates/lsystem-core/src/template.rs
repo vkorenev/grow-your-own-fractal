@@ -17,94 +17,62 @@
 
 use glam::{Quat, Vec2, Vec3};
 
-use crate::compiled_generation::{CompiledGeneration2D, CompiledGeneration3D};
+use crate::compiled_generation::{CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D};
 use crate::grammar::CompiledGrammar;
 use crate::turtle::turtle2d::TurtleState2D;
 use crate::turtle::turtle3d::TurtleState3D;
+use crate::{D2, D3, Dimension};
 
 /// One template segment in the local frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TemplateSegment2D {
-    pub start: Vec2,
-    pub end: Vec2,
+pub struct TemplateSegment<D: Dimension> {
+    pub start: D::Point,
+    pub end: D::Point,
     /// Topological depth relative to the template entry.
     pub depth_offset: u32,
 }
 
-/// One template segment in the local frame.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TemplateSegment3D {
-    pub start: Vec3,
-    pub end: Vec3,
-    /// Topological depth relative to the template entry.
-    pub depth_offset: u32,
-}
+pub type TemplateSegment2D = TemplateSegment<D2>;
+pub type TemplateSegment3D = TemplateSegment<D3>;
 
 /// Precomputed geometry of one ruled symbol, plus the turtle-state delta from
 /// template entry to exit that the placement walk composes per stamp.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Template2D {
-    pub segments: Vec<TemplateSegment2D>,
-    pub exit_pos: Vec2,
-    /// Net rotation entry→exit as a unit complex number (cos, sin).
-    pub exit_rot: Vec2,
+pub struct Template<D: Dimension> {
+    pub segments: Vec<TemplateSegment<D>>,
+    pub exit_pos: D::Point,
+    /// Net rotation from template entry to exit.
+    pub exit_rot: D::Rotation,
     pub exit_depth_delta: u32,
     /// Largest `depth_offset` among `segments`; 0 when there are none.
     pub max_depth_offset: u32,
-    /// Local-frame bounding box; both zero when there are no segments.
-    pub bounds_min: Vec2,
-    pub bounds_max: Vec2,
 }
 
-/// Precomputed geometry of one ruled symbol, plus the turtle-state delta from
-/// template entry to exit that the placement walk composes per stamp.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Template3D {
-    pub segments: Vec<TemplateSegment3D>,
-    pub exit_pos: Vec3,
-    /// Net rotation entry→exit.
-    pub exit_rot: Quat,
-    pub exit_depth_delta: u32,
-    /// Largest `depth_offset` among `segments`; 0 when there are none.
-    pub max_depth_offset: u32,
-    /// Local-frame bounding box; both zero when there are no segments.
-    pub bounds_min: Vec3,
-    pub bounds_max: Vec3,
-}
+pub type Template2D = Template<D2>;
+pub type Template3D = Template<D3>;
 
 /// Templates for every ruled symbol of a compiled grammar, at a fixed count
 /// of template iterations. Index 0 is the built-in single-`F` template used
 /// to stamp bare unruled `F` symbols at the placement boundary.
 ///
 /// The set owns the compiled grammar and the walk parameters it was built
-/// from; [`TemplateSet2D::emit_stamps`] needs no further input.
-pub struct TemplateSet2D {
-    templates: Vec<Template2D>,
+/// from; [`TemplateSet::emit_stamps`] needs no further input.
+pub struct TemplateSet<D: Dimension> {
+    templates: Vec<Template<D>>,
     symbol_to_template: [Option<u16>; 256],
     template_iterations: u16,
-    generation: CompiledGeneration2D,
+    generation: CompiledGeneration<D>,
 }
 
-/// Templates for every ruled symbol of a compiled grammar, at a fixed count
-/// of template iterations. Index 0 is the built-in single-`F` template used
-/// to stamp bare unruled `F` symbols at the placement boundary.
-///
-/// The set owns the compiled grammar and the walk parameters it was built
-/// from; [`TemplateSet3D::emit_stamps`] needs no further input.
-pub struct TemplateSet3D {
-    templates: Vec<Template3D>,
-    symbol_to_template: [Option<u16>; 256],
-    template_iterations: u16,
-    generation: CompiledGeneration3D,
-}
+pub type TemplateSet2D = TemplateSet<D2>;
+pub type TemplateSet3D = TemplateSet<D3>;
 
 /// Placement of one template in world space.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Stamp2D {
+pub struct Stamp<D: Dimension> {
     pub template: u16,
-    pub pos: Vec2,
-    /// World rotation as a unit complex number (cos, sin).
-    pub rot: Vec2,
+    pub pos: D::Point,
+    pub rot: D::Rotation,
     pub depth_base: u32,
     /// Number of segments emitted before this stamp; also the stamp's offset
     /// into a flat traversal-ordered segment buffer. Saturates at
@@ -112,18 +80,8 @@ pub struct Stamp2D {
     pub order_base: u32,
 }
 
-/// Placement of one template in world space.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Stamp3D {
-    pub template: u16,
-    pub pos: Vec3,
-    pub rot: Quat,
-    pub depth_base: u32,
-    /// Number of segments emitted before this stamp; also the stamp's offset
-    /// into a flat traversal-ordered segment buffer. Saturates at
-    /// `u32::MAX`; the stamp walk debug-asserts the total stays in range.
-    pub order_base: u32,
-}
+pub type Stamp2D = Stamp<D2>;
+pub type Stamp3D = Stamp<D3>;
 
 /// Totals of a stamp walk, sufficient to size a flat output buffer and select
 /// depth-gradient color parameters without transforming any geometry.
@@ -169,13 +127,40 @@ pub(crate) fn choose_template_iterations(
     best
 }
 
+impl<D: Dimension> TemplateSet<D> {
+    /// Built templates; index 0 is the built-in bare-`F` unit template.
+    pub fn templates(&self) -> &[Template<D>] {
+        &self.templates
+    }
+
+    /// The number of expansion levels each template precomputes.
+    pub fn template_iterations(&self) -> u16 {
+        self.template_iterations
+    }
+}
+
+/// Dimension-specific template construction and stamp emission used by
+/// generic renderer orchestration.
+#[doc(hidden)]
+pub trait TemplateDimension: Dimension {
+    fn build_within_budget(
+        generation: CompiledGeneration<Self>,
+        max_template_segments: u64,
+    ) -> Result<TemplateSet<Self>, CompiledGeneration<Self>>;
+
+    fn emit_stamps(
+        set: &TemplateSet<Self>,
+        sink: impl FnMut(Stamp<Self>, &Template<Self>),
+    ) -> StampStats;
+}
+
 /// Implements `build` and `emit_stamps` for one template-set type. The 2D
 /// and 3D pipelines are the same walk over different geometry types: the
 /// turtle helpers (`heading`, `normalized_heading`, `compose_heading`) hide
 /// the heading representation and `$rotate` names the rotation-apply method,
 /// so the logic exists once and the two instantiations cannot drift apart.
 macro_rules! impl_template_set {
-    ($Set:ident, $Generation:ident, $Template:ident, $Segment:ident, $Stamp:ident,
+    ($Dimension:ty, $Set:ident, $Generation:ident, $Template:ident, $Segment:ident, $Stamp:ident,
      $Vec:ty, $Turtle:ty, $rot_identity:expr, $rotate:ident) => {
         impl $Set {
             /// Builds templates for every ruled symbol by expanding it
@@ -206,8 +191,6 @@ macro_rules! impl_template_set {
                     exit_rot: $rot_identity,
                     exit_depth_delta: 1,
                     max_depth_offset: 0,
-                    bounds_min: <$Vec>::ZERO.min(unit_end),
-                    bounds_max: <$Vec>::ZERO.max(unit_end),
                 }];
                 let mut symbol_to_template = [None; 256];
 
@@ -215,15 +198,11 @@ macro_rules! impl_template_set {
                     let mut state = <$Turtle>::new(params.angle, params.step, 0.0);
                     let mut segments = Vec::new();
                     let mut max_depth_offset = 0;
-                    let mut bounds_min = <$Vec>::INFINITY;
-                    let mut bounds_max = <$Vec>::NEG_INFINITY;
                     grammar
                         .expand_rule_effects(symbol, template_iterations)
                         .for_each(|byte| {
                             if let Some(segment) = state.apply(byte) {
                                 let [start, end] = segment.points;
-                                bounds_min = bounds_min.min(start).min(end);
-                                bounds_max = bounds_max.max(start).max(end);
                                 max_depth_offset = max_depth_offset.max(segment.topological_depth);
                                 segments.push($Segment {
                                     start,
@@ -233,10 +212,6 @@ macro_rules! impl_template_set {
                             }
                         });
                     debug_assert!(state.stack.is_empty(), "balanced RHS leaves stack empty");
-                    if segments.is_empty() {
-                        bounds_min = <$Vec>::ZERO;
-                        bounds_max = <$Vec>::ZERO;
-                    }
 
                     symbol_to_template[symbol as usize] = Some(templates.len() as u16);
                     templates.push($Template {
@@ -245,8 +220,6 @@ macro_rules! impl_template_set {
                         exit_rot: state.normalized_heading(),
                         exit_depth_delta: state.topological_depth,
                         max_depth_offset,
-                        bounds_min,
-                        bounds_max,
                     });
                 }
 
@@ -272,17 +245,6 @@ macro_rules! impl_template_set {
                     max_template_segments,
                 );
                 Self::build(generation, template_iterations)
-            }
-
-            /// Built templates; index 0 is the built-in bare-`F` unit
-            /// template.
-            pub fn templates(&self) -> &[$Template] {
-                &self.templates
-            }
-
-            /// The number of expansion levels each template precomputes.
-            pub fn template_iterations(&self) -> u16 {
-                self.template_iterations
             }
 
             /// Walks the boundary expansion (`iterations -
@@ -369,10 +331,27 @@ macro_rules! impl_template_set {
                 stats
             }
         }
+
+        impl TemplateDimension for $Dimension {
+            fn build_within_budget(
+                generation: CompiledGeneration<Self>,
+                max_template_segments: u64,
+            ) -> Result<TemplateSet<Self>, CompiledGeneration<Self>> {
+                <$Set>::build_within_budget(generation, max_template_segments)
+            }
+
+            fn emit_stamps(
+                set: &TemplateSet<Self>,
+                sink: impl FnMut(Stamp<Self>, &Template<Self>),
+            ) -> StampStats {
+                <$Set>::emit_stamps(set, sink)
+            }
+        }
     };
 }
 
 impl_template_set!(
+    D2,
     TemplateSet2D,
     CompiledGeneration2D,
     Template2D,
@@ -385,6 +364,7 @@ impl_template_set!(
 );
 
 impl_template_set!(
+    D3,
     TemplateSet3D,
     CompiledGeneration3D,
     Template3D,
@@ -422,6 +402,18 @@ mod tests {
         template_iterations: u16,
     ) -> Result<TemplateSet3D, crate::CompiledGeneration3D> {
         TemplateSet3D::build(compile_3d(config), template_iterations)
+    }
+
+    fn assert_template_dimension_dispatch<D: TemplateDimension>(generation: CompiledGeneration<D>) {
+        let set = D::build_within_budget(generation, u64::MAX).expect("template set builds");
+        assert_eq!(set.template_iterations(), 1);
+
+        let mut emitted_segments = 0u64;
+        let stats = D::emit_stamps(&set, |_, template| {
+            emitted_segments += template.segments.len() as u64;
+        });
+        assert_eq!(stats.total_segments, 1);
+        assert_eq!(emitted_segments, stats.total_segments);
     }
 
     fn stamped_segments_2d(
@@ -514,6 +506,33 @@ mod tests {
             }
         }
         assert_eq!(stats.max_depth, max_depth);
+    }
+
+    #[test]
+    fn template_dimension_dispatches_for_both_markers() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "F".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        assert_template_dimension_dispatch::<D2>(compile_2d(&config));
+
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+        assert_template_dimension_dispatch::<D3>(compile_3d(&config));
     }
 
     fn koch() -> GenerationConfig {

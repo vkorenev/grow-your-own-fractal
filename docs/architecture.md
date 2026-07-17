@@ -97,16 +97,20 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
 - `template.rs` provides the alternative stamped generation path: per-rule
   geometry templates (a rule expanded a fixed number of iterations in the
   local frame, with its exit transform) plus a placement walk that streams
-  stamps in traversal order. `TemplateSet2D/3D::build` consumes the matching
-  `CompiledGeneration2D/3D`; all analysis happens in the byte domain, and the
-  set owns the typed generation, so stamping needs no config re-supply. A
-  stamp's `order_base` is the running segment count, so it doubles as the
-  offset into a flat traversal-ordered segment buffer for GPU consumers.
-  Template sets are small, budget-bounded collections; stamps stay streamed.
-  `build_within_budget` picks the largest template depth whose templates fit
-  a segment budget (`DEFAULT_TEMPLATE_SEGMENT_BUDGET` for interactive
-  consumers) and hands the typed compiled generation back when none fits, so
-  callers fall back to the interpreter path, which remains the semantic oracle.
+  stamps in traversal order. `TemplateSegment<D>`, `Template<D>`, `Stamp<D>`,
+  and `TemplateSet<D>` keep every payload paired with its dimension;
+  `TemplateSet2D/3D` and the related concrete names remain aliases for concise
+  call sites. The build and placement walks remain one macro-defined algorithm
+  specialized for the two turtle representations, while a hidden marker
+  capability exposes only budgeted construction and stamp emission to later
+  generic renderer orchestration. A set owns its typed compiled generation, so
+  stamping needs no config re-supply. A stamp's `order_base` is the running
+  segment count, so it doubles as the offset into a flat traversal-ordered
+  segment buffer for GPU consumers. Template sets are small, budget-bounded
+  collections; stamps stay streamed. `build_within_budget` picks the largest
+  template depth whose templates fit `DEFAULT_TEMPLATE_SEGMENT_BUDGET` for
+  interactive consumers and hands the typed generation back when none fits,
+  so callers can use the interpreter path, which remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
   `GenerationConfig::new` is the only way to build a generation config; it
   enforces single-letter rule keys and bracket balance on the axiom and every
