@@ -1,7 +1,7 @@
 use glam::Vec2;
 
 use crate::{
-    ColorConfig, CompiledGeneration, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig,
+    AnyCompiledGeneration, ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig,
     LineColorConfig, Segment2DWithTopologicalDepth, TemplateSet2D,
 };
 
@@ -16,7 +16,7 @@ pub enum SvgExportError {
 /// The SVG uses the natural turtle coordinate system, scaled to fit the fractal.
 /// Colors match the GPU render exactly.
 pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
-    let CompiledGeneration::TwoD(generation) = config.generation.compile() else {
+    let AnyCompiledGeneration::TwoD(generation) = config.generation.compile() else {
         return Err(SvgExportError::ThreeDimensional);
     };
     let colors = config.colors;

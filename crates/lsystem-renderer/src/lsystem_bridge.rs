@@ -581,7 +581,7 @@ pub fn viewport_transform(
 #[cfg(test)]
 mod tests {
     use lsystem_core::{
-        CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
+        AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
         GenerationConfig, Rgb,
     };
     use std::collections::BTreeMap;
@@ -591,14 +591,14 @@ mod tests {
     const EPS: f32 = 1e-5;
 
     fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
-        let CompiledGeneration::TwoD(generation) = config.compile() else {
+        let AnyCompiledGeneration::TwoD(generation) = config.compile() else {
             panic!("expected a 2D generation config")
         };
         generation
     }
 
     fn compile_3d(config: &GenerationConfig) -> CompiledGeneration3D {
-        let CompiledGeneration::ThreeD(generation) = config.compile() else {
+        let AnyCompiledGeneration::ThreeD(generation) = config.compile() else {
             panic!("expected a 3D generation config")
         };
         generation

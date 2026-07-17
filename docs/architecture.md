@@ -27,8 +27,8 @@ Runtime generation starts from a resolved `GenerationConfig`.
 
 ```text
 GenerationConfig
-  -> CompiledGeneration
-  -> typed 2D / 3D generation
+  -> AnyCompiledGeneration
+  -> CompiledGeneration<D2> / CompiledGeneration<D3>
   -> template stamps or interpreted Segments2D / Segments3D
   -> renderer scene upload
   -> wgpu instance buffer
@@ -75,11 +75,15 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
 `lsystem-core` owns the grammar and turtle semantics:
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
+- `dimension.rs` defines the sealed `D2`/`D3` markers and maps each marker to
+  its point and rotation representations through the `Dimension` trait.
 - `compiled_generation.rs` is the runtime compilation boundary. It compiles
   grammar, scalar parameters, and stack metadata together, then exposes an
-  opaque `CompiledGeneration::TwoD` or `::ThreeD` payload. Runtime consumers
-  match once at their boundary and can only pass the matching typed value to
-  2D or 3D generation and template APIs.
+  opaque `CompiledGeneration<D2>` or `CompiledGeneration<D3>` payload inside
+  `AnyCompiledGeneration`. Runtime consumers match once at their boundary and
+  can only pass the matching typed value to 2D or 3D generation and template
+  APIs. The `CompiledGeneration2D` and `CompiledGeneration3D` aliases retain
+  concise dimension-specific names where concrete signatures remain useful.
 - `grammar.rs` provides the crate-private compiled grammar representation
   (shared byte arena plus rule table, unreachable rules dropped) and lazy
   expansion iterators used by the typed generation façade.
@@ -111,11 +115,11 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
   and explicitly rejects 3D input at its public runtime-config boundary.
 
 `GenerationConfig::compile` snapshots grammar, scalar parameters, and stack
-metadata together, then returns `CompiledGeneration::TwoD` or `ThreeD`.
-Runtime boundaries exhaustively match that enum once. The dimension-specific
-payload exposes `segments()` and `depth_segments()` and can only be consumed by
-the matching template set, so grammar and parameters cannot be separated or
-combined across configs.
+metadata together, then returns `AnyCompiledGeneration::TwoD` or `ThreeD`.
+Runtime boundaries exhaustively match that enum once. Each
+`CompiledGeneration<D>` payload exposes dimension-specific `segments()` and
+`depth_segments()` methods and can only be consumed by the matching template
+set, so grammar and parameters cannot be separated or combined across configs.
 
 3D turtle orientation is stored as a `glam::Quat`. Heading, left, and up vectors
 are derived from that orientation, and pitch/roll/yaw symbols compose in local

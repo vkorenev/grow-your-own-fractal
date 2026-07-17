@@ -1,16 +1,16 @@
 //! Shared helpers for tests that pin the `fold` fast path.
 
-use crate::{CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, GenerationConfig};
+use crate::{AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, GenerationConfig};
 
 pub(crate) fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
-    let CompiledGeneration::TwoD(generation) = config.compile() else {
+    let AnyCompiledGeneration::TwoD(generation) = config.compile() else {
         panic!("expected a 2D generation config")
     };
     generation
 }
 
 pub(crate) fn compile_3d(config: &GenerationConfig) -> CompiledGeneration3D {
-    let CompiledGeneration::ThreeD(generation) = config.compile() else {
+    let AnyCompiledGeneration::ThreeD(generation) = config.compile() else {
         panic!("expected a 3D generation config")
     };
     generation

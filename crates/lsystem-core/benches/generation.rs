@@ -3,19 +3,19 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use lsystem_core::{
-    CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions, GenerationConfig,
-    TemplateSet2D, TemplateSet3D,
+    AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
+    GenerationConfig, TemplateSet2D, TemplateSet3D,
 };
 
 fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
-    let CompiledGeneration::TwoD(generation) = config.compile() else {
+    let AnyCompiledGeneration::TwoD(generation) = config.compile() else {
         panic!("expected a 2D generation config")
     };
     generation
 }
 
 fn compile_3d(config: &GenerationConfig) -> CompiledGeneration3D {
-    let CompiledGeneration::ThreeD(generation) = config.compile() else {
+    let AnyCompiledGeneration::ThreeD(generation) = config.compile() else {
         panic!("expected a 3D generation config")
     };
     generation

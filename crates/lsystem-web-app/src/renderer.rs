@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use web_time::{Duration, Instant};
 
-use lsystem_core::{CompiledGeneration, Config};
+use lsystem_core::{AnyCompiledGeneration, Config};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
@@ -129,7 +129,7 @@ impl CanvasRenderer {
         let started = Instant::now();
         let line = &config.colors.line;
         let result = match config.generation.compile() {
-            CompiledGeneration::ThreeD(generation) => upload_scene_3d(
+            AnyCompiledGeneration::ThreeD(generation) => upload_scene_3d(
                 &mut self.pipeline_3d,
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -141,7 +141,7 @@ impl CanvasRenderer {
                 let method = scene.method();
                 (ActiveScene::ThreeD(scene), method)
             }),
-            CompiledGeneration::TwoD(generation) => upload_scene_2d(
+            AnyCompiledGeneration::TwoD(generation) => upload_scene_2d(
                 &mut self.pipeline_2d,
                 &self.gpu.device,
                 &self.gpu.queue,

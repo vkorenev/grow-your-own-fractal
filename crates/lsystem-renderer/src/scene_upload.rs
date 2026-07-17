@@ -439,7 +439,7 @@ mod gpu_tests {
     use std::collections::BTreeMap;
 
     use futures_channel::oneshot;
-    use lsystem_core::{CompiledGeneration, GenerationConfig, Rgb};
+    use lsystem_core::{AnyCompiledGeneration, GenerationConfig, Rgb};
 
     use super::*;
     use crate::line_renderer::{ColorParams, Segment2D, TopologicalDepthSegment2D, Transform};
@@ -471,14 +471,14 @@ mod gpu_tests {
     }
 
     fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
-        let CompiledGeneration::TwoD(generation) = config.compile() else {
+        let AnyCompiledGeneration::TwoD(generation) = config.compile() else {
             panic!("expected 2D generation")
         };
         generation
     }
 
     fn compile_3d(config: &GenerationConfig) -> CompiledGeneration3D {
-        let CompiledGeneration::ThreeD(generation) = config.compile() else {
+        let AnyCompiledGeneration::ThreeD(generation) = config.compile() else {
             panic!("expected 3D generation")
         };
         generation
@@ -725,7 +725,7 @@ mod gpu_tests {
                 );
                 for config in [stamped, interpreter] {
                     let error = match config.compile() {
-                        CompiledGeneration::TwoD(generation) => upload_scene_2d(
+                        AnyCompiledGeneration::TwoD(generation) => upload_scene_2d(
                             &mut pipeline_2d,
                             &device,
                             &queue,
@@ -734,7 +734,7 @@ mod gpu_tests {
                             SegmentLayout::Plain,
                         )
                         .expect_err("2D config exceeds cap"),
-                        CompiledGeneration::ThreeD(generation) => upload_scene_3d(
+                        AnyCompiledGeneration::ThreeD(generation) => upload_scene_3d(
                             &mut pipeline_3d,
                             &device,
                             &queue,

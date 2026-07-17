@@ -188,14 +188,12 @@ macro_rules! impl_template_set {
                 generation: $Generation,
                 template_iterations: u16,
             ) -> Result<Self, $Generation> {
-                if template_iterations == 0
-                    || template_iterations > generation.inner.params.iterations
-                {
+                if template_iterations == 0 || template_iterations > generation.params.iterations {
                     return Err(generation);
                 }
 
-                let grammar = &generation.inner.grammar;
-                let params = generation.inner.params;
+                let grammar = &generation.grammar;
+                let params = generation.params;
 
                 let unit_end = <$Vec>::X * params.step;
                 let mut templates = vec![$Template {
@@ -269,8 +267,8 @@ macro_rules! impl_template_set {
                 max_template_segments: u64,
             ) -> Result<Self, $Generation> {
                 let template_iterations = choose_template_iterations(
-                    &generation.inner.grammar,
-                    generation.inner.params.iterations,
+                    &generation.grammar,
+                    generation.params.iterations,
                     max_template_segments,
                 );
                 Self::build(generation, template_iterations)
@@ -293,8 +291,8 @@ macro_rules! impl_template_set {
             /// contributes segments, in traversal order. Placements of
             /// geometry-free templates advance the cursor but emit nothing.
             pub fn emit_stamps(&self, mut sink: impl FnMut($Stamp, &$Template)) -> StampStats {
-                let params = self.generation.inner.params;
-                let grammar = &self.generation.inner.grammar;
+                let params = self.generation.params;
+                let grammar = &self.generation.grammar;
                 // The cursor is a plain turtle: effect symbols advance it via
                 // the shared apply() transition, so walk semantics cannot
                 // drift from the interpreter.

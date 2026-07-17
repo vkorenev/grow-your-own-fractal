@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use lsystem_core::{CompiledGeneration, Config};
+use lsystem_core::{AnyCompiledGeneration, Config};
 
 use crate::camera::Camera;
 use crate::line_renderer::{ColorParams, LinePipeline2D, LinePipeline3D};
@@ -89,7 +89,7 @@ impl ExportScene {
             SegmentLayout::Plain
         };
         match config.generation.compile() {
-            CompiledGeneration::TwoD(generation) => {
+            AnyCompiledGeneration::TwoD(generation) => {
                 let mut pipeline = LinePipeline2D::new(device, FORMAT);
                 let scene = upload_scene_2d(
                     &mut pipeline,
@@ -111,7 +111,7 @@ impl ExportScene {
                     color_params,
                 })
             }
-            CompiledGeneration::ThreeD(generation) => {
+            AnyCompiledGeneration::ThreeD(generation) => {
                 let mut pipeline = LinePipeline3D::new(device, FORMAT);
                 let scene = upload_scene_3d(
                     &mut pipeline,

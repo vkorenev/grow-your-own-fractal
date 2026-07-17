@@ -3,7 +3,7 @@ use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme, window};
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
-    ColorConfig, CompiledGeneration, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, TemplateSet2D,
+    AnyCompiledGeneration, ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, TemplateSet2D,
     TemplateSet3D,
 };
 use lsystem_renderer::camera::Camera;
@@ -346,7 +346,7 @@ pub(super) async fn build_scene(
     let colors = config.colors;
     let started = Instant::now();
     match config.generation.compile() {
-        CompiledGeneration::ThreeD(compiled_generation) => {
+        AnyCompiledGeneration::ThreeD(compiled_generation) => {
             // Depth geometry is decided by fractal structure, not color mode, so color
             // changes after this build never require a geometry rebuild.
             let use_topological_depth = compiled_generation.has_stack_directives();
@@ -426,7 +426,7 @@ pub(super) async fn build_scene(
                 }
             }
         }
-        CompiledGeneration::TwoD(compiled_generation) => {
+        AnyCompiledGeneration::TwoD(compiled_generation) => {
             // Depth geometry is decided by fractal structure, not color mode, so color
             // changes after this build never require a geometry rebuild.
             let use_topological_depth = compiled_generation.has_stack_directives();
