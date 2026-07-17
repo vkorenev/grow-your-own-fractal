@@ -200,8 +200,11 @@ offscreen exports.
   use `Queue::write_buffer`; stamped iterators use `Queue::write_buffer_with`
   to fill mapped staging memory directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters. Its two-phase stamped
-  scenes collect stamps and then stream transformed records in traversal order.
+  maps `LineColorConfig` into shader color parameters. Its marker-keyed
+  `StampedScene<D>` collects stamps and then streams transformed point pairs or
+  depth-aware geometry in traversal order. Consumers accumulate bounds from
+  those points before constructing dimension-specific GPU records through
+  `RenderDimension`.
 - `scene_upload.rs` is the public renderer operation for web and offscreen
   scene generation/upload. It owns template selection and interpreter fallback,
   clamps depth requests for bracketless grammars, enforces layout-keyed caps,

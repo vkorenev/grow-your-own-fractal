@@ -1,12 +1,13 @@
 use glam::{Vec2, Vec3, Vec4};
 use lsystem_core::{
-    LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth, Stamp2D,
-    Stamp3D, StampStats, TemplateSet2D, TemplateSet3D,
+    D2, D3, LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
+    SegmentWithTopologicalDepth, Stamp, StampStats, TemplateDimension, TemplateSet, TemplateSet2D,
+    TemplateSet3D,
 };
 
 use crate::line_renderer::{
-    ColorParams, Segment2D, Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D,
-    Transform,
+    ColorParams, RenderDimension, Segment2D, Segment3D, TopologicalDepthSegment2D,
+    TopologicalDepthSegment3D, Transform,
 };
 
 /// Point operations used by renderer-local bounds accumulation.
@@ -101,21 +102,25 @@ impl<P: BoundsPoint> Bounds<P> {
 /// Phase 1 ([`Self::collect`]) walks the boundary expansion once and keeps
 /// only the stamps, so the exact segment total and maximum topological depth
 /// are known before any geometry is materialized. Phase 2
-/// ([`Self::segments`] / [`Self::depth_segments`]) streams transformed
-/// records in traversal order — the order the gradient shaders index by —
+/// ([`Self::segment_points`] / [`Self::depth_segments`]) streams transformed
+/// geometry in traversal order — the order the gradient shaders index by —
 /// yielding exactly [`Self::total_segments`] items, which lets callers size a
-/// GPU buffer up front and fill it in a single pass.
-pub struct StampedScene2D<'a> {
-    set: &'a TemplateSet2D,
-    stamps: Vec<Stamp2D>,
+/// GPU buffer up front, accumulate bounds, and construct records in a single
+/// pass.
+pub struct StampedScene<'a, D: RenderDimension> {
+    set: &'a TemplateSet<D>,
+    stamps: Vec<Stamp<D>>,
     stats: StampStats,
 }
 
-impl<'a> StampedScene2D<'a> {
-    pub fn collect(set: &'a TemplateSet2D) -> Self {
+impl<'a, D: RenderDimension> StampedScene<'a, D> {
+    pub fn collect(set: &'a TemplateSet<D>) -> Self
+    where
+        D: TemplateDimension,
+    {
         let mut stamps = Vec::new();
         let mut running: u64 = 0;
-        let stats = set.emit_stamps(|stamp, template| {
+        let stats = D::emit_stamps(set, |stamp, template| {
             debug_assert_eq!(
                 u64::from(stamp.order_base),
                 running,
@@ -135,91 +140,34 @@ impl<'a> StampedScene2D<'a> {
         self.stats.max_depth
     }
 
-    /// World-space segments in traversal order.
-    pub fn segments(&self) -> impl Iterator<Item = Segment2D> + '_ {
+    /// World-space segment endpoints in traversal order.
+    pub fn segment_points(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
         let templates = self.set.templates();
         self.stamps.iter().flat_map(move |stamp| {
             templates[stamp.template as usize]
                 .segments
                 .iter()
-                .map(move |segment| Segment2D {
-                    start: stamp.pos + stamp.rot.rotate(segment.start),
-                    end: stamp.pos + stamp.rot.rotate(segment.end),
+                .map(move |segment| {
+                    [
+                        stamp.pos + D::rotate(stamp.rot, segment.start),
+                        stamp.pos + D::rotate(stamp.rot, segment.end),
+                    ]
                 })
         })
     }
 
     /// World-space segments with topological depth, in traversal order.
-    pub fn depth_segments(&self) -> impl Iterator<Item = TopologicalDepthSegment2D> + '_ {
+    pub fn depth_segments(&self) -> impl Iterator<Item = SegmentWithTopologicalDepth<D>> + '_ {
         let templates = self.set.templates();
         self.stamps.iter().flat_map(move |stamp| {
             templates[stamp.template as usize]
                 .segments
                 .iter()
-                .map(move |segment| TopologicalDepthSegment2D {
-                    start: stamp.pos + stamp.rot.rotate(segment.start),
-                    end: stamp.pos + stamp.rot.rotate(segment.end),
-                    topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
-                })
-        })
-    }
-}
-
-/// Two-phase view of a stamped scene; see [`StampedScene2D`].
-pub struct StampedScene3D<'a> {
-    set: &'a TemplateSet3D,
-    stamps: Vec<Stamp3D>,
-    stats: StampStats,
-}
-
-impl<'a> StampedScene3D<'a> {
-    pub fn collect(set: &'a TemplateSet3D) -> Self {
-        let mut stamps = Vec::new();
-        let mut running: u64 = 0;
-        let stats = set.emit_stamps(|stamp, template| {
-            debug_assert_eq!(
-                u64::from(stamp.order_base),
-                running,
-                "stamps must stream in traversal order"
-            );
-            running += template.segments.len() as u64;
-            stamps.push(stamp);
-        });
-        Self { set, stamps, stats }
-    }
-
-    pub fn total_segments(&self) -> u64 {
-        self.stats.total_segments
-    }
-
-    pub fn max_topological_depth(&self) -> u32 {
-        self.stats.max_depth
-    }
-
-    /// World-space segments in traversal order.
-    pub fn segments(&self) -> impl Iterator<Item = Segment3D> + '_ {
-        let templates = self.set.templates();
-        self.stamps.iter().flat_map(move |stamp| {
-            templates[stamp.template as usize]
-                .segments
-                .iter()
-                .map(move |segment| Segment3D {
-                    start: stamp.pos + stamp.rot * segment.start,
-                    end: stamp.pos + stamp.rot * segment.end,
-                })
-        })
-    }
-
-    /// World-space segments with topological depth, in traversal order.
-    pub fn depth_segments(&self) -> impl Iterator<Item = TopologicalDepthSegment3D> + '_ {
-        let templates = self.set.templates();
-        self.stamps.iter().flat_map(move |stamp| {
-            templates[stamp.template as usize]
-                .segments
-                .iter()
-                .map(move |segment| TopologicalDepthSegment3D {
-                    start: stamp.pos + stamp.rot * segment.start,
-                    end: stamp.pos + stamp.rot * segment.end,
+                .map(move |segment| SegmentWithTopologicalDepth {
+                    points: [
+                        stamp.pos + D::rotate(stamp.rot, segment.start),
+                        stamp.pos + D::rotate(stamp.rot, segment.end),
+                    ],
                     topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
                 })
         })
@@ -282,6 +230,50 @@ impl<R, P: BoundsPoint> SegmentCollector<R, P> {
     }
 }
 
+fn collect_stamped_segments<D>(
+    set: &TemplateSet<D>,
+) -> CollectedSegmentData<D::PlainRecord, D::Point>
+where
+    D: RenderDimension + TemplateDimension,
+{
+    let scene = StampedScene::collect(set);
+    let mut collector = SegmentCollector::new();
+    scene.segment_points().for_each(|points @ [a, b]| {
+        collector.push(points, 0, D::plain_record(a, b));
+    });
+    let (segments, bounds_min, bounds_max, _) = collector.finish();
+    CollectedSegmentData {
+        segments,
+        bounds_min,
+        bounds_max,
+    }
+}
+
+fn collect_stamped_depth_segments<D>(
+    set: &TemplateSet<D>,
+) -> CollectedDepthSegmentData<D::DepthRecord, D::Point>
+where
+    D: RenderDimension + TemplateDimension,
+{
+    let scene = StampedScene::collect(set);
+    let mut collector = SegmentCollector::new();
+    scene.depth_segments().for_each(|segment| {
+        let [a, b] = segment.points;
+        collector.push(
+            segment.points,
+            segment.topological_depth,
+            D::depth_record(a, b, segment.topological_depth),
+        );
+    });
+    let (segments, bounds_min, bounds_max, max_topological_depth) = collector.finish();
+    CollectedDepthSegmentData {
+        segments,
+        bounds_min,
+        bounds_max,
+        max_topological_depth,
+    }
+}
+
 pub struct SegmentDataBuilder {
     collector: SegmentCollector<Segment2D, Vec2>,
 }
@@ -324,12 +316,7 @@ pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> Segmen
 /// stamp's template segments into world space in a tight per-segment loop,
 /// skipping per-symbol interpretation of the template-depth iterations.
 pub fn stamped_geometry_to_segments(set: &TemplateSet2D) -> SegmentData {
-    let scene = StampedScene2D::collect(set);
-    let mut builder = SegmentDataBuilder::new();
-    scene
-        .segments()
-        .for_each(|segment| builder.push_segment([segment.start, segment.end]));
-    builder.finish()
+    collect_stamped_segments::<D2>(set)
 }
 
 pub struct TopologicalDepthSegmentDataBuilder {
@@ -386,12 +373,7 @@ pub fn geometry_to_depth_segments(
 
 /// CPU-stamped alternative to [`geometry_to_depth_segments`].
 pub fn stamped_geometry_to_depth_segments(set: &TemplateSet2D) -> TopologicalDepthSegmentData {
-    let scene = StampedScene2D::collect(set);
-    let mut builder = TopologicalDepthSegmentDataBuilder::new();
-    scene.depth_segments().for_each(|segment| {
-        builder.push_parts([segment.start, segment.end], segment.topological_depth);
-    });
-    builder.finish()
+    collect_stamped_depth_segments::<D2>(set)
 }
 
 pub struct SegmentDataBuilder3D {
@@ -434,12 +416,7 @@ pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> Seg
 
 /// CPU-stamped alternative to [`geometry_to_segments_3d`].
 pub fn stamped_geometry_to_segments_3d(set: &TemplateSet3D) -> SegmentData3D {
-    let scene = StampedScene3D::collect(set);
-    let mut builder = SegmentDataBuilder3D::new();
-    scene
-        .segments()
-        .for_each(|segment| builder.push_segment([segment.start, segment.end]));
-    builder.finish()
+    collect_stamped_segments::<D3>(set)
 }
 
 pub struct TopologicalDepthSegmentDataBuilder3D {
@@ -496,12 +473,7 @@ pub fn geometry_to_depth_segments_3d(
 
 /// CPU-stamped alternative to [`geometry_to_depth_segments_3d`].
 pub fn stamped_geometry_to_depth_segments_3d(set: &TemplateSet3D) -> TopologicalDepthSegmentData3D {
-    let scene = StampedScene3D::collect(set);
-    let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
-    scene.depth_segments().for_each(|segment| {
-        builder.push_parts([segment.start, segment.end], segment.topological_depth);
-    });
-    builder.finish()
+    collect_stamped_depth_segments::<D3>(set)
 }
 
 /// Builds the GPU color uniform for the selected line color mode.
@@ -710,10 +682,13 @@ mod tests {
         )
         .expect("balanced config");
         let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
-        let scene = StampedScene2D::collect(&set);
+        let scene = StampedScene::collect(&set);
 
         assert!(scene.total_segments() > 0);
-        assert_eq!(scene.segments().count() as u64, scene.total_segments());
+        assert_eq!(
+            scene.segment_points().count() as u64,
+            scene.total_segments()
+        );
         assert_eq!(
             scene.depth_segments().count() as u64,
             scene.total_segments()
@@ -742,10 +717,13 @@ mod tests {
         )
         .expect("balanced config");
         let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
-        let scene = StampedScene3D::collect(&set);
+        let scene = StampedScene::collect(&set);
 
         assert!(scene.total_segments() > 0);
-        assert_eq!(scene.segments().count() as u64, scene.total_segments());
+        assert_eq!(
+            scene.segment_points().count() as u64,
+            scene.total_segments()
+        );
         assert_eq!(
             scene.depth_segments().count() as u64,
             scene.total_segments()
@@ -772,10 +750,10 @@ mod tests {
         .expect("balanced config");
         let set = TemplateSet2D::build(compile_2d(&config), 1).expect("set builds");
 
-        let scene = StampedScene2D::collect(&set);
+        let scene = StampedScene::collect(&set);
         assert_eq!(scene.total_segments(), 0);
         assert_eq!(scene.max_topological_depth(), 0);
-        assert_eq!(scene.segments().count(), 0);
+        assert_eq!(scene.segment_points().count(), 0);
 
         let data = stamped_geometry_to_segments(&set);
         assert!(data.segments.is_empty());
