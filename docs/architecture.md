@@ -29,7 +29,7 @@ Runtime generation starts from a resolved `GenerationConfig`.
 GenerationConfig
   -> AnyCompiledGeneration
   -> CompiledGeneration<D2> / CompiledGeneration<D3>
-  -> template stamps or interpreted Segments2D / Segments3D
+  -> template stamps or interpreted turtle segments (segments() / depth_segments())
   -> renderer scene upload
   -> wgpu instance buffer
 ```

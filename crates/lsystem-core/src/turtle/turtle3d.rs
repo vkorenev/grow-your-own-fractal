@@ -3,10 +3,11 @@ use glam::{Quat, Vec3};
 use super::Turtle;
 use crate::{D3, Segment3DWithTopologicalDepth};
 
+/// Turtle state plus the single symbol transition consumed by `DepthSegments`.
+/// Template building also drives it directly to capture the exit state after a
+/// rule expansion.
+///
 /// Heading = `orientation * Vec3::X`, left = `* Vec3::Y`, up = `* Vec3::Z`.
-/// Turtle state plus the single symbol transition shared by `next` and `fold`,
-/// so the two iteration paths cannot drift apart. Template building drives it
-/// directly to capture the exit state after a rule expansion.
 pub(crate) struct TurtleState3D {
     rot_yaw_plus: Quat,
     rot_yaw_minus: Quat,

@@ -3,9 +3,9 @@ use glam::Vec2;
 use super::Turtle;
 use crate::{D2, Segment2DWithTopologicalDepth};
 
-/// Turtle state plus the single symbol transition shared by `next` and `fold`,
-/// so the two iteration paths cannot drift apart. Template building drives it
-/// directly to capture the exit state after a rule expansion.
+/// Turtle state plus the single symbol transition consumed by `DepthSegments`.
+/// Template building also drives it directly to capture the exit state after a
+/// rule expansion.
 pub(crate) struct TurtleState2D {
     rot_plus: Vec2,
     rot_minus: Vec2,

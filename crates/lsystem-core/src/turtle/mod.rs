@@ -36,6 +36,9 @@ where
         }
     }
 
+    // Renderer drains rely on forwarding `fold` to the symbol iterator; the
+    // `FoldOnly` and fold-vs-next tests in both turtle modules pin delegation
+    // and equivalence with `next`.
     fn fold<B, F>(self, init: B, mut f: F) -> B
     where
         Self: Sized,
