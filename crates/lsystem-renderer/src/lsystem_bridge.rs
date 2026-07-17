@@ -9,62 +9,89 @@ use crate::line_renderer::{
     Transform,
 };
 
-/// Axis-aligned bounds accumulator over 2D segment endpoints.
-pub(crate) struct Bounds2D {
-    min: Vec2,
-    max: Vec2,
+/// Point operations used by renderer-local bounds accumulation.
+///
+/// This trait is public only so later public renderer traits can name it in
+/// associated-point bounds. Concrete bridge facades do not expose it.
+#[doc(hidden)]
+pub trait BoundsPoint: Copy + std::ops::Add<Output = Self> {
+    const INFINITY: Self;
+    const NEG_INFINITY: Self;
+
+    fn min(self, other: Self) -> Self;
+    fn max(self, other: Self) -> Self;
+    fn is_unbounded(self) -> bool;
+    fn fallback() -> (Self, Self);
 }
 
-impl Bounds2D {
+impl BoundsPoint for Vec2 {
+    const INFINITY: Self = Vec2::INFINITY;
+    const NEG_INFINITY: Self = Vec2::NEG_INFINITY;
+
+    fn min(self, other: Self) -> Self {
+        Vec2::min(self, other)
+    }
+
+    fn max(self, other: Self) -> Self {
+        Vec2::max(self, other)
+    }
+
+    fn is_unbounded(self) -> bool {
+        self.x.is_infinite()
+    }
+
+    fn fallback() -> (Self, Self) {
+        (Vec2::splat(-1.0), Vec2::splat(1.0))
+    }
+}
+
+impl BoundsPoint for Vec3 {
+    const INFINITY: Self = Vec3::INFINITY;
+    const NEG_INFINITY: Self = Vec3::NEG_INFINITY;
+
+    fn min(self, other: Self) -> Self {
+        Vec3::min(self, other)
+    }
+
+    fn max(self, other: Self) -> Self {
+        Vec3::max(self, other)
+    }
+
+    fn is_unbounded(self) -> bool {
+        self.x.is_infinite()
+    }
+
+    fn fallback() -> (Self, Self) {
+        (Vec3::splat(-1.0), Vec3::splat(1.0))
+    }
+}
+
+/// Axis-aligned bounds accumulator over segment endpoints.
+pub(crate) struct Bounds<P: BoundsPoint> {
+    min: P,
+    max: P,
+}
+
+impl<P: BoundsPoint> Bounds<P> {
     pub(crate) fn new() -> Self {
         Self {
-            min: Vec2::INFINITY,
-            max: Vec2::NEG_INFINITY,
+            min: P::INFINITY,
+            max: P::NEG_INFINITY,
         }
     }
 
-    pub(crate) fn update(&mut self, a: Vec2, b: Vec2) {
+    pub(crate) fn update(&mut self, a: P, b: P) {
         self.min = self.min.min(a).min(b);
         self.max = self.max.max(a).max(b);
     }
 
     /// Falls back to the unit box when no endpoints were seen, so empty
     /// geometry still yields a usable viewport.
-    pub(crate) fn finish(self) -> ([f32; 2], [f32; 2]) {
-        if self.min.x.is_infinite() {
-            ([-1.0, -1.0], [1.0, 1.0])
+    pub(crate) fn finish(self) -> (P, P) {
+        if self.min.is_unbounded() {
+            P::fallback()
         } else {
-            (self.min.to_array(), self.max.to_array())
-        }
-    }
-}
-
-/// Axis-aligned bounds accumulator over 3D segment endpoints.
-pub(crate) struct Bounds3D {
-    min: Vec3,
-    max: Vec3,
-}
-
-impl Bounds3D {
-    pub(crate) fn new() -> Self {
-        Self {
-            min: Vec3::INFINITY,
-            max: Vec3::NEG_INFINITY,
-        }
-    }
-
-    pub(crate) fn update(&mut self, a: Vec3, b: Vec3) {
-        self.min = self.min.min(a).min(b);
-        self.max = self.max.max(a).max(b);
-    }
-
-    /// Falls back to the unit box when no endpoints were seen, so empty
-    /// geometry still yields a usable viewport.
-    pub(crate) fn finish(self) -> ([f32; 3], [f32; 3]) {
-        if self.min.x.is_infinite() {
-            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
-        } else {
-            (self.min.to_array(), self.max.to_array())
+            (self.min, self.max)
         }
     }
 }
@@ -199,34 +226,82 @@ impl<'a> StampedScene3D<'a> {
     }
 }
 
-pub struct SegmentData {
-    pub segments: Vec<Segment2D>,
-    pub bounds_min: [f32; 2],
-    pub bounds_max: [f32; 2],
+pub struct CollectedSegmentData<R, P> {
+    pub segments: Vec<R>,
+    pub bounds_min: P,
+    pub bounds_max: P,
+}
+
+pub struct CollectedDepthSegmentData<R, P> {
+    pub segments: Vec<R>,
+    pub bounds_min: P,
+    pub bounds_max: P,
+    max_topological_depth: u32,
+}
+
+impl<R, P> CollectedDepthSegmentData<R, P> {
+    pub fn max_topological_depth(&self) -> u32 {
+        self.max_topological_depth
+    }
+}
+
+pub type SegmentData = CollectedSegmentData<Segment2D, Vec2>;
+pub type SegmentData3D = CollectedSegmentData<Segment3D, Vec3>;
+pub type TopologicalDepthSegmentData = CollectedDepthSegmentData<TopologicalDepthSegment2D, Vec2>;
+pub type TopologicalDepthSegmentData3D = CollectedDepthSegmentData<TopologicalDepthSegment3D, Vec3>;
+
+struct SegmentCollector<R, P: BoundsPoint> {
+    bounds: Bounds<P>,
+    max_topological_depth: u32,
+    segments: Vec<R>,
+}
+
+impl<R, P: BoundsPoint> SegmentCollector<R, P> {
+    fn new() -> Self {
+        Self {
+            bounds: Bounds::new(),
+            max_topological_depth: 0,
+            segments: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, [a, b]: [P; 2], topological_depth: u32, record: R) {
+        self.bounds.update(a, b);
+        self.max_topological_depth = self.max_topological_depth.max(topological_depth);
+        self.segments.push(record);
+    }
+
+    fn finish(self) -> (Vec<R>, P, P, u32) {
+        let (bounds_min, bounds_max) = self.bounds.finish();
+        (
+            self.segments,
+            bounds_min,
+            bounds_max,
+            self.max_topological_depth,
+        )
+    }
 }
 
 pub struct SegmentDataBuilder {
-    bounds: Bounds2D,
-    segments: Vec<Segment2D>,
+    collector: SegmentCollector<Segment2D, Vec2>,
 }
 
 impl SegmentDataBuilder {
     pub fn new() -> Self {
         Self {
-            bounds: Bounds2D::new(),
-            segments: Vec::new(),
+            collector: SegmentCollector::new(),
         }
     }
 
     pub fn push_segment(&mut self, [a, b]: [Vec2; 2]) {
-        self.bounds.update(a, b);
-        self.segments.push(Segment2D { start: a, end: b });
+        self.collector
+            .push([a, b], 0, Segment2D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData {
-        let (bounds_min, bounds_max) = self.bounds.finish();
-        SegmentData {
-            segments: self.segments,
+        let (segments, bounds_min, bounds_max, _) = self.collector.finish();
+        CollectedSegmentData {
+            segments,
             bounds_min,
             bounds_max,
         }
@@ -250,65 +325,47 @@ pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> Segmen
 /// skipping per-symbol interpretation of the template-depth iterations.
 pub fn stamped_geometry_to_segments(set: &TemplateSet2D) -> SegmentData {
     let scene = StampedScene2D::collect(set);
-    let mut bounds = Bounds2D::new();
-    let segments = scene
+    let mut builder = SegmentDataBuilder::new();
+    scene
         .segments()
-        .inspect(|segment| bounds.update(segment.start, segment.end))
-        .collect();
-    let (bounds_min, bounds_max) = bounds.finish();
-    SegmentData {
-        segments,
-        bounds_min,
-        bounds_max,
-    }
-}
-
-pub struct TopologicalDepthSegmentData {
-    pub segments: Vec<TopologicalDepthSegment2D>,
-    pub bounds_min: [f32; 2],
-    pub bounds_max: [f32; 2],
-    max_topological_depth: u32,
-}
-
-impl TopologicalDepthSegmentData {
-    pub fn max_topological_depth(&self) -> u32 {
-        self.max_topological_depth
-    }
+        .for_each(|segment| builder.push_segment([segment.start, segment.end]));
+    builder.finish()
 }
 
 pub struct TopologicalDepthSegmentDataBuilder {
-    bounds: Bounds2D,
-    max_topological_depth: u32,
-    segments: Vec<TopologicalDepthSegment2D>,
+    collector: SegmentCollector<TopologicalDepthSegment2D, Vec2>,
 }
 
 impl TopologicalDepthSegmentDataBuilder {
     pub fn new() -> Self {
         Self {
-            bounds: Bounds2D::new(),
-            max_topological_depth: 0,
-            segments: Vec::new(),
+            collector: SegmentCollector::new(),
         }
     }
 
     pub fn push_segment(&mut self, segment: Segment2DWithTopologicalDepth) {
-        let [a, b] = segment.points;
-        self.bounds.update(a, b);
-        self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
-        self.segments.push(TopologicalDepthSegment2D {
-            start: a,
-            end: b,
-            topological_depth: segment.topological_depth,
-        });
+        self.push_parts(segment.points, segment.topological_depth);
+    }
+
+    fn push_parts(&mut self, [a, b]: [Vec2; 2], topological_depth: u32) {
+        self.collector.push(
+            [a, b],
+            topological_depth,
+            TopologicalDepthSegment2D {
+                start: a,
+                end: b,
+                topological_depth,
+            },
+        );
     }
 
     pub fn finish(self) -> TopologicalDepthSegmentData {
-        let (bounds_min, bounds_max) = self.bounds.finish();
-        TopologicalDepthSegmentData {
-            segments: self.segments,
+        let (segments, bounds_min, bounds_max, max_topological_depth) = self.collector.finish();
+        CollectedDepthSegmentData {
+            segments,
             bounds_min,
             bounds_max,
-            max_topological_depth: self.max_topological_depth,
+            max_topological_depth,
         }
     }
 }
@@ -330,48 +387,33 @@ pub fn geometry_to_depth_segments(
 /// CPU-stamped alternative to [`geometry_to_depth_segments`].
 pub fn stamped_geometry_to_depth_segments(set: &TemplateSet2D) -> TopologicalDepthSegmentData {
     let scene = StampedScene2D::collect(set);
-    let mut bounds = Bounds2D::new();
-    let segments = scene
-        .depth_segments()
-        .inspect(|segment| bounds.update(segment.start, segment.end))
-        .collect();
-    let (bounds_min, bounds_max) = bounds.finish();
-    TopologicalDepthSegmentData {
-        segments,
-        bounds_min,
-        bounds_max,
-        max_topological_depth: scene.max_topological_depth(),
-    }
-}
-
-pub struct SegmentData3D {
-    pub segments: Vec<Segment3D>,
-    pub bounds_min: [f32; 3],
-    pub bounds_max: [f32; 3],
+    let mut builder = TopologicalDepthSegmentDataBuilder::new();
+    scene.depth_segments().for_each(|segment| {
+        builder.push_parts([segment.start, segment.end], segment.topological_depth);
+    });
+    builder.finish()
 }
 
 pub struct SegmentDataBuilder3D {
-    bounds: Bounds3D,
-    segments: Vec<Segment3D>,
+    collector: SegmentCollector<Segment3D, Vec3>,
 }
 
 impl SegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
-            bounds: Bounds3D::new(),
-            segments: Vec::new(),
+            collector: SegmentCollector::new(),
         }
     }
 
     pub fn push_segment(&mut self, [a, b]: [Vec3; 2]) {
-        self.bounds.update(a, b);
-        self.segments.push(Segment3D { start: a, end: b });
+        self.collector
+            .push([a, b], 0, Segment3D { start: a, end: b });
     }
 
     pub fn finish(self) -> SegmentData3D {
-        let (bounds_min, bounds_max) = self.bounds.finish();
-        SegmentData3D {
-            segments: self.segments,
+        let (segments, bounds_min, bounds_max, _) = self.collector.finish();
+        CollectedSegmentData {
+            segments,
             bounds_min,
             bounds_max,
         }
@@ -393,65 +435,47 @@ pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> Seg
 /// CPU-stamped alternative to [`geometry_to_segments_3d`].
 pub fn stamped_geometry_to_segments_3d(set: &TemplateSet3D) -> SegmentData3D {
     let scene = StampedScene3D::collect(set);
-    let mut bounds = Bounds3D::new();
-    let segments = scene
+    let mut builder = SegmentDataBuilder3D::new();
+    scene
         .segments()
-        .inspect(|segment| bounds.update(segment.start, segment.end))
-        .collect();
-    let (bounds_min, bounds_max) = bounds.finish();
-    SegmentData3D {
-        segments,
-        bounds_min,
-        bounds_max,
-    }
-}
-
-pub struct TopologicalDepthSegmentData3D {
-    pub segments: Vec<TopologicalDepthSegment3D>,
-    pub bounds_min: [f32; 3],
-    pub bounds_max: [f32; 3],
-    max_topological_depth: u32,
-}
-
-impl TopologicalDepthSegmentData3D {
-    pub fn max_topological_depth(&self) -> u32 {
-        self.max_topological_depth
-    }
+        .for_each(|segment| builder.push_segment([segment.start, segment.end]));
+    builder.finish()
 }
 
 pub struct TopologicalDepthSegmentDataBuilder3D {
-    bounds: Bounds3D,
-    max_topological_depth: u32,
-    segments: Vec<TopologicalDepthSegment3D>,
+    collector: SegmentCollector<TopologicalDepthSegment3D, Vec3>,
 }
 
 impl TopologicalDepthSegmentDataBuilder3D {
     pub fn new() -> Self {
         Self {
-            bounds: Bounds3D::new(),
-            max_topological_depth: 0,
-            segments: Vec::new(),
+            collector: SegmentCollector::new(),
         }
     }
 
     pub fn push_segment(&mut self, segment: Segment3DWithTopologicalDepth) {
-        let [a, b] = segment.points;
-        self.bounds.update(a, b);
-        self.max_topological_depth = self.max_topological_depth.max(segment.topological_depth);
-        self.segments.push(TopologicalDepthSegment3D {
-            start: a,
-            end: b,
-            topological_depth: segment.topological_depth,
-        });
+        self.push_parts(segment.points, segment.topological_depth);
+    }
+
+    fn push_parts(&mut self, [a, b]: [Vec3; 2], topological_depth: u32) {
+        self.collector.push(
+            [a, b],
+            topological_depth,
+            TopologicalDepthSegment3D {
+                start: a,
+                end: b,
+                topological_depth,
+            },
+        );
     }
 
     pub fn finish(self) -> TopologicalDepthSegmentData3D {
-        let (bounds_min, bounds_max) = self.bounds.finish();
-        TopologicalDepthSegmentData3D {
-            segments: self.segments,
+        let (segments, bounds_min, bounds_max, max_topological_depth) = self.collector.finish();
+        CollectedDepthSegmentData {
+            segments,
             bounds_min,
             bounds_max,
-            max_topological_depth: self.max_topological_depth,
+            max_topological_depth,
         }
     }
 }
@@ -473,18 +497,11 @@ pub fn geometry_to_depth_segments_3d(
 /// CPU-stamped alternative to [`geometry_to_depth_segments_3d`].
 pub fn stamped_geometry_to_depth_segments_3d(set: &TemplateSet3D) -> TopologicalDepthSegmentData3D {
     let scene = StampedScene3D::collect(set);
-    let mut bounds = Bounds3D::new();
-    let segments = scene
-        .depth_segments()
-        .inspect(|segment| bounds.update(segment.start, segment.end))
-        .collect();
-    let (bounds_min, bounds_max) = bounds.finish();
-    TopologicalDepthSegmentData3D {
-        segments,
-        bounds_min,
-        bounds_max,
-        max_topological_depth: scene.max_topological_depth(),
-    }
+    let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
+    scene.depth_segments().for_each(|segment| {
+        builder.push_parts([segment.start, segment.end], segment.topological_depth);
+    });
+    builder.finish()
 }
 
 /// Builds the GPU color uniform for the selected line color mode.
@@ -762,14 +779,14 @@ mod tests {
 
         let data = stamped_geometry_to_segments(&set);
         assert!(data.segments.is_empty());
-        assert_eq!(data.bounds_min, [-1.0, -1.0]);
-        assert_eq!(data.bounds_max, [1.0, 1.0]);
+        assert_eq!(data.bounds_min, Vec2::splat(-1.0));
+        assert_eq!(data.bounds_max, Vec2::splat(1.0));
 
         let depth_data = stamped_geometry_to_depth_segments(&set);
         assert!(depth_data.segments.is_empty());
         assert_eq!(depth_data.max_topological_depth(), 0);
-        assert_eq!(depth_data.bounds_min, [-1.0, -1.0]);
-        assert_eq!(depth_data.bounds_max, [1.0, 1.0]);
+        assert_eq!(depth_data.bounds_min, Vec2::splat(-1.0));
+        assert_eq!(depth_data.bounds_max, Vec2::splat(1.0));
     }
 
     #[test]
@@ -1028,8 +1045,8 @@ mod tests {
 
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
-        assert_eq!(data.bounds_min, [-1.0, -1.0, -1.0]);
-        assert_eq!(data.bounds_max, [1.0, 1.0, 1.0]);
+        assert_eq!(data.bounds_min, Vec3::splat(-1.0));
+        assert_eq!(data.bounds_max, Vec3::splat(1.0));
     }
 
     #[test]

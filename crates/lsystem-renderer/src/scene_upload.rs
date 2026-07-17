@@ -10,9 +10,8 @@ use crate::line_renderer::{
     LinePipeline2D, LinePipeline3D, StagingUnavailable, max_segments_for_line_color,
 };
 use crate::lsystem_bridge::{
-    Bounds2D, Bounds3D, StampedScene2D, StampedScene3D, color_params_from_config,
-    geometry_to_depth_segments, geometry_to_depth_segments_3d, geometry_to_segments,
-    geometry_to_segments_3d,
+    Bounds, StampedScene2D, StampedScene3D, color_params_from_config, geometry_to_depth_segments,
+    geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,7 +189,7 @@ pub fn upload_scene_2d(
                 counted_total,
                 "stamped 2D segment count must match the compiled recurrence"
             );
-            let mut bounds = Bounds2D::new();
+            let mut bounds = Bounds::new();
             let uploaded_layout = match layout {
                 SegmentLayout::Plain => {
                     let color = color_params_from_config(line, total_segments, None);
@@ -232,8 +231,8 @@ pub fn upload_scene_2d(
                 method,
                 layout: uploaded_layout,
                 total_segments,
-                bounds_min,
-                bounds_max,
+                bounds_min: bounds_min.to_array(),
+                bounds_max: bounds_max.to_array(),
             })
         }
         Err(generation) => match layout {
@@ -250,8 +249,8 @@ pub fn upload_scene_2d(
                     method: GenerationMethod::Interpreted,
                     layout: UploadedLayout::Plain,
                     total_segments,
-                    bounds_min: data.bounds_min,
-                    bounds_max: data.bounds_max,
+                    bounds_min: data.bounds_min.to_array(),
+                    bounds_max: data.bounds_max.to_array(),
                 })
             }
             SegmentLayout::TopologicalDepth => {
@@ -271,8 +270,8 @@ pub fn upload_scene_2d(
                         max_topological_depth,
                     },
                     total_segments,
-                    bounds_min: data.bounds_min,
-                    bounds_max: data.bounds_max,
+                    bounds_min: data.bounds_min.to_array(),
+                    bounds_max: data.bounds_max.to_array(),
                 })
             }
         },
@@ -304,7 +303,7 @@ pub fn upload_scene_3d(
                 counted_total,
                 "stamped 3D segment count must match the compiled recurrence"
             );
-            let mut bounds = Bounds3D::new();
+            let mut bounds = Bounds::new();
             let uploaded_layout = match layout {
                 SegmentLayout::Plain => {
                     let color = color_params_from_config(line, total_segments, None);
@@ -346,8 +345,8 @@ pub fn upload_scene_3d(
                 method,
                 layout: uploaded_layout,
                 total_segments,
-                bounds_min,
-                bounds_max,
+                bounds_min: bounds_min.to_array(),
+                bounds_max: bounds_max.to_array(),
             })
         }
         Err(generation) => match layout {
@@ -364,8 +363,8 @@ pub fn upload_scene_3d(
                     method: GenerationMethod::Interpreted,
                     layout: UploadedLayout::Plain,
                     total_segments,
-                    bounds_min: data.bounds_min,
-                    bounds_max: data.bounds_max,
+                    bounds_min: data.bounds_min.to_array(),
+                    bounds_max: data.bounds_max.to_array(),
                 })
             }
             SegmentLayout::TopologicalDepth => {
@@ -385,8 +384,8 @@ pub fn upload_scene_3d(
                         max_topological_depth,
                     },
                     total_segments,
-                    bounds_min: data.bounds_min,
-                    bounds_max: data.bounds_max,
+                    bounds_min: data.bounds_min.to_array(),
+                    bounds_max: data.bounds_max.to_array(),
                 })
             }
         },
