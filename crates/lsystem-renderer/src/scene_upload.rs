@@ -2,15 +2,16 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
-    CompiledGeneration2D, CompiledGeneration3D, DEFAULT_TEMPLATE_SEGMENT_BUDGET, Dimensions,
-    LineColorConfig, TemplateSet2D, TemplateSet3D,
+    CompiledGeneration2D, CompiledGeneration3D, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET,
+    Dimensions, LineColorConfig, TemplateSet2D, TemplateSet3D,
 };
 
 use crate::line_renderer::{
-    LinePipeline2D, LinePipeline3D, StagingUnavailable, max_segments_for_line_color,
+    LinePipeline2D, LinePipeline3D, RenderDimension, StagingUnavailable,
+    max_segments_for_line_color,
 };
 use crate::lsystem_bridge::{
-    Bounds, StampedScene2D, StampedScene3D, color_params_from_config, geometry_to_depth_segments,
+    Bounds, StampedScene, color_params_from_config, geometry_to_depth_segments,
     geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
 };
 
@@ -183,7 +184,7 @@ pub fn upload_scene_2d(
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
             };
-            let scene = StampedScene2D::collect(&set);
+            let scene = StampedScene::collect(&set);
             assert_eq!(
                 scene.total_segments(),
                 counted_total,
@@ -198,9 +199,10 @@ pub fn upload_scene_2d(
                             device,
                             queue,
                             total_segments,
-                            scene
-                                .segments()
-                                .inspect(|segment| bounds.update(segment.start, segment.end)),
+                            scene.segment_points().map(|[start, end]| {
+                                bounds.update(start, end);
+                                D2::plain_record(start, end)
+                            }),
                             color,
                         )
                         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
@@ -215,9 +217,11 @@ pub fn upload_scene_2d(
                             device,
                             queue,
                             total_segments,
-                            scene
-                                .depth_segments()
-                                .inspect(|segment| bounds.update(segment.start, segment.end)),
+                            scene.depth_segments().map(|segment| {
+                                let [start, end] = segment.points;
+                                bounds.update(start, end);
+                                D2::depth_record(start, end, segment.topological_depth)
+                            }),
                             color,
                         )
                         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
@@ -297,7 +301,7 @@ pub fn upload_scene_3d(
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
             };
-            let scene = StampedScene3D::collect(&set);
+            let scene = StampedScene::collect(&set);
             assert_eq!(
                 scene.total_segments(),
                 counted_total,
@@ -312,9 +316,10 @@ pub fn upload_scene_3d(
                             device,
                             queue,
                             total_segments,
-                            scene
-                                .segments()
-                                .inspect(|segment| bounds.update(segment.start, segment.end)),
+                            scene.segment_points().map(|[start, end]| {
+                                bounds.update(start, end);
+                                D3::plain_record(start, end)
+                            }),
                             color,
                         )
                         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
@@ -329,9 +334,11 @@ pub fn upload_scene_3d(
                             device,
                             queue,
                             total_segments,
-                            scene
-                                .depth_segments()
-                                .inspect(|segment| bounds.update(segment.start, segment.end)),
+                            scene.depth_segments().map(|segment| {
+                                let [start, end] = segment.points;
+                                bounds.update(start, end);
+                                D3::depth_record(start, end, segment.topological_depth)
+                            }),
                             color,
                         )
                         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
