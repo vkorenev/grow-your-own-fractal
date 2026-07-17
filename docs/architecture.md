@@ -82,13 +82,18 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
   opaque `CompiledGeneration<D2>` or `CompiledGeneration<D3>` payload inside
   `AnyCompiledGeneration`. Runtime consumers match once at their boundary and
   can only pass the matching typed value to 2D or 3D generation and template
-  APIs. The `CompiledGeneration2D` and `CompiledGeneration3D` aliases retain
-  concise dimension-specific names where concrete signatures remain useful.
+  APIs. A hidden sealed marker capability constructs the dimension-specific
+  turtle behind a shared streaming iterator shell, so `segments()` and
+  `depth_segments()` have one generic implementation. The
+  `CompiledGeneration2D` and `CompiledGeneration3D` aliases retain concise
+  dimension-specific names where concrete signatures remain useful.
 - `grammar.rs` provides the crate-private compiled grammar representation
   (shared byte arena plus rule table, unreachable rules dropped) and lazy
   expansion iterators used by the typed generation façade.
 - `turtle/turtle2d.rs` yields 2D line segments from expanded symbols.
 - `turtle/turtle3d.rs` yields 3D line segments using quaternion orientation.
+  Both turtle states keep their dimension-specific symbol transitions while a
+  crate-private iterator owns the common `next` and optimized `fold` paths.
 - `template.rs` provides the alternative stamped generation path: per-rule
   geometry templates (a rule expanded a fixed number of iterations in the
   local frame, with its exit transform) plus a placement walk that streams
