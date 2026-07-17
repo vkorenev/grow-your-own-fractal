@@ -124,7 +124,7 @@ impl FractalApp {
         }
 
         let hint = if is_3d {
-            "Drag to orbit · Scroll to zoom · F to fit\nArrows to rotate · Q/E to roll"
+            "Grab and drag to orbit · Scroll to zoom · F to fit\nArrows to rotate · Q/E to roll"
         } else {
             "Drag to pan · Scroll to zoom · F to fit"
         };

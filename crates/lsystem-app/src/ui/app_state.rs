@@ -22,6 +22,10 @@ use super::{PNG_MAX_DIMENSION, PNG_MIN_DIMENSION};
 const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 
+fn camera_auto_rotation_active(auto_rotate: bool, is_3d: bool, orbit_drag_active: bool) -> bool {
+    auto_rotate && is_3d && !orbit_drag_active
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ColorDefaultField {
     SolidLine,
@@ -64,6 +68,8 @@ pub(super) enum Message {
         dx: f32,
         dy: f32,
     },
+    FractalOrbitStarted,
+    FractalOrbitEnded,
     FractalZoom {
         delta_y: f32,
         cursor: Point,
@@ -97,6 +103,7 @@ pub(super) struct FractalApp {
     pub(super) scene: Scene,
     pub(super) auto_rotate: bool,
     pub(super) auto_rotate_speed: f32,
+    orbit_drag_active: bool,
     pub(super) hue_rotation: HueRotation,
     pub(super) hue_rotation_phase_degrees: f32,
     color_memory: ColorControlMemory,
@@ -129,6 +136,7 @@ impl FractalApp {
             scene: Scene::default(),
             auto_rotate: false,
             auto_rotate_speed: 45.0,
+            orbit_drag_active: false,
             hue_rotation: HueRotation::default(),
             hue_rotation_phase_degrees: 0.0,
             color_memory,
@@ -324,6 +332,14 @@ impl FractalApp {
                 self.scene.orbit_by_pixels(dx, dy);
                 Task::none()
             }
+            Message::FractalOrbitStarted => {
+                self.orbit_drag_active = true;
+                Task::none()
+            }
+            Message::FractalOrbitEnded => {
+                self.orbit_drag_active = false;
+                Task::none()
+            }
             Message::FractalZoom {
                 delta_y,
                 cursor,
@@ -369,7 +385,11 @@ impl FractalApp {
                 Task::none()
             }
             Message::AnimationTick => {
-                if self.auto_rotate && self.scene.is_3d() {
+                if camera_auto_rotation_active(
+                    self.auto_rotate,
+                    self.scene.is_3d(),
+                    self.orbit_drag_active,
+                ) {
                     self.scene
                         .auto_rotate_by(self.auto_rotate_speed * AUTO_ROTATE_DT_SECS);
                 }
@@ -396,7 +416,8 @@ impl FractalApp {
 
     pub(super) fn subscription(&self) -> Subscription<Message> {
         let is_3d = self.scene.is_3d();
-        let auto_rotate = self.auto_rotate;
+        let auto_rotate =
+            camera_auto_rotation_active(self.auto_rotate, is_3d, self.orbit_drag_active);
         let hue_rotation = self.hue_rotation.is_active(&self.control_line_color());
 
         let key_sub = event::listen_with(|event, status, _window| {
@@ -444,7 +465,7 @@ impl FractalApp {
             }
         });
 
-        if (is_3d && auto_rotate) || hue_rotation {
+        if auto_rotate || hue_rotation {
             let frames = window::frames().map(|_| Message::AnimationTick);
             Subscription::batch([key_sub, frames])
         } else {
@@ -960,6 +981,30 @@ mod tests {
         assert!(!app.hue_rotation.is_enabled());
         assert_eq!(app.hue_rotation_phase_degrees, 0.0);
         assert_eq!(app.scene.hue_offset_degrees(), 0.0);
+    }
+
+    #[test]
+    fn orbit_drag_pauses_only_camera_auto_rotation() {
+        assert!(camera_auto_rotation_active(true, true, false));
+        assert!(!camera_auto_rotation_active(true, true, true));
+        assert!(!camera_auto_rotation_active(false, true, false));
+        assert!(!camera_auto_rotation_active(true, false, false));
+
+        let (mut app, _) = FractalApp::new();
+        app.auto_rotate = true;
+        let _ = app.update(Message::LineColorModeSelected(LineColorMode::HueCycle));
+        let _ = app.update(Message::ToggleHueRotation);
+
+        let _ = app.update(Message::FractalOrbitStarted);
+        assert!(app.orbit_drag_active);
+        assert!(app.auto_rotate, "dragging must not disable auto-rotation");
+
+        let _ = app.update(Message::AnimationTick);
+        assert_ne!(app.hue_rotation_phase_degrees, 0.0);
+
+        let _ = app.update(Message::FractalOrbitEnded);
+        assert!(!app.orbit_drag_active);
+        assert!(app.auto_rotate);
     }
 
     #[test]

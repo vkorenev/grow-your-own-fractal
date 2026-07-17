@@ -270,8 +270,7 @@ impl CanvasRenderer {
                 );
             }
             ActiveScene::ThreeD(_) => {
-                let (_, _, dpr) = sync_canvas_size(canvas);
-                self.camera.orbit_by_pixels(css_dx * dpr, css_dy * dpr);
+                self.camera.orbit_by_pixels(css_dx, css_dy);
             }
         }
         self.render(canvas)

@@ -273,7 +273,9 @@ pub(crate) fn App() -> impl IntoView {
                 if !animation_active.get_untracked() {
                     break;
                 }
-                let auto_active = auto_rotate.get_untracked() && is_3d.get_untracked();
+                let auto_active = auto_rotate.get_untracked()
+                    && is_3d.get_untracked()
+                    && active_pointers.with_value(|map| map.is_empty());
                 let line_color = color_config.with_untracked(|c| c.line);
                 let rotation = hue_rotation.get_untracked();
                 let rotation_active = rotation.is_active(&line_color);
@@ -295,6 +297,10 @@ pub(crate) fn App() -> impl IntoView {
                     hue_rotation_phase.set_value(next);
                     next
                 });
+
+                if auto_degrees.is_none() && hue_phase.is_none() {
+                    continue;
+                }
 
                 if let Some(canvas) = canvas_ref.get_untracked() {
                     with_renderer(canvas, renderer, recover_after_render, |r, c| {
@@ -624,6 +630,9 @@ pub(crate) fn App() -> impl IntoView {
                         active_pointers.update_value(|map| { map.remove(&ev.pointer_id()); });
                     }
                     on:pointercancel=move |ev: web_sys::PointerEvent| {
+                        active_pointers.update_value(|map| { map.remove(&ev.pointer_id()); });
+                    }
+                    on:lostpointercapture=move |ev: web_sys::PointerEvent| {
                         active_pointers.update_value(|map| { map.remove(&ev.pointer_id()); });
                     }
                     on:wheel=move |ev: web_sys::WheelEvent| {
