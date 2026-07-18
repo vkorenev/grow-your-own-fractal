@@ -259,6 +259,10 @@ owns only the fractal GPU pipeline state. Geometry generation is asynchronous
 and tokenized so stale generation results can be ignored after rapid input
 changes. Geometry and color revisions let the shader upload segment data only
 when geometry changes and update only color uniforms for color-only edits.
+Scene geometry is built once generically per dimension marker
+(`build_typed_scene<D>` over an app-local `SceneDimension` trait), collecting
+through the renderer bridge's generic stamped collectors and incremental
+builders with cancellation checks between pushes.
 
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/

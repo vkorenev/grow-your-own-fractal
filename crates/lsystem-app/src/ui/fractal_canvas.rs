@@ -3,20 +3,19 @@ use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme, window};
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
-    AnyCompiledGeneration, ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, TemplateSet2D,
-    TemplateSet3D,
+    AnyCompiledGeneration, ColorConfig, CompiledGeneration, Config, D2, D3,
+    DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationDimension, TemplateDimension,
 };
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
-    ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, Segment3D, TopologicalDepthSegment2D,
-    TopologicalDepthSegment3D,
+    ColorParams, LinePipeline2D, LinePipeline3D, RenderDimension, Segment2D, Segment3D,
+    TopologicalDepthSegment2D, TopologicalDepthSegment3D,
 };
 use lsystem_renderer::lsystem_bridge::{
-    SegmentData, SegmentData3D, SegmentDataBuilder, SegmentDataBuilder3D,
-    TopologicalDepthSegmentData, TopologicalDepthSegmentData3D, TopologicalDepthSegmentDataBuilder,
-    TopologicalDepthSegmentDataBuilder3D, color_params_from_config,
-    stamped_geometry_to_depth_segments, stamped_geometry_to_depth_segments_3d,
-    stamped_geometry_to_segments, stamped_geometry_to_segments_3d,
+    CollectedDepthSegmentData, CollectedSegmentData, DepthSegmentDataBuilder,
+    PlainSegmentDataBuilder, SegmentData, SegmentData3D, TopologicalDepthSegmentData,
+    TopologicalDepthSegmentData3D, collect_stamped_depth_segments, collect_stamped_segments,
+    color_params_from_config,
 };
 use std::fmt;
 use std::sync::{
@@ -81,6 +80,55 @@ impl SceneGeometry {
     }
 }
 
+/// Maps a dimension marker to its [`SceneGeometry`] variants. App-local so
+/// the renderer stays ignorant of Iced scene types.
+trait SceneDimension: RenderDimension + GenerationDimension + TemplateDimension {
+    fn plain_geometry(data: CollectedSegmentData<Self::PlainRecord, Self::Point>) -> SceneGeometry;
+    fn depth_geometry(
+        data: CollectedDepthSegmentData<Self::DepthRecord, Self::Point>,
+    ) -> SceneGeometry;
+}
+
+impl SceneDimension for D2 {
+    fn plain_geometry(data: SegmentData) -> SceneGeometry {
+        SceneGeometry::TwoD {
+            segments: Arc::new(data.segments),
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
+        }
+    }
+
+    fn depth_geometry(data: TopologicalDepthSegmentData) -> SceneGeometry {
+        let max_topological_depth = data.max_topological_depth();
+        SceneGeometry::TwoDWithTopologicalDepth {
+            segments: Arc::new(data.segments),
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
+            max_topological_depth,
+        }
+    }
+}
+
+impl SceneDimension for D3 {
+    fn plain_geometry(data: SegmentData3D) -> SceneGeometry {
+        SceneGeometry::ThreeD {
+            segments: Arc::new(data.segments),
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
+        }
+    }
+
+    fn depth_geometry(data: TopologicalDepthSegmentData3D) -> SceneGeometry {
+        let max_topological_depth = data.max_topological_depth();
+        SceneGeometry::ThreeDWithTopologicalDepth {
+            segments: Arc::new(data.segments),
+            bounds_min: data.bounds_min.to_array(),
+            bounds_max: data.bounds_max.to_array(),
+            max_topological_depth,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Scene {
     geometry: SceneGeometry,
@@ -93,91 +141,12 @@ pub(super) struct Scene {
 }
 
 impl Scene {
-    fn from_segment_data_2d(
+    fn from_geometry(
         colors: &ColorConfig,
-        data: SegmentData,
+        geometry: SceneGeometry,
         camera: Camera,
         revision: u64,
     ) -> Self {
-        let geometry = SceneGeometry::TwoD {
-            segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
-        };
-        Self {
-            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
-    }
-
-    fn from_segment_data_3d(
-        colors: &ColorConfig,
-        data: SegmentData3D,
-        camera: Camera,
-        revision: u64,
-    ) -> Self {
-        let geometry = SceneGeometry::ThreeD {
-            segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
-        };
-        Self {
-            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
-    }
-
-    fn from_depth_segment_data_2d(
-        colors: &ColorConfig,
-        data: TopologicalDepthSegmentData,
-        camera: Camera,
-        revision: u64,
-    ) -> Self {
-        let max_topological_depth = data.max_topological_depth();
-        let geometry = SceneGeometry::TwoDWithTopologicalDepth {
-            segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
-            max_topological_depth,
-        };
-        Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-            ),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
-    }
-
-    fn from_depth_segment_data_3d(
-        colors: &ColorConfig,
-        data: TopologicalDepthSegmentData3D,
-        camera: Camera,
-        revision: u64,
-    ) -> Self {
-        let max_topological_depth = data.max_topological_depth();
-        let geometry = SceneGeometry::ThreeDWithTopologicalDepth {
-            segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
-            max_topological_depth,
-        };
         Self {
             color_params: color_params_from_config(
                 &colors.line,
@@ -346,162 +315,98 @@ pub(super) async fn build_scene(
     let colors = config.colors;
     let started = Instant::now();
     match config.generation.compile() {
-        AnyCompiledGeneration::ThreeD(compiled_generation) => {
-            // Depth geometry is decided by fractal structure, not color mode, so color
-            // changes after this build never require a geometry rebuild.
-            let use_topological_depth = compiled_generation.has_stack_directives();
-
-            // The stamped walk is a tight synchronous loop with no yield or
-            // cancellation points; it is fast enough that checking
-            // cancellation only around it keeps responsiveness acceptable.
-            // The per-segment interpreter fallback keeps its cooperative
-            // yields.
-            let set = TemplateSet3D::build_within_budget(
-                compiled_generation,
-                DEFAULT_TEMPLATE_SEGMENT_BUDGET,
-            );
-
-            if use_topological_depth {
-                let data = match &set {
-                    Ok(set) => stamped_geometry_to_depth_segments_3d(set),
-                    Err(generation) => {
-                        let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
-                        if drain_cancellable(
-                            generation.depth_segments(),
-                            |segment| builder.push_segment(segment),
-                            generation_revision,
-                            &current_generation,
-                        )
-                        .await
-                        {
-                            return SceneBuildResult::Cancelled;
-                        }
-                        builder.finish()
-                    }
-                };
-
-                if is_cancelled(generation_revision, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
-
-                log_generation_duration(started, data.segments.len());
-
-                SceneBuildResult::Ready {
-                    generation: generation_revision,
-                    scene: Scene::from_depth_segment_data_3d(
-                        &colors,
-                        data,
-                        camera,
-                        generation_revision,
-                    ),
-                }
-            } else {
-                let data = match &set {
-                    Ok(set) => stamped_geometry_to_segments_3d(set),
-                    Err(generation) => {
-                        let mut builder = SegmentDataBuilder3D::new();
-                        if drain_cancellable(
-                            generation.segments(),
-                            |segment| builder.push_segment(segment),
-                            generation_revision,
-                            &current_generation,
-                        )
-                        .await
-                        {
-                            return SceneBuildResult::Cancelled;
-                        }
-                        builder.finish()
-                    }
-                };
-
-                if is_cancelled(generation_revision, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
-
-                log_generation_duration(started, data.segments.len());
-
-                SceneBuildResult::Ready {
-                    generation: generation_revision,
-                    scene: Scene::from_segment_data_3d(&colors, data, camera, generation_revision),
-                }
-            }
+        AnyCompiledGeneration::ThreeD(generation) => {
+            build_typed_scene(
+                generation,
+                &colors,
+                camera,
+                generation_revision,
+                &current_generation,
+                started,
+            )
+            .await
         }
-        AnyCompiledGeneration::TwoD(compiled_generation) => {
-            // Depth geometry is decided by fractal structure, not color mode, so color
-            // changes after this build never require a geometry rebuild.
-            let use_topological_depth = compiled_generation.has_stack_directives();
-
-            // See the 3D branch for the stamped-path cancellation tradeoff.
-            let set = TemplateSet2D::build_within_budget(
-                compiled_generation,
-                DEFAULT_TEMPLATE_SEGMENT_BUDGET,
-            );
-
-            if use_topological_depth {
-                let data = match &set {
-                    Ok(set) => stamped_geometry_to_depth_segments(set),
-                    Err(generation) => {
-                        let mut builder = TopologicalDepthSegmentDataBuilder::new();
-                        if drain_cancellable(
-                            generation.depth_segments(),
-                            |segment| builder.push_segment(segment),
-                            generation_revision,
-                            &current_generation,
-                        )
-                        .await
-                        {
-                            return SceneBuildResult::Cancelled;
-                        }
-                        builder.finish()
-                    }
-                };
-
-                if is_cancelled(generation_revision, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
-
-                log_generation_duration(started, data.segments.len());
-
-                SceneBuildResult::Ready {
-                    generation: generation_revision,
-                    scene: Scene::from_depth_segment_data_2d(
-                        &colors,
-                        data,
-                        camera,
-                        generation_revision,
-                    ),
-                }
-            } else {
-                let data = match &set {
-                    Ok(set) => stamped_geometry_to_segments(set),
-                    Err(generation) => {
-                        let mut builder = SegmentDataBuilder::new();
-                        if drain_cancellable(
-                            generation.segments(),
-                            |segment| builder.push_segment(segment),
-                            generation_revision,
-                            &current_generation,
-                        )
-                        .await
-                        {
-                            return SceneBuildResult::Cancelled;
-                        }
-                        builder.finish()
-                    }
-                };
-
-                if is_cancelled(generation_revision, &current_generation) {
-                    return SceneBuildResult::Cancelled;
-                }
-
-                log_generation_duration(started, data.segments.len());
-
-                SceneBuildResult::Ready {
-                    generation: generation_revision,
-                    scene: Scene::from_segment_data_2d(&colors, data, camera, generation_revision),
-                }
-            }
+        AnyCompiledGeneration::TwoD(generation) => {
+            build_typed_scene(
+                generation,
+                &colors,
+                camera,
+                generation_revision,
+                &current_generation,
+                started,
+            )
+            .await
         }
+    }
+}
+
+async fn build_typed_scene<D: SceneDimension>(
+    compiled_generation: CompiledGeneration<D>,
+    colors: &ColorConfig,
+    camera: Camera,
+    generation_revision: u64,
+    current_generation: &AtomicU64,
+    started: Instant,
+) -> SceneBuildResult {
+    // Depth geometry is decided by fractal structure, not color mode, so color
+    // changes after this build never require a geometry rebuild.
+    let use_topological_depth = compiled_generation.has_stack_directives();
+
+    // The stamped walk is a tight synchronous loop with no yield or
+    // cancellation points; it is fast enough that checking cancellation only
+    // around it keeps responsiveness acceptable. The per-segment interpreter
+    // fallback keeps its cooperative yields.
+    let set = D::build_within_budget(compiled_generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+
+    let (segment_count, geometry) = if use_topological_depth {
+        let data = match &set {
+            Ok(set) => collect_stamped_depth_segments::<D>(set),
+            Err(generation) => {
+                let mut builder = DepthSegmentDataBuilder::<D>::new();
+                if drain_cancellable(
+                    generation.depth_segments(),
+                    |segment| builder.push_segment(segment),
+                    generation_revision,
+                    current_generation,
+                )
+                .await
+                {
+                    return SceneBuildResult::Cancelled;
+                }
+                builder.finish()
+            }
+        };
+        (data.segments.len(), D::depth_geometry(data))
+    } else {
+        let data = match &set {
+            Ok(set) => collect_stamped_segments::<D>(set),
+            Err(generation) => {
+                let mut builder = PlainSegmentDataBuilder::<D>::new();
+                if drain_cancellable(
+                    generation.segments(),
+                    |segment| builder.push_segment(segment),
+                    generation_revision,
+                    current_generation,
+                )
+                .await
+                {
+                    return SceneBuildResult::Cancelled;
+                }
+                builder.finish()
+            }
+        };
+        (data.segments.len(), D::plain_geometry(data))
+    };
+
+    if is_cancelled(generation_revision, current_generation) {
+        return SceneBuildResult::Cancelled;
+    }
+
+    log_generation_duration(started, segment_count);
+
+    SceneBuildResult::Ready {
+        generation: generation_revision,
+        scene: Scene::from_geometry(colors, geometry, camera, generation_revision),
     }
 }
 
