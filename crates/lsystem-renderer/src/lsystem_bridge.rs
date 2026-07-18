@@ -230,7 +230,10 @@ impl<R, P: BoundsPoint> SegmentCollector<R, P> {
     }
 }
 
-fn collect_stamped_segments<D>(
+/// Stamped counterpart of the interpreted collection paths: transforms each
+/// stamp's template segments into world space in a tight per-segment loop,
+/// skipping per-symbol interpretation of the template-depth iterations.
+pub fn collect_stamped_segments<D>(
     set: &TemplateSet<D>,
 ) -> CollectedSegmentData<D::PlainRecord, D::Point>
 where
@@ -249,7 +252,9 @@ where
     }
 }
 
-fn collect_stamped_depth_segments<D>(
+/// Stamped counterpart of the interpreted depth collection path; see
+/// [`collect_stamped_segments`].
+pub fn collect_stamped_depth_segments<D>(
     set: &TemplateSet<D>,
 ) -> CollectedDepthSegmentData<D::DepthRecord, D::Point>
 where
@@ -277,36 +282,87 @@ where
 pub(crate) fn collect_plain_segments<D: RenderDimension>(
     segments: impl Iterator<Item = [D::Point; 2]>,
 ) -> CollectedSegmentData<D::PlainRecord, D::Point> {
-    let mut collector = SegmentCollector::new();
-    segments.for_each(|points @ [a, b]| {
-        collector.push(points, 0, D::plain_record(a, b));
-    });
-    let (segments, bounds_min, bounds_max, _) = collector.finish();
-    CollectedSegmentData {
-        segments,
-        bounds_min,
-        bounds_max,
-    }
+    let mut builder = PlainSegmentDataBuilder::<D>::new();
+    segments.for_each(|segment| builder.push_segment(segment));
+    builder.finish()
 }
 
 pub(crate) fn collect_depth_segments<D: RenderDimension>(
     segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
 ) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
-    let mut collector = SegmentCollector::new();
-    segments.for_each(|segment| {
+    let mut builder = DepthSegmentDataBuilder::<D>::new();
+    segments.for_each(|segment| builder.push_segment(segment));
+    builder.finish()
+}
+
+/// Incremental generic counterpart of [`collect_plain_segments`] for callers
+/// that need work between pushes (e.g. cancellation checks).
+pub struct PlainSegmentDataBuilder<D: RenderDimension> {
+    collector: SegmentCollector<D::PlainRecord, D::Point>,
+}
+
+impl<D: RenderDimension> PlainSegmentDataBuilder<D> {
+    pub fn new() -> Self {
+        Self {
+            collector: SegmentCollector::new(),
+        }
+    }
+
+    pub fn push_segment(&mut self, points @ [a, b]: [D::Point; 2]) {
+        self.collector.push(points, 0, D::plain_record(a, b));
+    }
+
+    pub fn finish(self) -> CollectedSegmentData<D::PlainRecord, D::Point> {
+        let (segments, bounds_min, bounds_max, _) = self.collector.finish();
+        CollectedSegmentData {
+            segments,
+            bounds_min,
+            bounds_max,
+        }
+    }
+}
+
+impl<D: RenderDimension> Default for PlainSegmentDataBuilder<D> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Incremental generic counterpart of [`collect_depth_segments`].
+pub struct DepthSegmentDataBuilder<D: RenderDimension> {
+    collector: SegmentCollector<D::DepthRecord, D::Point>,
+}
+
+impl<D: RenderDimension> DepthSegmentDataBuilder<D> {
+    pub fn new() -> Self {
+        Self {
+            collector: SegmentCollector::new(),
+        }
+    }
+
+    pub fn push_segment(&mut self, segment: SegmentWithTopologicalDepth<D>) {
         let [a, b] = segment.points;
-        collector.push(
+        self.collector.push(
             segment.points,
             segment.topological_depth,
             D::depth_record(a, b, segment.topological_depth),
         );
-    });
-    let (segments, bounds_min, bounds_max, max_topological_depth) = collector.finish();
-    CollectedDepthSegmentData {
-        segments,
-        bounds_min,
-        bounds_max,
-        max_topological_depth,
+    }
+
+    pub fn finish(self) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
+        let (segments, bounds_min, bounds_max, max_topological_depth) = self.collector.finish();
+        CollectedDepthSegmentData {
+            segments,
+            bounds_min,
+            bounds_max,
+            max_topological_depth,
+        }
+    }
+}
+
+impl<D: RenderDimension> Default for DepthSegmentDataBuilder<D> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1137,5 +1193,96 @@ mod tests {
         assert!(t.scale[1].is_finite() && t.scale[1] > 0.0);
         assert!(close(5.0 * t.scale[0] + t.offset[0], 0.0));
         assert!(close(3.0 * t.scale[1] + t.offset[1], 0.0));
+    }
+
+    #[test]
+    fn generic_builders_match_batch_collection_2d() {
+        let points = [[Vec2::ZERO, Vec2::ONE], [Vec2::ONE, glam::vec2(2.0, 0.5)]];
+        let mut builder = PlainSegmentDataBuilder::<D2>::new();
+        points
+            .iter()
+            .for_each(|segment| builder.push_segment(*segment));
+        let built = builder.finish();
+        let batch = geometry_to_segments(points.iter().copied());
+        assert_eq!(built.segments.len(), batch.segments.len());
+        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
+            assert_eq!(a.start, b.start);
+            assert_eq!(a.end, b.end);
+        }
+        assert_eq!(built.bounds_min, batch.bounds_min);
+        assert_eq!(built.bounds_max, batch.bounds_max);
+
+        let depth_input = [
+            SegmentWithTopologicalDepth::<D2> {
+                points: [Vec2::ZERO, Vec2::ONE],
+                topological_depth: 0,
+            },
+            SegmentWithTopologicalDepth::<D2> {
+                points: [Vec2::ONE, glam::vec2(2.0, 0.5)],
+                topological_depth: 3,
+            },
+        ];
+        let mut depth_builder = DepthSegmentDataBuilder::<D2>::new();
+        depth_input
+            .iter()
+            .for_each(|segment| depth_builder.push_segment(*segment));
+        let built = depth_builder.finish();
+        let batch = geometry_to_depth_segments(depth_input.iter().copied());
+        assert_eq!(built.segments.len(), batch.segments.len());
+        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
+            assert_eq!(a.start, b.start);
+            assert_eq!(a.end, b.end);
+            assert_eq!(a.topological_depth, b.topological_depth);
+        }
+        assert_eq!(built.bounds_min, batch.bounds_min);
+        assert_eq!(built.bounds_max, batch.bounds_max);
+        assert_eq!(built.max_topological_depth(), batch.max_topological_depth());
+    }
+
+    #[test]
+    fn generic_builders_match_batch_collection_3d() {
+        let points = [
+            [Vec3::ZERO, Vec3::ONE],
+            [Vec3::ONE, glam::vec3(2.0, 0.5, 1.5)],
+        ];
+        let mut builder = PlainSegmentDataBuilder::<D3>::new();
+        points
+            .iter()
+            .for_each(|segment| builder.push_segment(*segment));
+        let built = builder.finish();
+        let batch = geometry_to_segments_3d(points.iter().copied());
+        assert_eq!(built.segments.len(), batch.segments.len());
+        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
+            assert_eq!(a.start, b.start);
+            assert_eq!(a.end, b.end);
+        }
+        assert_eq!(built.bounds_min, batch.bounds_min);
+        assert_eq!(built.bounds_max, batch.bounds_max);
+
+        let depth_input = [
+            SegmentWithTopologicalDepth::<D3> {
+                points: [Vec3::ZERO, Vec3::ONE],
+                topological_depth: 0,
+            },
+            SegmentWithTopologicalDepth::<D3> {
+                points: [Vec3::ONE, glam::vec3(2.0, 0.5, 1.5)],
+                topological_depth: 3,
+            },
+        ];
+        let mut depth_builder = DepthSegmentDataBuilder::<D3>::new();
+        depth_input
+            .iter()
+            .for_each(|segment| depth_builder.push_segment(*segment));
+        let built = depth_builder.finish();
+        let batch = geometry_to_depth_segments_3d(depth_input.iter().copied());
+        assert_eq!(built.segments.len(), batch.segments.len());
+        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
+            assert_eq!(a.start, b.start);
+            assert_eq!(a.end, b.end);
+            assert_eq!(a.topological_depth, b.topological_depth);
+        }
+        assert_eq!(built.bounds_min, batch.bounds_min);
+        assert_eq!(built.bounds_max, batch.bounds_max);
+        assert_eq!(built.max_topological_depth(), batch.max_topological_depth());
     }
 }
