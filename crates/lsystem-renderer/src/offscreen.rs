@@ -9,7 +9,7 @@ use crate::camera::Camera;
 use crate::line_renderer::{ColorParams, LinePipeline2D, LinePipeline3D};
 use crate::lsystem_bridge::{color_params_from_config, viewport_transform};
 use crate::png_export::{ExportError, MAX_DIMENSION, MIN_DIMENSION};
-use crate::scene_upload::{SegmentLayout, upload_scene_2d, upload_scene_3d};
+use crate::scene_upload::{SegmentLayout, upload_scene};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const BYTES_PER_PIXEL: u32 = 4;
@@ -91,7 +91,7 @@ impl ExportScene {
         match config.generation.compile() {
             AnyCompiledGeneration::TwoD(generation) => {
                 let mut pipeline = LinePipeline2D::new(device, FORMAT);
-                let scene = upload_scene_2d(
+                let scene = upload_scene(
                     &mut pipeline,
                     device,
                     queue,
@@ -113,7 +113,7 @@ impl ExportScene {
             }
             AnyCompiledGeneration::ThreeD(generation) => {
                 let mut pipeline = LinePipeline3D::new(device, FORMAT);
-                let scene = upload_scene_3d(
+                let scene = upload_scene(
                     &mut pipeline,
                     device,
                     queue,

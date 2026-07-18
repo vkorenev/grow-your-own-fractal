@@ -274,6 +274,42 @@ where
     }
 }
 
+pub(crate) fn collect_plain_segments<D: RenderDimension>(
+    segments: impl Iterator<Item = [D::Point; 2]>,
+) -> CollectedSegmentData<D::PlainRecord, D::Point> {
+    let mut collector = SegmentCollector::new();
+    segments.for_each(|points @ [a, b]| {
+        collector.push(points, 0, D::plain_record(a, b));
+    });
+    let (segments, bounds_min, bounds_max, _) = collector.finish();
+    CollectedSegmentData {
+        segments,
+        bounds_min,
+        bounds_max,
+    }
+}
+
+pub(crate) fn collect_depth_segments<D: RenderDimension>(
+    segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
+) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
+    let mut collector = SegmentCollector::new();
+    segments.for_each(|segment| {
+        let [a, b] = segment.points;
+        collector.push(
+            segment.points,
+            segment.topological_depth,
+            D::depth_record(a, b, segment.topological_depth),
+        );
+    });
+    let (segments, bounds_min, bounds_max, max_topological_depth) = collector.finish();
+    CollectedDepthSegmentData {
+        segments,
+        bounds_min,
+        bounds_max,
+        max_topological_depth,
+    }
+}
+
 pub struct SegmentDataBuilder {
     collector: SegmentCollector<Segment2D, Vec2>,
 }
@@ -307,9 +343,7 @@ impl Default for SegmentDataBuilder {
 }
 
 pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> SegmentData {
-    let mut builder = SegmentDataBuilder::new();
-    segments.for_each(|segment| builder.push_segment(segment));
-    builder.finish()
+    collect_plain_segments::<D2>(segments)
 }
 
 /// CPU-stamped alternative to [`geometry_to_segments`]: transforms each
@@ -366,9 +400,7 @@ impl Default for TopologicalDepthSegmentDataBuilder {
 pub fn geometry_to_depth_segments(
     segments: impl Iterator<Item = Segment2DWithTopologicalDepth>,
 ) -> TopologicalDepthSegmentData {
-    let mut builder = TopologicalDepthSegmentDataBuilder::new();
-    segments.for_each(|segment| builder.push_segment(segment));
-    builder.finish()
+    collect_depth_segments::<D2>(segments)
 }
 
 /// CPU-stamped alternative to [`geometry_to_depth_segments`].
@@ -409,9 +441,7 @@ impl Default for SegmentDataBuilder3D {
 }
 
 pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> SegmentData3D {
-    let mut builder = SegmentDataBuilder3D::new();
-    segments.for_each(|segment| builder.push_segment(segment));
-    builder.finish()
+    collect_plain_segments::<D3>(segments)
 }
 
 /// CPU-stamped alternative to [`geometry_to_segments_3d`].
@@ -466,9 +496,7 @@ impl Default for TopologicalDepthSegmentDataBuilder3D {
 pub fn geometry_to_depth_segments_3d(
     segments: impl Iterator<Item = Segment3DWithTopologicalDepth>,
 ) -> TopologicalDepthSegmentData3D {
-    let mut builder = TopologicalDepthSegmentDataBuilder3D::new();
-    segments.for_each(|segment| builder.push_segment(segment));
-    builder.finish()
+    collect_depth_segments::<D3>(segments)
 }
 
 /// CPU-stamped alternative to [`geometry_to_depth_segments_3d`].
