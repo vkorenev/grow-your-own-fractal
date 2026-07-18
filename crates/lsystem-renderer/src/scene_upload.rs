@@ -6,12 +6,9 @@ use lsystem_core::{
     LineColorConfig, TemplateDimension,
 };
 
-use crate::line_renderer::{
-    LinePipeline, RenderDimension, StagingUnavailable, record_limit,
-};
+use crate::line_renderer::{LinePipeline, RenderDimension, StagingUnavailable, record_limit};
 use crate::lsystem_bridge::{
-    Bounds, StampedScene, collect_depth_segments, collect_plain_segments,
-    color_params_from_config,
+    Bounds, StampedScene, collect_depth_segments, collect_plain_segments, color_params_from_config,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
