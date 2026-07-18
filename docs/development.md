@@ -59,6 +59,7 @@ Run the workspace test suite:
 
 ```sh
 cargo test --workspace --all-features --all-targets
+cargo test --workspace --all-features --doc
 ```
 
 Run a single core test:
@@ -121,6 +122,7 @@ cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-features --all-targets -- -D warnings
 cargo test --workspace --all-features --all-targets
+cargo test --workspace --all-features --doc
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
 cargo clippy --target wasm32-unknown-unknown --workspace -- -D warnings
 cargo clippy --target wasm32-unknown-unknown --workspace --all-features -- -D warnings
@@ -163,7 +165,7 @@ Every push and pull request to `main` runs:
 |-----|----------|
 | Format | `cargo fmt --check --all` |
 | Clippy | Native default/all-features clippy with `--all-targets`, plus wasm default/all-features clippy. All use `-D warnings`. |
-| Test | `cargo test --workspace --all-features --all-targets` with Mesa Vulkan drivers installed for GPU-related tests. |
+| Test | `cargo test --workspace --all-features --all-targets` with Mesa Vulkan drivers installed for GPU-related tests. Also runs `cargo test --workspace --all-features --doc` to exercise doctests, including `compile_fail` assertions. |
 | Docs | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features` |
 | Trunk Build | Release builds for `crates/lsystem-app/Trunk.toml` and `crates/lsystem-web-app/Trunk.toml`. |
 
