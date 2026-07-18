@@ -2,17 +2,16 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
-    CompiledGeneration2D, CompiledGeneration3D, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET,
-    Dimensions, LineColorConfig, TemplateSet2D, TemplateSet3D,
+    CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationDimension,
+    LineColorConfig, TemplateDimension,
 };
 
 use crate::line_renderer::{
-    LinePipeline2D, LinePipeline3D, RenderDimension, StagingUnavailable,
-    max_segments_for_line_color,
+    LinePipeline, RenderDimension, StagingUnavailable, record_limit,
 };
 use crate::lsystem_bridge::{
-    Bounds, StampedScene, color_params_from_config, geometry_to_depth_segments,
-    geometry_to_depth_segments_3d, geometry_to_segments, geometry_to_segments_3d,
+    Bounds, StampedScene, collect_depth_segments, collect_plain_segments,
+    color_params_from_config,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,22 +66,25 @@ impl UploadedLayout {
     }
 }
 
-/// Metadata for a successful 2D upload, including a successful empty scene.
+/// Metadata for a successful upload, including a successful empty scene.
 ///
 /// There is deliberately no `empty` constructor: absence belongs in the
 /// consumer's `Option`, because this type must always report a truthful method
 /// and layout. `PartialEq` is deliberately omitted because exact equality of
 /// floating-point bounds is not a useful scene invariant.
 #[derive(Clone, Copy, Debug)]
-pub struct UploadedScene2D {
+pub struct UploadedScene<D: RenderDimension> {
     method: GenerationMethod,
     layout: UploadedLayout,
     total_segments: u32,
-    bounds_min: [f32; 2],
-    bounds_max: [f32; 2],
+    bounds_min: D::Point,
+    bounds_max: D::Point,
 }
 
-impl UploadedScene2D {
+pub type UploadedScene2D = UploadedScene<D2>;
+pub type UploadedScene3D = UploadedScene<D3>;
+
+impl<D: RenderDimension> UploadedScene<D> {
     pub fn method(&self) -> GenerationMethod {
         self.method
     }
@@ -94,46 +96,25 @@ impl UploadedScene2D {
     pub fn total_segments(&self) -> u32 {
         self.total_segments
     }
+}
 
+impl UploadedScene<D2> {
     pub fn bounds_min(&self) -> [f32; 2] {
-        self.bounds_min
+        self.bounds_min.to_array()
     }
 
     pub fn bounds_max(&self) -> [f32; 2] {
-        self.bounds_max
+        self.bounds_max.to_array()
     }
 }
 
-/// Metadata for a successful 3D upload; see [`UploadedScene2D`] for the type
-/// invariants behind the deliberately small API and trait surface.
-#[derive(Clone, Copy, Debug)]
-pub struct UploadedScene3D {
-    method: GenerationMethod,
-    layout: UploadedLayout,
-    total_segments: u32,
-    bounds_min: [f32; 3],
-    bounds_max: [f32; 3],
-}
-
-impl UploadedScene3D {
-    pub fn method(&self) -> GenerationMethod {
-        self.method
-    }
-
-    pub fn layout(&self) -> UploadedLayout {
-        self.layout
-    }
-
-    pub fn total_segments(&self) -> u32 {
-        self.total_segments
-    }
-
+impl UploadedScene<D3> {
     pub fn bounds_min(&self) -> [f32; 3] {
-        self.bounds_min
+        self.bounds_min.to_array()
     }
 
     pub fn bounds_max(&self) -> [f32; 3] {
-        self.bounds_max
+        self.bounds_max.to_array()
     }
 }
 
@@ -145,12 +126,14 @@ fn actual_layout(requested: SegmentLayout, has_stack_directives: bool) -> Segmen
     }
 }
 
-fn checked_total(
+fn checked_total<D: RenderDimension>(
     total_segments: u64,
-    dimensions: Dimensions,
     layout: SegmentLayout,
 ) -> Result<u32, SceneUploadError> {
-    let limit = max_segments_for_line_color(dimensions, layout == SegmentLayout::TopologicalDepth);
+    let limit = match layout {
+        SegmentLayout::Plain => record_limit::<D::PlainRecord>(),
+        SegmentLayout::TopologicalDepth => record_limit::<D::DepthRecord>(),
+    };
     if total_segments > limit {
         return Err(SceneUploadError::SegmentLimitExceeded {
             total_segments,
@@ -160,26 +143,49 @@ fn checked_total(
     Ok(u32::try_from(total_segments).expect("segment cap fits in u32"))
 }
 
-/// Generates and uploads a 2D scene.
+/// Generates and uploads a scene.
 ///
 /// A segment-limit error is returned before the pipeline is mutated, so its
 /// previous scene remains drawable. A staging error clears the effective
 /// (post-clamp) layout's active buffer because growth may already have replaced
 /// its old contents. On success, segment data, active layout, and color
 /// parameters are updated together.
-pub fn upload_scene_2d(
-    pipeline: &mut LinePipeline2D,
+///
+/// The generation's dimension must match the pipeline's:
+///
+/// ```compile_fail
+/// use lsystem_core::{CompiledGeneration2D, LineColorConfig, Rgb};
+/// use lsystem_renderer::line_renderer::LinePipeline3D;
+/// use lsystem_renderer::scene_upload::{SegmentLayout, upload_scene};
+///
+/// fn mismatched(pipeline: &mut LinePipeline3D, generation: CompiledGeneration2D) {
+///     let line = LineColorConfig::Solid(Rgb::new(255, 255, 255));
+///     let _ = upload_scene(
+///         pipeline,
+///         unreachable!(),
+///         unreachable!(),
+///         generation,
+///         &line,
+///         SegmentLayout::Plain,
+///     );
+/// }
+/// ```
+pub fn upload_scene<D>(
+    pipeline: &mut LinePipeline<D>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    generation: CompiledGeneration2D,
+    generation: CompiledGeneration<D>,
     line: &LineColorConfig,
     layout: SegmentLayout,
-) -> Result<UploadedScene2D, SceneUploadError> {
+) -> Result<UploadedScene<D>, SceneUploadError>
+where
+    D: RenderDimension + GenerationDimension + TemplateDimension,
+{
     let layout = actual_layout(layout, generation.has_stack_directives());
     let counted_total = generation.drawn_segment_count();
-    let total_segments = checked_total(counted_total, Dimensions::TwoD, layout)?;
+    let total_segments = checked_total::<D>(counted_total, layout)?;
 
-    match TemplateSet2D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET) {
+    match D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET) {
         Ok(set) => {
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
@@ -188,7 +194,8 @@ pub fn upload_scene_2d(
             assert_eq!(
                 scene.total_segments(),
                 counted_total,
-                "stamped 2D segment count must match the compiled recurrence"
+                "stamped {:?} segment count must match the compiled recurrence",
+                D::RUNTIME
             );
             let mut bounds = Bounds::new();
             let uploaded_layout = match layout {
@@ -201,7 +208,7 @@ pub fn upload_scene_2d(
                             total_segments,
                             scene.segment_points().map(|[start, end]| {
                                 bounds.update(start, end);
-                                D2::plain_record(start, end)
+                                D::plain_record(start, end)
                             }),
                             color,
                         )
@@ -220,7 +227,7 @@ pub fn upload_scene_2d(
                             scene.depth_segments().map(|segment| {
                                 let [start, end] = segment.points;
                                 bounds.update(start, end);
-                                D2::depth_record(start, end, segment.topological_depth)
+                                D::depth_record(start, end, segment.topological_depth)
                             }),
                             color,
                         )
@@ -231,172 +238,81 @@ pub fn upload_scene_2d(
                 }
             };
             let (bounds_min, bounds_max) = bounds.finish();
-            Ok(UploadedScene2D {
+            Ok(UploadedScene {
                 method,
                 layout: uploaded_layout,
                 total_segments,
-                bounds_min: bounds_min.to_array(),
-                bounds_max: bounds_max.to_array(),
+                bounds_min,
+                bounds_max,
             })
         }
         Err(generation) => match layout {
             SegmentLayout::Plain => {
-                let data = geometry_to_segments(generation.segments());
+                let data = collect_plain_segments::<D>(generation.segments());
                 assert_eq!(
                     data.segments.len(),
                     total_segments as usize,
-                    "interpreted 2D segment count must match the compiled recurrence"
+                    "interpreted {:?} segment count must match the compiled recurrence",
+                    D::RUNTIME
                 );
                 let color = color_params_from_config(line, total_segments, None);
                 pipeline.upload(device, queue, &data.segments, color);
-                Ok(UploadedScene2D {
+                Ok(UploadedScene {
                     method: GenerationMethod::Interpreted,
                     layout: UploadedLayout::Plain,
                     total_segments,
-                    bounds_min: data.bounds_min.to_array(),
-                    bounds_max: data.bounds_max.to_array(),
+                    bounds_min: data.bounds_min,
+                    bounds_max: data.bounds_max,
                 })
             }
             SegmentLayout::TopologicalDepth => {
-                let data = geometry_to_depth_segments(generation.depth_segments());
+                let data = collect_depth_segments::<D>(generation.depth_segments());
                 assert_eq!(
                     data.segments.len(),
                     total_segments as usize,
-                    "interpreted depth-aware 2D segment count must match the compiled recurrence"
+                    "interpreted depth-aware {:?} segment count must match the compiled recurrence",
+                    D::RUNTIME
                 );
                 let max_topological_depth = data.max_topological_depth();
                 let color =
                     color_params_from_config(line, total_segments, Some(max_topological_depth));
                 pipeline.upload_with_topological_depth(device, queue, &data.segments, color);
-                Ok(UploadedScene2D {
+                Ok(UploadedScene {
                     method: GenerationMethod::Interpreted,
                     layout: UploadedLayout::TopologicalDepth {
                         max_topological_depth,
                     },
                     total_segments,
-                    bounds_min: data.bounds_min.to_array(),
-                    bounds_max: data.bounds_max.to_array(),
+                    bounds_min: data.bounds_min,
+                    bounds_max: data.bounds_max,
                 })
             }
         },
     }
 }
 
-/// Generates and uploads a 3D scene with the same transactional guarantees as
-/// [`upload_scene_2d`].
-pub fn upload_scene_3d(
-    pipeline: &mut LinePipeline3D,
+/// Temporary staging wrapper; deleted once workspace callers migrate.
+pub fn upload_scene_2d(
+    pipeline: &mut LinePipeline<D2>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    generation: CompiledGeneration3D,
+    generation: CompiledGeneration<D2>,
+    line: &LineColorConfig,
+    layout: SegmentLayout,
+) -> Result<UploadedScene2D, SceneUploadError> {
+    upload_scene(pipeline, device, queue, generation, line, layout)
+}
+
+/// Temporary staging wrapper; deleted once workspace callers migrate.
+pub fn upload_scene_3d(
+    pipeline: &mut LinePipeline<D3>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    generation: CompiledGeneration<D3>,
     line: &LineColorConfig,
     layout: SegmentLayout,
 ) -> Result<UploadedScene3D, SceneUploadError> {
-    let layout = actual_layout(layout, generation.has_stack_directives());
-    let counted_total = generation.drawn_segment_count();
-    let total_segments = checked_total(counted_total, Dimensions::ThreeD, layout)?;
-
-    match TemplateSet3D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET) {
-        Ok(set) => {
-            let method = GenerationMethod::Stamped {
-                template_iterations: set.template_iterations(),
-            };
-            let scene = StampedScene::collect(&set);
-            assert_eq!(
-                scene.total_segments(),
-                counted_total,
-                "stamped 3D segment count must match the compiled recurrence"
-            );
-            let mut bounds = Bounds::new();
-            let uploaded_layout = match layout {
-                SegmentLayout::Plain => {
-                    let color = color_params_from_config(line, total_segments, None);
-                    pipeline
-                        .upload_from_iter(
-                            device,
-                            queue,
-                            total_segments,
-                            scene.segment_points().map(|[start, end]| {
-                                bounds.update(start, end);
-                                D3::plain_record(start, end)
-                            }),
-                            color,
-                        )
-                        .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
-                    UploadedLayout::Plain
-                }
-                SegmentLayout::TopologicalDepth => {
-                    let max_topological_depth = scene.max_topological_depth();
-                    let color =
-                        color_params_from_config(line, total_segments, Some(max_topological_depth));
-                    pipeline
-                        .upload_depth_from_iter(
-                            device,
-                            queue,
-                            total_segments,
-                            scene.depth_segments().map(|segment| {
-                                let [start, end] = segment.points;
-                                bounds.update(start, end);
-                                D3::depth_record(start, end, segment.topological_depth)
-                            }),
-                            color,
-                        )
-                        .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
-                    UploadedLayout::TopologicalDepth {
-                        max_topological_depth,
-                    }
-                }
-            };
-            let (bounds_min, bounds_max) = bounds.finish();
-            Ok(UploadedScene3D {
-                method,
-                layout: uploaded_layout,
-                total_segments,
-                bounds_min: bounds_min.to_array(),
-                bounds_max: bounds_max.to_array(),
-            })
-        }
-        Err(generation) => match layout {
-            SegmentLayout::Plain => {
-                let data = geometry_to_segments_3d(generation.segments());
-                assert_eq!(
-                    data.segments.len(),
-                    total_segments as usize,
-                    "interpreted 3D segment count must match the compiled recurrence"
-                );
-                let color = color_params_from_config(line, total_segments, None);
-                pipeline.upload(device, queue, &data.segments, color);
-                Ok(UploadedScene3D {
-                    method: GenerationMethod::Interpreted,
-                    layout: UploadedLayout::Plain,
-                    total_segments,
-                    bounds_min: data.bounds_min.to_array(),
-                    bounds_max: data.bounds_max.to_array(),
-                })
-            }
-            SegmentLayout::TopologicalDepth => {
-                let data = geometry_to_depth_segments_3d(generation.depth_segments());
-                assert_eq!(
-                    data.segments.len(),
-                    total_segments as usize,
-                    "interpreted depth-aware 3D segment count must match the compiled recurrence"
-                );
-                let max_topological_depth = data.max_topological_depth();
-                let color =
-                    color_params_from_config(line, total_segments, Some(max_topological_depth));
-                pipeline.upload_with_topological_depth(device, queue, &data.segments, color);
-                Ok(UploadedScene3D {
-                    method: GenerationMethod::Interpreted,
-                    layout: UploadedLayout::TopologicalDepth {
-                        max_topological_depth,
-                    },
-                    total_segments,
-                    bounds_min: data.bounds_min.to_array(),
-                    bounds_max: data.bounds_max.to_array(),
-                })
-            }
-        },
-    }
+    upload_scene(pipeline, device, queue, generation, line, layout)
 }
 
 #[cfg(test)]
@@ -446,10 +362,16 @@ mod gpu_tests {
     use std::collections::BTreeMap;
 
     use futures_channel::oneshot;
-    use lsystem_core::{AnyCompiledGeneration, GenerationConfig, Rgb};
+    use lsystem_core::{
+        AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
+        GenerationConfig, Rgb,
+    };
 
     use super::*;
-    use crate::line_renderer::{ColorParams, Segment2D, TopologicalDepthSegment2D, Transform};
+    use crate::line_renderer::{
+        ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, TopologicalDepthSegment2D,
+        Transform,
+    };
 
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
     const WIDTH: u32 = 64;
