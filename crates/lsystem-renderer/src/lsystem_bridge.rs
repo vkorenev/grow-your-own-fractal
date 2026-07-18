@@ -660,14 +660,11 @@ mod tests {
         assert_eq!(depth_data.bounds_max, Vec2::splat(1.0));
     }
 
-    /// `check_bounds` is `false` for the 3D half, matching its original body,
-    /// which never compared bounds (only the 2D half did).
     #[allow(clippy::too_many_arguments)]
     fn check_stamped_depth_matches_interpreted<D>(
         set: &TemplateSet<D>,
         generation: &CompiledGeneration<D>,
         axis_count: usize,
-        check_bounds: bool,
         depth_of: impl Fn(&D::DepthRecord) -> u32,
         start_of: impl Fn(&D::DepthRecord) -> D::Point,
         end_of: impl Fn(&D::DepthRecord) -> D::Point,
@@ -683,20 +680,18 @@ mod tests {
             stamped.max_topological_depth(),
             interpreted.max_topological_depth()
         );
-        if check_bounds {
-            assert!(axis_close(
-                stamped.bounds_min,
-                interpreted.bounds_min,
-                axis_count,
-                1e-3
-            ));
-            assert!(axis_close(
-                stamped.bounds_max,
-                interpreted.bounds_max,
-                axis_count,
-                1e-3
-            ));
-        }
+        assert!(axis_close(
+            stamped.bounds_min,
+            interpreted.bounds_min,
+            axis_count,
+            1e-3
+        ));
+        assert!(axis_close(
+            stamped.bounds_max,
+            interpreted.bounds_max,
+            axis_count,
+            1e-3
+        ));
         for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
             assert_eq!(depth_of(s), depth_of(i));
             assert!(axis_distance(start_of(s), start_of(i), axis_count) < 1e-3);
@@ -726,7 +721,6 @@ mod tests {
             &set,
             &generation,
             2,
-            true,
             |s| s.topological_depth,
             |s| s.start,
             |s| s.end,
@@ -755,7 +749,6 @@ mod tests {
             &set,
             &generation,
             3,
-            false,
             |s| s.topological_depth,
             |s| s.start,
             |s| s.end,
