@@ -196,9 +196,12 @@ offscreen exports.
   handling. `RenderDimension` maps `D2`/`D3` to their plain and depth record
   layouts and rotation operations. Generated shader and bind-group
   construction plus view-uniform writes remain specialized, while buffer
-  uploads, color writes, and draw dispatch are shared. Existing segment slices
-  use `Queue::write_buffer`; stamped iterators use `Queue::write_buffer_with`
-  to fill mapped staging memory directly.
+  uploads, color writes, and draw dispatch are shared. A crate-private
+  `DimensionBindGroup` bound on the shared constructor ties each generated bind
+  group to its dimension marker, so pairing a pipeline with the other shader's
+  bind group fails to compile. Existing segment slices use `Queue::write_buffer`;
+  stamped iterators use `Queue::write_buffer_with` to fill mapped staging memory
+  directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
   maps `LineColorConfig` into shader color parameters. Its marker-keyed
   `StampedScene<D>` collects stamps and then streams transformed point pairs or
