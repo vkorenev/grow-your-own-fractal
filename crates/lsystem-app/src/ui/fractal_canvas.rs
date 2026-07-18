@@ -13,7 +13,7 @@ use lsystem_renderer::line_renderer::{
 };
 use lsystem_renderer::lsystem_bridge::{
     CollectedDepthSegmentData, CollectedSegmentData, DepthSegmentDataBuilder,
-    PlainSegmentDataBuilder, SegmentData, SegmentData3D, TopologicalDepthSegmentData,
+    PlainSegmentDataBuilder, SegmentData2D, SegmentData3D, TopologicalDepthSegmentData2D,
     TopologicalDepthSegmentData3D, collect_stamped_depth_segments, collect_stamped_segments,
     color_params_from_config,
 };
@@ -90,7 +90,7 @@ trait SceneDimension: RenderDimension + GenerationDimension + TemplateDimension 
 }
 
 impl SceneDimension for D2 {
-    fn plain_geometry(data: SegmentData) -> SceneGeometry {
+    fn plain_geometry(data: SegmentData2D) -> SceneGeometry {
         SceneGeometry::TwoD {
             segments: Arc::new(data.segments),
             bounds_min: data.bounds_min.to_array(),
@@ -98,7 +98,7 @@ impl SceneDimension for D2 {
         }
     }
 
-    fn depth_geometry(data: TopologicalDepthSegmentData) -> SceneGeometry {
+    fn depth_geometry(data: TopologicalDepthSegmentData2D) -> SceneGeometry {
         let max_topological_depth = data.max_topological_depth();
         SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
