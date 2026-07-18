@@ -406,6 +406,25 @@ impl DimensionBindGroup<D3> for generated_shader_3d::bind_groups::BindGroup0 {
     }
 }
 
+struct PipelineLabels {
+    segment: &'static str,
+    depth_segment: &'static str,
+    draw: &'static str,
+    depth_draw: &'static str,
+}
+
+/// Named construction bundle for `from_parts`, so same-typed parts
+/// (the two pipelines, the two uniform buffers) cannot be swapped by
+/// argument order.
+struct PipelineParts<B> {
+    pipeline: wgpu::RenderPipeline,
+    depth_pipeline: wgpu::RenderPipeline,
+    view_buffer: wgpu::Buffer,
+    color_params_buffer: wgpu::Buffer,
+    bind_group: B,
+    labels: PipelineLabels,
+}
+
 pub struct LinePipeline<D: RenderDimension> {
     pipeline: wgpu::RenderPipeline,
     depth_pipeline: wgpu::RenderPipeline,
@@ -415,10 +434,7 @@ pub struct LinePipeline<D: RenderDimension> {
     segment_buffer: GrowableVertexBuffer,
     depth_segment_buffer: GrowableVertexBuffer,
     active_segment_buffer: ActiveSegmentBuffer,
-    segment_label: &'static str,
-    depth_segment_label: &'static str,
-    draw_label: &'static str,
-    depth_draw_label: &'static str,
+    labels: PipelineLabels,
     dimension: PhantomData<fn() -> D>,
 }
 
@@ -489,17 +505,19 @@ impl LinePipeline<D2> {
             generated_shader_2d::fragment_state(&shader, &fragment_entry),
         );
 
-        Self::from_parts(
+        Self::from_parts(PipelineParts {
             pipeline,
             depth_pipeline,
-            uniform_buffer,
+            view_buffer: uniform_buffer,
             color_params_buffer,
             bind_group,
-            "lsystem_2d_segments",
-            "lsystem_2d_topological_depth_segments",
-            "lsystem_2d_line_draw",
-            "lsystem_2d_depth_line_draw",
-        )
+            labels: PipelineLabels {
+                segment: "lsystem_2d_segments",
+                depth_segment: "lsystem_2d_topological_depth_segments",
+                draw: "lsystem_2d_line_draw",
+                depth_draw: "lsystem_2d_depth_line_draw",
+            },
+        })
     }
 
     pub fn write_transform(&self, queue: &wgpu::Queue, transform: Transform) {
@@ -568,17 +586,19 @@ impl LinePipeline<D3> {
             generated_shader_3d::fragment_state(&shader, &fragment_entry),
         );
 
-        Self::from_parts(
+        Self::from_parts(PipelineParts {
             pipeline,
             depth_pipeline,
-            mvp_buffer,
+            view_buffer: mvp_buffer,
             color_params_buffer,
             bind_group,
-            "lsystem_3d_segments",
-            "lsystem_3d_topological_depth_segments",
-            "lsystem_3d_line_draw",
-            "lsystem_3d_depth_line_draw",
-        )
+            labels: PipelineLabels {
+                segment: "lsystem_3d_segments",
+                depth_segment: "lsystem_3d_topological_depth_segments",
+                draw: "lsystem_3d_line_draw",
+                depth_draw: "lsystem_3d_depth_line_draw",
+            },
+        })
     }
 
     pub fn write_mvp(&self, queue: &wgpu::Queue, mvp: Mvp) {
@@ -587,31 +607,17 @@ impl LinePipeline<D3> {
 }
 
 impl<D: RenderDimension> LinePipeline<D> {
-    #[allow(clippy::too_many_arguments)]
-    fn from_parts(
-        pipeline: wgpu::RenderPipeline,
-        depth_pipeline: wgpu::RenderPipeline,
-        view_buffer: wgpu::Buffer,
-        color_params_buffer: wgpu::Buffer,
-        bind_group: impl DimensionBindGroup<D>,
-        segment_label: &'static str,
-        depth_segment_label: &'static str,
-        draw_label: &'static str,
-        depth_draw_label: &'static str,
-    ) -> Self {
+    fn from_parts<B: DimensionBindGroup<D>>(parts: PipelineParts<B>) -> Self {
         Self {
-            pipeline,
-            depth_pipeline,
-            view_buffer,
-            color_params_buffer,
-            bind_group: bind_group.into_raw(),
+            pipeline: parts.pipeline,
+            depth_pipeline: parts.depth_pipeline,
+            view_buffer: parts.view_buffer,
+            color_params_buffer: parts.color_params_buffer,
+            bind_group: parts.bind_group.into_raw(),
             segment_buffer: GrowableVertexBuffer::new(),
             depth_segment_buffer: GrowableVertexBuffer::new(),
             active_segment_buffer: ActiveSegmentBuffer::Normal,
-            segment_label,
-            depth_segment_label,
-            draw_label,
-            depth_draw_label,
+            labels: parts.labels,
             dimension: PhantomData,
         }
     }
@@ -628,7 +634,7 @@ impl<D: RenderDimension> LinePipeline<D> {
         color_params: ColorParams,
     ) {
         self.segment_buffer
-            .upload(device, queue, segments, self.segment_label);
+            .upload(device, queue, segments, self.labels.segment);
         self.active_segment_buffer = ActiveSegmentBuffer::Normal;
         self.write_color_params(queue, color_params);
     }
@@ -645,7 +651,7 @@ impl<D: RenderDimension> LinePipeline<D> {
             vertex_buffer: &mut self.segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
             color_params_buffer: &self.color_params_buffer,
-            label: self.segment_label,
+            label: self.labels.segment,
             target: ActiveSegmentBuffer::Normal,
         }
         .upload(device, queue, count, segments, color_params)
@@ -659,7 +665,7 @@ impl<D: RenderDimension> LinePipeline<D> {
         color_params: ColorParams,
     ) {
         self.depth_segment_buffer
-            .upload(device, queue, segments, self.depth_segment_label);
+            .upload(device, queue, segments, self.labels.depth_segment);
         self.active_segment_buffer = ActiveSegmentBuffer::TopologicalDepth;
         self.write_color_params(queue, color_params);
     }
@@ -676,7 +682,7 @@ impl<D: RenderDimension> LinePipeline<D> {
             vertex_buffer: &mut self.depth_segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
             color_params_buffer: &self.color_params_buffer,
-            label: self.depth_segment_label,
+            label: self.labels.depth_segment,
             target: ActiveSegmentBuffer::TopologicalDepth,
         }
         .upload(device, queue, count, segments, color_params)
@@ -694,14 +700,14 @@ impl<D: RenderDimension> LinePipeline<D> {
                 &self.pipeline,
                 bind_groups,
                 &self.segment_buffer,
-                self.draw_label,
+                self.labels.draw,
             ),
             ActiveSegmentBuffer::TopologicalDepth => draw_line_list(
                 render_pass,
                 &self.depth_pipeline,
                 bind_groups,
                 &self.depth_segment_buffer,
-                self.depth_draw_label,
+                self.labels.depth_draw,
             ),
         }
     }
