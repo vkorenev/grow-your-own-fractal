@@ -93,6 +93,27 @@ pub(super) struct Scene {
 }
 
 impl Scene {
+    fn from_geometry(
+        colors: &ColorConfig,
+        geometry: SceneGeometry,
+        camera: Camera,
+        revision: u64,
+    ) -> Self {
+        Self {
+            color_params: color_params_from_config(
+                &colors.line,
+                geometry.total_segments(),
+                geometry.max_topological_depth(),
+            ),
+            geometry,
+            hue_offset_degrees: 0.0,
+            background: colors.background.to_array(),
+            camera,
+            geometry_revision: revision,
+            color_revision: 0,
+        }
+    }
+
     fn from_segment_data_2d(
         colors: &ColorConfig,
         data: SegmentData,
@@ -104,15 +125,7 @@ impl Scene {
             bounds_min: data.bounds_min.to_array(),
             bounds_max: data.bounds_max.to_array(),
         };
-        Self {
-            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
+        Self::from_geometry(colors, geometry, camera, revision)
     }
 
     fn from_segment_data_3d(
@@ -126,15 +139,7 @@ impl Scene {
             bounds_min: data.bounds_min.to_array(),
             bounds_max: data.bounds_max.to_array(),
         };
-        Self {
-            color_params: color_params_from_config(&colors.line, geometry.total_segments(), None),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
+        Self::from_geometry(colors, geometry, camera, revision)
     }
 
     fn from_depth_segment_data_2d(
@@ -150,19 +155,7 @@ impl Scene {
             bounds_max: data.bounds_max.to_array(),
             max_topological_depth,
         };
-        Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-            ),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
+        Self::from_geometry(colors, geometry, camera, revision)
     }
 
     fn from_depth_segment_data_3d(
@@ -178,19 +171,7 @@ impl Scene {
             bounds_max: data.bounds_max.to_array(),
             max_topological_depth,
         };
-        Self {
-            color_params: color_params_from_config(
-                &colors.line,
-                geometry.total_segments(),
-                geometry.max_topological_depth(),
-            ),
-            geometry,
-            hue_offset_degrees: 0.0,
-            background: colors.background.to_array(),
-            camera,
-            geometry_revision: revision,
-            color_revision: 0,
-        }
+        Self::from_geometry(colors, geometry, camera, revision)
     }
 
     pub(super) fn is_3d(&self) -> bool {
