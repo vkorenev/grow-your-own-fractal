@@ -205,11 +205,15 @@ offscreen exports.
   depth-aware geometry in traversal order. Consumers accumulate bounds from
   those points before constructing dimension-specific GPU records through
   `RenderDimension`.
-- `scene_upload.rs` is the public renderer operation for web and offscreen
-  scene generation/upload. It owns template selection and interpreter fallback,
-  clamps depth requests for bracketless grammars, enforces layout-keyed caps,
-  and returns opaque successful-upload metadata. A cap error preserves the
-  previous pipeline scene; a staging error clears the attempted target layout.
+- `scene_upload.rs` owns the single generic `upload_scene<D>` (composing
+  `RenderDimension + GenerationDimension + TemplateDimension` at the use
+  site), the public renderer operation for web and offscreen scene
+  generation/upload. It clamps the requested layout for bracketless
+  grammars, checks segment caps via per-record `record_limit`, prefers the
+  stamped streaming path with the interpreted slice path as fallback, and
+  returns `UploadedScene<D>` metadata with point-typed bounds and
+  per-dimension array getters. A cap error preserves the previous pipeline
+  scene; a staging error clears the attempted target layout.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature. Segment-limit and
   staging failures surface as typed export errors instead of empty images.

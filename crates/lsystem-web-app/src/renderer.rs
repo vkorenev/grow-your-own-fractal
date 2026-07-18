@@ -12,7 +12,7 @@ use lsystem_renderer::line_renderer::{
 use lsystem_renderer::lsystem_bridge::color_params_from_config;
 use lsystem_renderer::scene_upload::{
     GenerationMethod, SceneUploadError, SegmentLayout, UploadedScene2D, UploadedScene3D,
-    upload_scene_2d, upload_scene_3d,
+    upload_scene,
 };
 
 /// Successful scene metadata by dimension, or the absence of any upload.
@@ -129,7 +129,7 @@ impl CanvasRenderer {
         let started = Instant::now();
         let line = &config.colors.line;
         let result = match config.generation.compile() {
-            AnyCompiledGeneration::ThreeD(generation) => upload_scene_3d(
+            AnyCompiledGeneration::ThreeD(generation) => upload_scene(
                 &mut self.pipeline_3d,
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -141,7 +141,7 @@ impl CanvasRenderer {
                 let method = scene.method();
                 (ActiveScene::ThreeD(scene), method)
             }),
-            AnyCompiledGeneration::TwoD(generation) => upload_scene_2d(
+            AnyCompiledGeneration::TwoD(generation) => upload_scene(
                 &mut self.pipeline_2d,
                 &self.gpu.device,
                 &self.gpu.queue,

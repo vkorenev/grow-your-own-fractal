@@ -291,30 +291,6 @@ where
     }
 }
 
-/// Temporary staging wrapper; deleted once workspace callers migrate.
-pub fn upload_scene_2d(
-    pipeline: &mut LinePipeline<D2>,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    generation: CompiledGeneration<D2>,
-    line: &LineColorConfig,
-    layout: SegmentLayout,
-) -> Result<UploadedScene2D, SceneUploadError> {
-    upload_scene(pipeline, device, queue, generation, line, layout)
-}
-
-/// Temporary staging wrapper; deleted once workspace callers migrate.
-pub fn upload_scene_3d(
-    pipeline: &mut LinePipeline<D3>,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    generation: CompiledGeneration<D3>,
-    line: &LineColorConfig,
-    layout: SegmentLayout,
-) -> Result<UploadedScene3D, SceneUploadError> {
-    upload_scene(pipeline, device, queue, generation, line, layout)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,7 +494,7 @@ mod gpu_tests {
             let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT);
 
             let plain = generation(Dimensions::TwoD, "F", 1, [('F', "F".to_string())].into());
-            let scene = upload_scene_2d(
+            let scene = upload_scene(
                 &mut pipeline_2d,
                 &device,
                 &queue,
@@ -539,7 +515,7 @@ mod gpu_tests {
                 1,
                 [('F', "F".to_string())].into(),
             );
-            let scene = upload_scene_2d(
+            let scene = upload_scene(
                 &mut pipeline_2d,
                 &device,
                 &queue,
@@ -556,7 +532,7 @@ mod gpu_tests {
             );
 
             let empty = generation(Dimensions::TwoD, "", 1, BTreeMap::new());
-            let scene = upload_scene_2d(
+            let scene = upload_scene(
                 &mut pipeline_2d,
                 &device,
                 &queue,
@@ -576,7 +552,7 @@ mod gpu_tests {
                 1,
                 [('A', "F".repeat(DEFAULT_TEMPLATE_SEGMENT_BUDGET as usize))].into(),
             );
-            let scene = upload_scene_2d(
+            let scene = upload_scene(
                 &mut pipeline_2d,
                 &device,
                 &queue,
@@ -592,7 +568,7 @@ mod gpu_tests {
             );
 
             let plain_3d = generation(Dimensions::ThreeD, "F", 1, [('F', "F".to_string())].into());
-            let scene = upload_scene_3d(
+            let scene = upload_scene(
                 &mut pipeline_3d,
                 &device,
                 &queue,
@@ -611,7 +587,7 @@ mod gpu_tests {
                 1,
                 [('F', "F".to_string())].into(),
             );
-            let scene = upload_scene_3d(
+            let scene = upload_scene(
                 &mut pipeline_3d,
                 &device,
                 &queue,
@@ -654,7 +630,7 @@ mod gpu_tests {
                 );
                 for config in [stamped, interpreter] {
                     let error = match config.compile() {
-                        AnyCompiledGeneration::TwoD(generation) => upload_scene_2d(
+                        AnyCompiledGeneration::TwoD(generation) => upload_scene(
                             &mut pipeline_2d,
                             &device,
                             &queue,
@@ -663,7 +639,7 @@ mod gpu_tests {
                             SegmentLayout::Plain,
                         )
                         .expect_err("2D config exceeds cap"),
-                        AnyCompiledGeneration::ThreeD(generation) => upload_scene_3d(
+                        AnyCompiledGeneration::ThreeD(generation) => upload_scene(
                             &mut pipeline_3d,
                             &device,
                             &queue,
@@ -693,7 +669,7 @@ mod gpu_tests {
             .expect("headless device");
             let mut pipeline = LinePipeline2D::new(&device, FORMAT);
             let valid = generation(Dimensions::TwoD, "F", 1, [('F', "F".to_string())].into());
-            let scene = upload_scene_2d(
+            let scene = upload_scene(
                 &mut pipeline,
                 &device,
                 &queue,
@@ -718,7 +694,7 @@ mod gpu_tests {
 
             let over_cap = generation(Dimensions::TwoD, "F", 30, [('F', "FF".to_string())].into());
             assert!(matches!(
-                upload_scene_2d(
+                upload_scene(
                     &mut pipeline,
                     &device,
                     &queue,
