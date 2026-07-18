@@ -295,7 +295,7 @@ pub(crate) fn collect_depth_segments<D: RenderDimension>(
     builder.finish()
 }
 
-/// Incremental generic counterpart of [`collect_plain_segments`] for callers
+/// Incremental generic counterpart of `collect_plain_segments` for callers
 /// that need work between pushes (e.g. cancellation checks).
 pub struct PlainSegmentDataBuilder<D: RenderDimension> {
     collector: SegmentCollector<D::PlainRecord, D::Point>,
@@ -328,7 +328,7 @@ impl<D: RenderDimension> Default for PlainSegmentDataBuilder<D> {
     }
 }
 
-/// Incremental generic counterpart of [`collect_depth_segments`].
+/// Incremental generic counterpart of `collect_depth_segments`.
 pub struct DepthSegmentDataBuilder<D: RenderDimension> {
     collector: SegmentCollector<D::DepthRecord, D::Point>,
 }
