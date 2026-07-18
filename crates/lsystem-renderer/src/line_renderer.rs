@@ -385,6 +385,27 @@ fn create_line_pipeline(
     })
 }
 
+/// Ties each generated bind-group wrapper to its dimension marker so the
+/// shared constructor cannot accept a bind group built from the other
+/// dimension's shader module. Private on purpose: the bound sits on the
+/// private `from_parts`, which keeps the generated modules crate-private
+/// (a public associated type would force them `pub`).
+trait DimensionBindGroup<D: RenderDimension> {
+    fn into_raw(self) -> wgpu::BindGroup;
+}
+
+impl DimensionBindGroup<D2> for generated_shader_2d::bind_groups::BindGroup0 {
+    fn into_raw(self) -> wgpu::BindGroup {
+        self.inner().clone()
+    }
+}
+
+impl DimensionBindGroup<D3> for generated_shader_3d::bind_groups::BindGroup0 {
+    fn into_raw(self) -> wgpu::BindGroup {
+        self.inner().clone()
+    }
+}
+
 pub struct LinePipeline<D: RenderDimension> {
     pipeline: wgpu::RenderPipeline,
     depth_pipeline: wgpu::RenderPipeline,
@@ -438,7 +459,6 @@ impl LinePipeline<D2> {
                 transform: uniform_buffer.as_entire_buffer_binding(),
             },
         );
-        let bind_group = bind_group.inner().clone();
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lsystem_2d_pipeline_layout"),
@@ -518,7 +538,6 @@ impl LinePipeline<D3> {
                 mvp: mvp_buffer.as_entire_buffer_binding(),
             },
         );
-        let bind_group = bind_group.inner().clone();
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lsystem_3d_pipeline_layout"),
@@ -574,7 +593,7 @@ impl<D: RenderDimension> LinePipeline<D> {
         depth_pipeline: wgpu::RenderPipeline,
         view_buffer: wgpu::Buffer,
         color_params_buffer: wgpu::Buffer,
-        bind_group: wgpu::BindGroup,
+        bind_group: impl DimensionBindGroup<D>,
         segment_label: &'static str,
         depth_segment_label: &'static str,
         draw_label: &'static str,
@@ -585,7 +604,7 @@ impl<D: RenderDimension> LinePipeline<D> {
             depth_pipeline,
             view_buffer,
             color_params_buffer,
-            bind_group,
+            bind_group: bind_group.into_raw(),
             segment_buffer: GrowableVertexBuffer::new(),
             depth_segment_buffer: GrowableVertexBuffer::new(),
             active_segment_buffer: ActiveSegmentBuffer::Normal,
