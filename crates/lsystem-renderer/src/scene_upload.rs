@@ -150,7 +150,7 @@ fn checked_total<D: RenderDimension>(
 ///
 /// The generation's dimension must match the pipeline's:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0308
 /// use lsystem_core::{CompiledGeneration2D, LineColorConfig, Rgb};
 /// use lsystem_renderer::line_renderer::LinePipeline3D;
 /// use lsystem_renderer::scene_upload::{SegmentLayout, upload_scene};
