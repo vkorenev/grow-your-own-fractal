@@ -102,12 +102,13 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
   `TemplateSet2D/3D` and the related concrete names remain aliases for concise
   call sites. The build and placement walks remain one macro-defined algorithm
   specialized for the two turtle representations, while a hidden marker
-  capability exposes only budgeted construction and stamp emission to later
-  generic renderer orchestration. A set owns its typed compiled generation, so
-  stamping needs no config re-supply. A stamp's `order_base` is the running
-  segment count, so it doubles as the offset into a flat traversal-ordered
-  segment buffer for GPU consumers. Template sets are small, budget-bounded
-  collections; stamps stay streamed. `build_within_budget` picks the largest
+  capability exposes only budgeted construction and stamp emission to the
+  generic renderer orchestration (`upload_scene`, `StampedScene`). A set owns
+  its typed compiled generation, so stamping needs no config re-supply. A
+  stamp's `order_base` is the running segment count, so it doubles as the
+  offset into a flat traversal-ordered segment buffer for GPU consumers.
+  Template sets are small, budget-bounded collections; stamps stay streamed.
+  `build_within_budget` picks the largest
   template depth whose templates fit `DEFAULT_TEMPLATE_SEGMENT_BUDGET` for
   interactive consumers and hands the typed generation back when none fits,
   so callers can use the interpreter path, which remains the semantic oracle.
@@ -261,8 +262,9 @@ changes. Geometry and color revisions let the shader upload segment data only
 when geometry changes and update only color uniforms for color-only edits.
 Scene geometry is built once generically per dimension marker
 (`build_typed_scene<D>` over an app-local `SceneDimension` trait), collecting
-through the renderer bridge's generic stamped collectors and incremental
-builders with cancellation checks between pushes.
+through the renderer bridge's generic stamped collectors and — on the
+interpreter fallback — incremental builders with periodic cancellation
+checks.
 
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/

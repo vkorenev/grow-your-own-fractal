@@ -460,10 +460,9 @@ mod tests {
     }
 
     #[test]
-    fn non_drawing_forward_uses_cached_direction() {
-        // After +, f moves without drawing in the yawed direction.
-        // The subsequent F draws from that new position along the same direction.
-        // Confirms that f correctly uses (and does not skip) a dirty forward cache.
+    fn non_drawing_forward_moves_without_drawing() {
+        // `f` advances position along the current orientation without drawing;
+        // the subsequent `F` draws from that new position.
         let segs = make("+fF", 90.0);
         assert_eq!(segs.len(), 1);
         let [a, b] = segs[0];
@@ -472,11 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn branch_dirty_save_and_restore() {
-        // + yaws left, making the forward cache dirty. [ saves that dirty state.
-        // Inside the branch, F recomputes forward (Y) and draws from origin to Y.
-        // ] restores position to origin and the saved dirty state. The outer F
-        // also recomputes forward (Y) and draws from origin to Y.
+    fn branch_save_and_restore_mid_turn() {
+        // `[` saves orientation mid-turn; `]` restores it so the outer `F`
+        // draws in the same direction as the branch `F`.
         let segs = make("+[F]F", 90.0);
         assert_eq!(segs.len(), 2);
         let [a0, b0] = segs[0];
@@ -492,7 +489,7 @@ mod tests {
         );
         assert!(
             b1.distance(Vec3::Y) < 1e-5,
-            "outer F draws to Y after dirty restore: {b1}"
+            "outer F draws to Y after restore: {b1}"
         );
     }
 }

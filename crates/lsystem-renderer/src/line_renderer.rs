@@ -435,6 +435,7 @@ pub struct LinePipeline<D: RenderDimension> {
     depth_segment_buffer: GrowableVertexBuffer,
     active_segment_buffer: ActiveSegmentBuffer,
     labels: PipelineLabels,
+    // See CompiledGeneration for the fn() -> D rationale.
     dimension: PhantomData<fn() -> D>,
 }
 
