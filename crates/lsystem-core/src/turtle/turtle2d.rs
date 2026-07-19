@@ -106,6 +106,42 @@ impl TurtleState2D {
 impl Turtle for TurtleState2D {
     type Dimension = D2;
 
+    fn new(angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        TurtleState2D::new(angle_deg, step, initial_heading_deg)
+    }
+
+    fn position(&self) -> Vec2 {
+        self.position
+    }
+
+    fn advance(&mut self, delta: Vec2) {
+        self.position += delta;
+    }
+
+    fn heading(&self) -> Vec2 {
+        self.heading()
+    }
+
+    fn normalized_heading(&self) -> Vec2 {
+        self.normalized_heading()
+    }
+
+    fn compose_heading(&mut self, rot: Vec2) {
+        self.compose_heading(rot);
+    }
+
+    fn topological_depth(&self) -> u32 {
+        self.topological_depth
+    }
+
+    fn add_topological_depth(&mut self, delta: u32) {
+        self.topological_depth = self.topological_depth.saturating_add(delta);
+    }
+
+    fn stack_is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
+
     #[inline]
     fn apply(&mut self, symbol: u8) -> Option<Segment2DWithTopologicalDepth> {
         TurtleState2D::apply(self, symbol)
