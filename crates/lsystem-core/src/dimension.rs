@@ -8,9 +8,11 @@ mod sealed {
     pub trait Sealed {}
 }
 
+/// Type-level marker for two-dimensional generation.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct D2;
 
+/// Type-level marker for three-dimensional generation.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct D3;
 

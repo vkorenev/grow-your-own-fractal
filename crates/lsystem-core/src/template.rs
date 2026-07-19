@@ -98,7 +98,7 @@ pub const DEFAULT_TEMPLATE_SEGMENT_BUDGET: u64 = 65_536;
 
 /// Returns the largest template iteration count in `1..=iterations` whose
 /// total template segment count stays within `max_template_segments`, or 0
-/// when even one iteration exceeds the budget (callers then fall back to the
+/// when no iteration count fits the budget (callers then fall back to the
 /// interpreter path). The total counts every segment a built set stores,
 /// including the built-in one-segment unit-`F` template.
 pub(crate) fn choose_template_iterations(

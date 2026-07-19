@@ -7,6 +7,8 @@ use crate::{
     turtle::{DepthSegments, turtle2d::TurtleState2D, turtle3d::TurtleState3D},
 };
 
+/// Dimension-erased result of `GenerationConfig::compile`; match once at a
+/// runtime boundary to obtain the typed `CompiledGeneration<D>`.
 #[derive(Debug)]
 pub enum AnyCompiledGeneration {
     TwoD(CompiledGeneration2D),
@@ -20,6 +22,7 @@ pub struct CompiledGeneration<D: Dimension> {
     pub(crate) grammar: CompiledGrammar,
     pub(crate) params: GenerationParams,
     has_stack_directives: bool,
+    // `fn() -> D` keeps auto-traits independent of the marker type.
     dimension: PhantomData<fn() -> D>,
 }
 
@@ -78,6 +81,7 @@ pub type Segment2DWithTopologicalDepth = SegmentWithTopologicalDepth<D2>;
 /// position and orientation saved/restored by branch stack operations.
 pub type Segment3DWithTopologicalDepth = SegmentWithTopologicalDepth<D3>;
 
+/// Dimension-specific turtle construction used by generic geometry iteration.
 #[doc(hidden)]
 pub trait GenerationDimension: Dimension {
     fn depth_segments(

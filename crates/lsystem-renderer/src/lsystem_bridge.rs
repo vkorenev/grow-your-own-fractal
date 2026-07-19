@@ -10,8 +10,8 @@ use crate::line_renderer::{
 
 /// Point operations used by renderer-local bounds accumulation.
 ///
-/// This trait is public only so later public renderer traits can name it in
-/// associated-point bounds. Concrete bridge facades do not expose it.
+/// Public only so `RenderDimension` can bound `Dimension::Point` with it;
+/// not intended for direct use outside the renderer.
 #[doc(hidden)]
 pub trait BoundsPoint: Copy + std::ops::Add<Output = Self> {
     const INFINITY: Self;
@@ -19,6 +19,8 @@ pub trait BoundsPoint: Copy + std::ops::Add<Output = Self> {
 
     fn min(self, other: Self) -> Self;
     fn max(self, other: Self) -> Self;
+    /// Checking a single component suffices: `Bounds` seeds every component
+    /// with infinity and any update makes them all finite together.
     fn is_unbounded(self) -> bool;
     fn fallback() -> (Self, Self);
 }
@@ -172,12 +174,21 @@ impl<'a, D: RenderDimension> StampedScene<'a, D> {
     }
 }
 
+/// Segment records collected for a stamped scene, with their bounds.
+///
+/// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
+/// geometry they fall back to the unit box.
 pub struct CollectedSegmentData<R, P> {
     pub segments: Vec<R>,
     pub bounds_min: P,
     pub bounds_max: P,
 }
 
+/// Like `CollectedSegmentData`, plus the maximum topological depth seen
+/// across `segments`.
+///
+/// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
+/// geometry they fall back to the unit box.
 pub struct CollectedDepthSegmentData<R, P> {
     pub segments: Vec<R>,
     pub bounds_min: P,
