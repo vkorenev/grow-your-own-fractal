@@ -41,10 +41,12 @@ impl TurtleDimension for D2 {
     // Unit-complex identity rotation.
     const ROT_IDENTITY: Vec2 = Vec2::X;
 
+    #[inline]
     fn unit_step(step: f32) -> Vec2 {
         Vec2::X * step
     }
 
+    #[inline]
     fn rotate(rotation: Vec2, point: Vec2) -> Vec2 {
         rotation.rotate(point)
     }
@@ -56,10 +58,12 @@ impl TurtleDimension for D3 {
     const POINT_ZERO: Vec3 = Vec3::ZERO;
     const ROT_IDENTITY: Quat = Quat::IDENTITY;
 
+    #[inline]
     fn unit_step(step: f32) -> Vec3 {
         Vec3::X * step
     }
 
+    #[inline]
     fn rotate(rotation: Quat, point: Vec3) -> Vec3 {
         rotation * point
     }

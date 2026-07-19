@@ -128,38 +128,47 @@ impl TurtleState3D {
 impl Turtle for TurtleState3D {
     type Dimension = D3;
 
+    #[inline]
     fn new(angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
         TurtleState3D::new(angle_deg, step, initial_heading_deg)
     }
 
+    #[inline]
     fn position(&self) -> Vec3 {
         self.position
     }
 
+    #[inline]
     fn advance(&mut self, delta: Vec3) {
         self.position += delta;
     }
 
+    #[inline]
     fn heading(&self) -> Quat {
         self.heading()
     }
 
+    #[inline]
     fn normalized_heading(&self) -> Quat {
         self.normalized_heading()
     }
 
+    #[inline]
     fn compose_heading(&mut self, rot: Quat) {
         self.compose_heading(rot);
     }
 
+    #[inline]
     fn topological_depth(&self) -> u32 {
         self.topological_depth
     }
 
+    #[inline]
     fn add_topological_depth(&mut self, delta: u32) {
         self.topological_depth = self.topological_depth.saturating_add(delta);
     }
 
+    #[inline]
     fn stack_is_empty(&self) -> bool {
         self.stack.is_empty()
     }
