@@ -342,7 +342,7 @@ mod gpu_tests {
 
     use super::*;
     use crate::line_renderer::{
-        ColorParams, LinePipeline2D, LinePipeline3D, Segment2D, TopologicalDepthSegment2D,
+        ColorParams, LinePipeline2D, LinePipeline3D, Mvp, Segment2D, TopologicalDepthSegment2D,
         Transform,
     };
 
@@ -386,10 +386,15 @@ mod gpu_tests {
         generation
     }
 
-    async fn render_2d(
+    /// Shared render/readback plumbing for both dimensions: `draw` lives on
+    /// the generic `impl<D: RenderDimension> LinePipeline<D>`, so a single
+    /// generic routine covers plain and depth layouts for `D2` and `D3`
+    /// alike. `render_2d`/`render_3d` below are thin, dimension-named
+    /// wrappers so existing call sites need no changes.
+    async fn render<D: RenderDimension>(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        pipeline: &LinePipeline2D,
+        pipeline: &LinePipeline<D>,
     ) -> Vec<u8> {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene_upload_test_texture"),
@@ -476,6 +481,22 @@ mod gpu_tests {
         drop(mapped);
         readback.unmap();
         rgba
+    }
+
+    async fn render_2d(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &LinePipeline2D,
+    ) -> Vec<u8> {
+        render(device, queue, pipeline).await
+    }
+
+    async fn render_3d(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &LinePipeline3D,
+    ) -> Vec<u8> {
+        render(device, queue, pipeline).await
     }
 
     #[test]
@@ -743,6 +764,65 @@ mod gpu_tests {
             assert!(
                 cleared.chunks_exact(4).all(|pixel| pixel == [0, 0, 0, 255]),
                 "failed target layout must be active with zero drawable records"
+            );
+        });
+    }
+
+    #[test]
+    fn renders_3d_scene_with_non_background_pixels_in_both_layouts() {
+        pollster::block_on(async {
+            let (device, queue) = crate::wgpu_util::create_headless_device(
+                "scene_upload_3d_smoke_device",
+                "scene upload 3D smoke test",
+            )
+            .await
+            .expect("headless device");
+            let mut pipeline = LinePipeline3D::new(&device, FORMAT);
+
+            // `Mvp::default()` is the identity matrix: clip space equals
+            // world space directly. Verified this actually places the
+            // geometry on screen (not assumed): the turtle's unit-length
+            // steps from these small axioms stay near the origin, well
+            // inside the [-1, 1] NDC cube, so no bounds-fitting camera (as
+            // `offscreen.rs`'s 3D export path builds) is needed here.
+            let mvp = Mvp::default();
+
+            // Plain layout: a 3D generation without stack directives.
+            let config = generation(Dimensions::ThreeD, "F+F", 0, BTreeMap::new());
+            let scene = upload_scene(
+                &mut pipeline,
+                &device,
+                &queue,
+                compile_3d(&config),
+                &line_color(),
+                SegmentLayout::Plain,
+            )
+            .expect("3D plain upload succeeds");
+            assert!(scene.total_segments() > 0);
+            pipeline.write_mvp(&queue, mvp);
+            let pixels = render_3d(&device, &queue, &pipeline).await;
+            assert!(
+                pixels.chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]),
+                "3D plain draw must produce non-background pixels"
+            );
+
+            // Depth layout: a bracketed 3D generation.
+            let config = generation(Dimensions::ThreeD, "F[+F]F", 0, BTreeMap::new());
+            let scene = upload_scene(
+                &mut pipeline,
+                &device,
+                &queue,
+                compile_3d(&config),
+                &line_color(),
+                SegmentLayout::TopologicalDepth,
+            )
+            .expect("3D depth upload succeeds");
+            assert!(scene.layout().max_topological_depth().is_some());
+            pipeline.write_mvp(&queue, mvp);
+            let pixels = render_3d(&device, &queue, &pipeline).await;
+            assert!(
+                pixels.chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]),
+                "3D depth draw must produce non-background pixels"
             );
         });
     }

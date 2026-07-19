@@ -1,8 +1,6 @@
 use glam::{Vec2, Vec3, Vec4};
 use lsystem_core::{
-    D2, D3, LineColorConfig, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
-    SegmentWithTopologicalDepth, Stamp, StampStats, TemplateDimension, TemplateSet, TemplateSet2D,
-    TemplateSet3D,
+    LineColorConfig, SegmentWithTopologicalDepth, Stamp, StampStats, TemplateDimension, TemplateSet,
 };
 
 use crate::line_renderer::{
@@ -193,9 +191,9 @@ impl<R, P> CollectedDepthSegmentData<R, P> {
     }
 }
 
-pub type SegmentData = CollectedSegmentData<Segment2D, Vec2>;
+pub type SegmentData2D = CollectedSegmentData<Segment2D, Vec2>;
 pub type SegmentData3D = CollectedSegmentData<Segment3D, Vec3>;
-pub type TopologicalDepthSegmentData = CollectedDepthSegmentData<TopologicalDepthSegment2D, Vec2>;
+pub type TopologicalDepthSegmentData2D = CollectedDepthSegmentData<TopologicalDepthSegment2D, Vec2>;
 pub type TopologicalDepthSegmentData3D = CollectedDepthSegmentData<TopologicalDepthSegment3D, Vec3>;
 
 struct SegmentCollector<R, P: BoundsPoint> {
@@ -366,200 +364,6 @@ impl<D: RenderDimension> Default for DepthSegmentDataBuilder<D> {
     }
 }
 
-pub struct SegmentDataBuilder {
-    collector: SegmentCollector<Segment2D, Vec2>,
-}
-
-impl SegmentDataBuilder {
-    pub fn new() -> Self {
-        Self {
-            collector: SegmentCollector::new(),
-        }
-    }
-
-    pub fn push_segment(&mut self, [a, b]: [Vec2; 2]) {
-        self.collector
-            .push([a, b], 0, Segment2D { start: a, end: b });
-    }
-
-    pub fn finish(self) -> SegmentData {
-        let (segments, bounds_min, bounds_max, _) = self.collector.finish();
-        CollectedSegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-        }
-    }
-}
-
-impl Default for SegmentDataBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub fn geometry_to_segments(segments: impl Iterator<Item = [Vec2; 2]>) -> SegmentData {
-    collect_plain_segments::<D2>(segments)
-}
-
-/// CPU-stamped alternative to [`geometry_to_segments`]: transforms each
-/// stamp's template segments into world space in a tight per-segment loop,
-/// skipping per-symbol interpretation of the template-depth iterations.
-pub fn stamped_geometry_to_segments(set: &TemplateSet2D) -> SegmentData {
-    collect_stamped_segments::<D2>(set)
-}
-
-pub struct TopologicalDepthSegmentDataBuilder {
-    collector: SegmentCollector<TopologicalDepthSegment2D, Vec2>,
-}
-
-impl TopologicalDepthSegmentDataBuilder {
-    pub fn new() -> Self {
-        Self {
-            collector: SegmentCollector::new(),
-        }
-    }
-
-    pub fn push_segment(&mut self, segment: Segment2DWithTopologicalDepth) {
-        self.push_parts(segment.points, segment.topological_depth);
-    }
-
-    fn push_parts(&mut self, [a, b]: [Vec2; 2], topological_depth: u32) {
-        self.collector.push(
-            [a, b],
-            topological_depth,
-            TopologicalDepthSegment2D {
-                start: a,
-                end: b,
-                topological_depth,
-            },
-        );
-    }
-
-    pub fn finish(self) -> TopologicalDepthSegmentData {
-        let (segments, bounds_min, bounds_max, max_topological_depth) = self.collector.finish();
-        CollectedDepthSegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-            max_topological_depth,
-        }
-    }
-}
-
-impl Default for TopologicalDepthSegmentDataBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub fn geometry_to_depth_segments(
-    segments: impl Iterator<Item = Segment2DWithTopologicalDepth>,
-) -> TopologicalDepthSegmentData {
-    collect_depth_segments::<D2>(segments)
-}
-
-/// CPU-stamped alternative to [`geometry_to_depth_segments`].
-pub fn stamped_geometry_to_depth_segments(set: &TemplateSet2D) -> TopologicalDepthSegmentData {
-    collect_stamped_depth_segments::<D2>(set)
-}
-
-pub struct SegmentDataBuilder3D {
-    collector: SegmentCollector<Segment3D, Vec3>,
-}
-
-impl SegmentDataBuilder3D {
-    pub fn new() -> Self {
-        Self {
-            collector: SegmentCollector::new(),
-        }
-    }
-
-    pub fn push_segment(&mut self, [a, b]: [Vec3; 2]) {
-        self.collector
-            .push([a, b], 0, Segment3D { start: a, end: b });
-    }
-
-    pub fn finish(self) -> SegmentData3D {
-        let (segments, bounds_min, bounds_max, _) = self.collector.finish();
-        CollectedSegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-        }
-    }
-}
-
-impl Default for SegmentDataBuilder3D {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub fn geometry_to_segments_3d(segments: impl Iterator<Item = [Vec3; 2]>) -> SegmentData3D {
-    collect_plain_segments::<D3>(segments)
-}
-
-/// CPU-stamped alternative to [`geometry_to_segments_3d`].
-pub fn stamped_geometry_to_segments_3d(set: &TemplateSet3D) -> SegmentData3D {
-    collect_stamped_segments::<D3>(set)
-}
-
-pub struct TopologicalDepthSegmentDataBuilder3D {
-    collector: SegmentCollector<TopologicalDepthSegment3D, Vec3>,
-}
-
-impl TopologicalDepthSegmentDataBuilder3D {
-    pub fn new() -> Self {
-        Self {
-            collector: SegmentCollector::new(),
-        }
-    }
-
-    pub fn push_segment(&mut self, segment: Segment3DWithTopologicalDepth) {
-        self.push_parts(segment.points, segment.topological_depth);
-    }
-
-    fn push_parts(&mut self, [a, b]: [Vec3; 2], topological_depth: u32) {
-        self.collector.push(
-            [a, b],
-            topological_depth,
-            TopologicalDepthSegment3D {
-                start: a,
-                end: b,
-                topological_depth,
-            },
-        );
-    }
-
-    pub fn finish(self) -> TopologicalDepthSegmentData3D {
-        let (segments, bounds_min, bounds_max, max_topological_depth) = self.collector.finish();
-        CollectedDepthSegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-            max_topological_depth,
-        }
-    }
-}
-
-impl Default for TopologicalDepthSegmentDataBuilder3D {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub fn geometry_to_depth_segments_3d(
-    segments: impl Iterator<Item = Segment3DWithTopologicalDepth>,
-) -> TopologicalDepthSegmentData3D {
-    collect_depth_segments::<D3>(segments)
-}
-
-/// CPU-stamped alternative to [`geometry_to_depth_segments_3d`].
-pub fn stamped_geometry_to_depth_segments_3d(set: &TemplateSet3D) -> TopologicalDepthSegmentData3D {
-    collect_stamped_depth_segments::<D3>(set)
-}
-
 /// Builds the GPU color uniform for the selected line color mode.
 ///
 /// Pass `max_topological_depth` as `Some(n)` when the caller uploaded
@@ -637,10 +441,12 @@ pub fn viewport_transform(
 #[cfg(test)]
 mod tests {
     use lsystem_core::{
-        AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
-        GenerationConfig, Rgb,
+        AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, D2,
+        D3, Dimensions, GenerationConfig, GenerationDimension, Rgb, Segment2DWithTopologicalDepth,
+        Segment3DWithTopologicalDepth, TemplateSet2D, TemplateSet3D,
     };
     use std::collections::BTreeMap;
+    use std::ops::Index;
 
     use super::*;
 
@@ -692,6 +498,21 @@ mod tests {
         (a - b).abs() < EPS
     }
 
+    /// Per-axis approximate equality over the first `axis_count` components,
+    /// mirroring [`close`] for generic `D::Point` values.
+    fn axis_close<P: Index<usize, Output = f32>>(a: P, b: P, axis_count: usize, eps: f32) -> bool {
+        (0..axis_count).all(|axis| (a[axis] - b[axis]).abs() < eps)
+    }
+
+    /// Euclidean distance over the first `axis_count` components of a
+    /// generic `D::Point` value.
+    fn axis_distance<P: Index<usize, Output = f32>>(a: P, b: P, axis_count: usize) -> f32 {
+        (0..axis_count)
+            .map(|axis| (a[axis] - b[axis]).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
     fn hex_rgba(hex: Rgb) -> Vec4 {
         let [r, g, b] = hex.to_array();
         Vec4::new(r, g, b, 1.0)
@@ -711,8 +532,8 @@ mod tests {
         .expect("balanced config");
         let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
 
-        let stamped = stamped_geometry_to_segments(&set);
-        let interpreted = geometry_to_segments(compile_2d(&config).segments());
+        let stamped = collect_stamped_segments::<D2>(&set);
+        let interpreted = collect_plain_segments::<D2>(compile_2d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         for axis in 0..2 {
@@ -736,8 +557,8 @@ mod tests {
         .expect("balanced config");
         let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
 
-        let stamped = stamped_geometry_to_segments_3d(&set);
-        let interpreted = geometry_to_segments_3d(compile_3d(&config).segments());
+        let stamped = collect_stamped_segments::<D3>(&set);
+        let interpreted = collect_plain_segments::<D3>(compile_3d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         for axis in 0..3 {
@@ -748,6 +569,26 @@ mod tests {
             assert!(s.start.distance(i.start) < 1e-3);
             assert!(s.end.distance(i.end) < 1e-3);
         }
+    }
+
+    fn check_stamped_scene_counts<D: RenderDimension + TemplateDimension>(set: &TemplateSet<D>) {
+        let scene = StampedScene::collect(set);
+
+        assert!(scene.total_segments() > 0);
+        assert_eq!(
+            scene.segment_points().count() as u64,
+            scene.total_segments()
+        );
+        assert_eq!(
+            scene.depth_segments().count() as u64,
+            scene.total_segments()
+        );
+        let per_segment_max = scene
+            .depth_segments()
+            .map(|segment| segment.topological_depth)
+            .max()
+            .unwrap_or(0);
+        assert_eq!(scene.max_topological_depth(), per_segment_max);
     }
 
     #[test]
@@ -766,23 +607,7 @@ mod tests {
         )
         .expect("balanced config");
         let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
-        let scene = StampedScene::collect(&set);
-
-        assert!(scene.total_segments() > 0);
-        assert_eq!(
-            scene.segment_points().count() as u64,
-            scene.total_segments()
-        );
-        assert_eq!(
-            scene.depth_segments().count() as u64,
-            scene.total_segments()
-        );
-        let per_segment_max = scene
-            .depth_segments()
-            .map(|segment| segment.topological_depth)
-            .max()
-            .unwrap_or(0);
-        assert_eq!(scene.max_topological_depth(), per_segment_max);
+        check_stamped_scene_counts::<D2>(&set);
     }
 
     #[test]
@@ -801,23 +626,7 @@ mod tests {
         )
         .expect("balanced config");
         let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
-        let scene = StampedScene::collect(&set);
-
-        assert!(scene.total_segments() > 0);
-        assert_eq!(
-            scene.segment_points().count() as u64,
-            scene.total_segments()
-        );
-        assert_eq!(
-            scene.depth_segments().count() as u64,
-            scene.total_segments()
-        );
-        let per_segment_max = scene
-            .depth_segments()
-            .map(|segment| segment.topological_depth)
-            .max()
-            .unwrap_or(0);
-        assert_eq!(scene.max_topological_depth(), per_segment_max);
+        check_stamped_scene_counts::<D3>(&set);
     }
 
     #[test]
@@ -839,16 +648,55 @@ mod tests {
         assert_eq!(scene.max_topological_depth(), 0);
         assert_eq!(scene.segment_points().count(), 0);
 
-        let data = stamped_geometry_to_segments(&set);
+        let data = collect_stamped_segments::<D2>(&set);
         assert!(data.segments.is_empty());
         assert_eq!(data.bounds_min, Vec2::splat(-1.0));
         assert_eq!(data.bounds_max, Vec2::splat(1.0));
 
-        let depth_data = stamped_geometry_to_depth_segments(&set);
+        let depth_data = collect_stamped_depth_segments::<D2>(&set);
         assert!(depth_data.segments.is_empty());
         assert_eq!(depth_data.max_topological_depth(), 0);
         assert_eq!(depth_data.bounds_min, Vec2::splat(-1.0));
         assert_eq!(depth_data.bounds_max, Vec2::splat(1.0));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_stamped_depth_matches_interpreted<D>(
+        set: &TemplateSet<D>,
+        generation: &CompiledGeneration<D>,
+        axis_count: usize,
+        depth_of: impl Fn(&D::DepthRecord) -> u32,
+        start_of: impl Fn(&D::DepthRecord) -> D::Point,
+        end_of: impl Fn(&D::DepthRecord) -> D::Point,
+    ) where
+        D: RenderDimension + TemplateDimension + GenerationDimension,
+        D::Point: Index<usize, Output = f32>,
+    {
+        let stamped = collect_stamped_depth_segments::<D>(set);
+        let interpreted = collect_depth_segments::<D>(generation.depth_segments());
+
+        assert_eq!(stamped.segments.len(), interpreted.segments.len());
+        assert_eq!(
+            stamped.max_topological_depth(),
+            interpreted.max_topological_depth()
+        );
+        assert!(axis_close(
+            stamped.bounds_min,
+            interpreted.bounds_min,
+            axis_count,
+            1e-3
+        ));
+        assert!(axis_close(
+            stamped.bounds_max,
+            interpreted.bounds_max,
+            axis_count,
+            1e-3
+        ));
+        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
+            assert_eq!(depth_of(s), depth_of(i));
+            assert!(axis_distance(start_of(s), start_of(i), axis_count) < 1e-3);
+            assert!(axis_distance(end_of(s), end_of(i), axis_count) < 1e-3);
+        }
     }
 
     #[test]
@@ -867,24 +715,16 @@ mod tests {
         )
         .expect("balanced config");
         let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
+        let generation = compile_2d(&config);
 
-        let stamped = stamped_geometry_to_depth_segments(&set);
-        let interpreted = geometry_to_depth_segments(compile_2d(&config).depth_segments());
-
-        assert_eq!(stamped.segments.len(), interpreted.segments.len());
-        assert_eq!(
-            stamped.max_topological_depth(),
-            interpreted.max_topological_depth()
+        check_stamped_depth_matches_interpreted::<D2>(
+            &set,
+            &generation,
+            2,
+            |s| s.topological_depth,
+            |s| s.start,
+            |s| s.end,
         );
-        for axis in 0..2 {
-            assert!((stamped.bounds_min[axis] - interpreted.bounds_min[axis]).abs() < 1e-3);
-            assert!((stamped.bounds_max[axis] - interpreted.bounds_max[axis]).abs() < 1e-3);
-        }
-        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
-            assert_eq!(s.topological_depth, i.topological_depth);
-            assert!(s.start.distance(i.start) < 1e-3);
-            assert!(s.end.distance(i.end) < 1e-3);
-        }
     }
 
     #[test]
@@ -903,20 +743,16 @@ mod tests {
         )
         .expect("balanced config");
         let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
+        let generation = compile_3d(&config);
 
-        let stamped = stamped_geometry_to_depth_segments_3d(&set);
-        let interpreted = geometry_to_depth_segments_3d(compile_3d(&config).depth_segments());
-
-        assert_eq!(stamped.segments.len(), interpreted.segments.len());
-        assert_eq!(
-            stamped.max_topological_depth(),
-            interpreted.max_topological_depth()
+        check_stamped_depth_matches_interpreted::<D3>(
+            &set,
+            &generation,
+            3,
+            |s| s.topological_depth,
+            |s| s.start,
+            |s| s.end,
         );
-        for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
-            assert_eq!(s.topological_depth, i.topological_depth);
-            assert!(s.start.distance(i.start) < 1e-3);
-            assert!(s.end.distance(i.end) < 1e-3);
-        }
     }
 
     #[test]
@@ -924,15 +760,15 @@ mod tests {
         let segment_2d = [Vec2::ZERO, Vec2::X];
         let segment_3d = [Vec3::ZERO, Vec3::X];
 
-        let plain_2d = geometry_to_segments(FoldOnly::new(vec![segment_2d]));
+        let plain_2d = collect_plain_segments::<D2>(FoldOnly::new(vec![segment_2d]));
         let depth_2d =
-            geometry_to_depth_segments(FoldOnly::new(vec![Segment2DWithTopologicalDepth {
+            collect_depth_segments::<D2>(FoldOnly::new(vec![Segment2DWithTopologicalDepth {
                 points: segment_2d,
                 topological_depth: 0,
             }]));
-        let plain_3d = geometry_to_segments_3d(FoldOnly::new(vec![segment_3d]));
+        let plain_3d = collect_plain_segments::<D3>(FoldOnly::new(vec![segment_3d]));
         let depth_3d =
-            geometry_to_depth_segments_3d(FoldOnly::new(vec![Segment3DWithTopologicalDepth {
+            collect_depth_segments::<D3>(FoldOnly::new(vec![Segment3DWithTopologicalDepth {
                 points: segment_3d,
                 topological_depth: 0,
             }]));
@@ -1070,25 +906,32 @@ mod tests {
     #[test]
     fn empty_geometry_uses_fallback_bounds() {
         let config = cfg("A");
-        let SegmentData {
+        let SegmentData2D {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(compile_2d(&config).segments());
+        } = collect_plain_segments::<D2>(compile_2d(&config).segments());
         assert!(segments.is_empty());
         assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
         assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
     }
 
+    fn check_empty_depth_fallback<D: RenderDimension>(
+        data: CollectedDepthSegmentData<D::DepthRecord, D::Point>,
+        expected_min: D::Point,
+        expected_max: D::Point,
+    ) {
+        assert!(data.segments.is_empty());
+        assert_eq!(data.max_topological_depth(), 0);
+        assert_eq!(data.bounds_min, expected_min);
+        assert_eq!(data.bounds_max, expected_max);
+    }
+
     #[test]
     fn empty_depth_geometry_uses_fallback_bounds_and_zero_max_depth() {
         let config = cfg("A");
-        let data = geometry_to_depth_segments(compile_2d(&config).depth_segments());
-
-        assert!(data.segments.is_empty());
-        assert_eq!(data.max_topological_depth(), 0);
-        assert!(close(data.bounds_min[0], -1.0) && close(data.bounds_min[1], -1.0));
-        assert!(close(data.bounds_max[0], 1.0) && close(data.bounds_max[1], 1.0));
+        let data = collect_depth_segments::<D2>(compile_2d(&config).depth_segments());
+        check_empty_depth_fallback::<D2>(data, Vec2::splat(-1.0), Vec2::splat(1.0));
     }
 
     #[test]
@@ -1103,22 +946,18 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let data = geometry_to_depth_segments_3d(compile_3d(&config).depth_segments());
-
-        assert!(data.segments.is_empty());
-        assert_eq!(data.max_topological_depth(), 0);
-        assert_eq!(data.bounds_min, Vec3::splat(-1.0));
-        assert_eq!(data.bounds_max, Vec3::splat(1.0));
+        let data = collect_depth_segments::<D3>(compile_3d(&config).depth_segments());
+        check_empty_depth_fallback::<D3>(data, Vec3::splat(-1.0), Vec3::splat(1.0));
     }
 
     #[test]
     fn single_segment_produces_one_segment_record_and_tight_bounds() {
         let config = cfg("F");
-        let SegmentData {
+        let SegmentData2D {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(compile_2d(&config).segments());
+        } = collect_plain_segments::<D2>(compile_2d(&config).segments());
         assert_eq!(segments.len(), 1);
         assert!(close(segments[0].start[0], 0.0) && close(segments[0].start[1], 0.0));
         assert!(close(segments[0].end[0], 1.0) && close(segments[0].end[1], 0.0));
@@ -1129,28 +968,51 @@ mod tests {
     #[test]
     fn bounds_are_tight_over_all_segments() {
         let config = cfg("F+F-F");
-        let SegmentData {
+        let SegmentData2D {
             segments,
             bounds_min,
             bounds_max,
-        } = geometry_to_segments(compile_2d(&config).segments());
+        } = collect_plain_segments::<D2>(compile_2d(&config).segments());
         assert_eq!(segments.len(), 3);
         assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
         assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
     }
 
+    fn check_topological_depth_segments<D>(
+        data: CollectedDepthSegmentData<D::DepthRecord, D::Point>,
+        axis_count: usize,
+        depth_of: impl Fn(&D::DepthRecord) -> u32,
+        expected_depths: [u32; 3],
+        expected_min: D::Point,
+        expected_max: D::Point,
+    ) where
+        D: RenderDimension,
+        D::Point: Index<usize, Output = f32>,
+    {
+        assert_eq!(data.segments.len(), 3);
+        for (segment, expected) in data.segments.iter().zip(expected_depths) {
+            assert_eq!(depth_of(segment), expected);
+        }
+        assert_eq!(
+            data.max_topological_depth(),
+            expected_depths.into_iter().max().unwrap()
+        );
+        assert!(axis_close(data.bounds_min, expected_min, axis_count, EPS));
+        assert!(axis_close(data.bounds_max, expected_max, axis_count, EPS));
+    }
+
     #[test]
     fn topological_depth_segments_preserve_depth_and_compute_max() {
         let config = cfg("F[+F]F");
-        let data = geometry_to_depth_segments(compile_2d(&config).depth_segments());
-
-        assert_eq!(data.segments.len(), 3);
-        assert_eq!(data.segments[0].topological_depth, 0);
-        assert_eq!(data.segments[1].topological_depth, 1);
-        assert_eq!(data.segments[2].topological_depth, 1);
-        assert_eq!(data.max_topological_depth(), 1);
-        assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
-        assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
+        let data = collect_depth_segments::<D2>(compile_2d(&config).depth_segments());
+        check_topological_depth_segments::<D2>(
+            data,
+            2,
+            |s| s.topological_depth,
+            [0, 1, 1],
+            Vec2::new(0.0, 0.0),
+            Vec2::new(2.0, 1.0),
+        );
     }
 
     #[test]
@@ -1165,16 +1027,15 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let data = geometry_to_depth_segments_3d(compile_3d(&config).depth_segments());
-
-        assert_eq!(data.segments.len(), 3);
-        assert_eq!(data.segments[0].topological_depth, 0);
-        assert_eq!(data.segments[1].topological_depth, 1);
-        assert_eq!(data.segments[2].topological_depth, 1);
-        assert_eq!(data.max_topological_depth(), 1);
-        assert!(close(data.bounds_min[0], 0.0) && close(data.bounds_min[1], 0.0));
-        assert!(close(data.bounds_max[0], 2.0) && close(data.bounds_max[1], 1.0));
-        assert!(close(data.bounds_min[2], 0.0) && close(data.bounds_max[2], 0.0));
+        let data = collect_depth_segments::<D3>(compile_3d(&config).depth_segments());
+        check_topological_depth_segments::<D3>(
+            data,
+            3,
+            |s| s.topological_depth,
+            [0, 1, 1],
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(2.0, 1.0, 0.0),
+        );
     }
 
     #[test]
@@ -1193,96 +1054,5 @@ mod tests {
         assert!(t.scale[1].is_finite() && t.scale[1] > 0.0);
         assert!(close(5.0 * t.scale[0] + t.offset[0], 0.0));
         assert!(close(3.0 * t.scale[1] + t.offset[1], 0.0));
-    }
-
-    #[test]
-    fn generic_builders_match_batch_collection_2d() {
-        let points = [[Vec2::ZERO, Vec2::ONE], [Vec2::ONE, glam::vec2(2.0, 0.5)]];
-        let mut builder = PlainSegmentDataBuilder::<D2>::new();
-        points
-            .iter()
-            .for_each(|segment| builder.push_segment(*segment));
-        let built = builder.finish();
-        let batch = geometry_to_segments(points.iter().copied());
-        assert_eq!(built.segments.len(), batch.segments.len());
-        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
-            assert_eq!(a.start, b.start);
-            assert_eq!(a.end, b.end);
-        }
-        assert_eq!(built.bounds_min, batch.bounds_min);
-        assert_eq!(built.bounds_max, batch.bounds_max);
-
-        let depth_input = [
-            SegmentWithTopologicalDepth::<D2> {
-                points: [Vec2::ZERO, Vec2::ONE],
-                topological_depth: 0,
-            },
-            SegmentWithTopologicalDepth::<D2> {
-                points: [Vec2::ONE, glam::vec2(2.0, 0.5)],
-                topological_depth: 3,
-            },
-        ];
-        let mut depth_builder = DepthSegmentDataBuilder::<D2>::new();
-        depth_input
-            .iter()
-            .for_each(|segment| depth_builder.push_segment(*segment));
-        let built = depth_builder.finish();
-        let batch = geometry_to_depth_segments(depth_input.iter().copied());
-        assert_eq!(built.segments.len(), batch.segments.len());
-        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
-            assert_eq!(a.start, b.start);
-            assert_eq!(a.end, b.end);
-            assert_eq!(a.topological_depth, b.topological_depth);
-        }
-        assert_eq!(built.bounds_min, batch.bounds_min);
-        assert_eq!(built.bounds_max, batch.bounds_max);
-        assert_eq!(built.max_topological_depth(), batch.max_topological_depth());
-    }
-
-    #[test]
-    fn generic_builders_match_batch_collection_3d() {
-        let points = [
-            [Vec3::ZERO, Vec3::ONE],
-            [Vec3::ONE, glam::vec3(2.0, 0.5, 1.5)],
-        ];
-        let mut builder = PlainSegmentDataBuilder::<D3>::new();
-        points
-            .iter()
-            .for_each(|segment| builder.push_segment(*segment));
-        let built = builder.finish();
-        let batch = geometry_to_segments_3d(points.iter().copied());
-        assert_eq!(built.segments.len(), batch.segments.len());
-        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
-            assert_eq!(a.start, b.start);
-            assert_eq!(a.end, b.end);
-        }
-        assert_eq!(built.bounds_min, batch.bounds_min);
-        assert_eq!(built.bounds_max, batch.bounds_max);
-
-        let depth_input = [
-            SegmentWithTopologicalDepth::<D3> {
-                points: [Vec3::ZERO, Vec3::ONE],
-                topological_depth: 0,
-            },
-            SegmentWithTopologicalDepth::<D3> {
-                points: [Vec3::ONE, glam::vec3(2.0, 0.5, 1.5)],
-                topological_depth: 3,
-            },
-        ];
-        let mut depth_builder = DepthSegmentDataBuilder::<D3>::new();
-        depth_input
-            .iter()
-            .for_each(|segment| depth_builder.push_segment(*segment));
-        let built = depth_builder.finish();
-        let batch = geometry_to_depth_segments_3d(depth_input.iter().copied());
-        assert_eq!(built.segments.len(), batch.segments.len());
-        for (a, b) in built.segments.iter().zip(batch.segments.iter()) {
-            assert_eq!(a.start, b.start);
-            assert_eq!(a.end, b.end);
-            assert_eq!(a.topological_depth, b.topological_depth);
-        }
-        assert_eq!(built.bounds_min, batch.bounds_min);
-        assert_eq!(built.bounds_max, batch.bounds_max);
-        assert_eq!(built.max_topological_depth(), batch.max_topological_depth());
     }
 }
