@@ -4,7 +4,6 @@ pub(crate) mod turtle3d;
 use crate::{D2, D3, Dimension, SegmentWithTopologicalDepth};
 use glam::{Quat, Vec2, Vec3};
 
-#[allow(dead_code)] // TODO(task 2)
 pub(crate) trait Turtle {
     type Dimension: Dimension;
 
@@ -23,7 +22,6 @@ pub(crate) trait Turtle {
 /// Dimension-keyed turtle construction and the point/rotation operations the
 /// generic template walk needs. Crate-private: the public face stays
 /// `TemplateDimension`, whose blanket impl is bounded on this trait.
-#[allow(dead_code)] // TODO(task 2)
 pub(crate) trait TurtleDimension: Dimension {
     type Turtle: Turtle<Dimension = Self>;
 

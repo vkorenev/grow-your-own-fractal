@@ -4,8 +4,8 @@ use super::Turtle;
 use crate::{D3, Segment3DWithTopologicalDepth};
 
 /// Turtle state plus the single symbol transition consumed by `DepthSegments`.
-/// Template building also drives it directly to capture the exit state after a
-/// rule expansion.
+/// Template building reads the exit state after a rule expansion through the
+/// `Turtle` accessors.
 ///
 /// Heading = `orientation * Vec3::X`, left = `* Vec3::Y`, up = `* Vec3::Z`.
 pub(crate) struct TurtleState3D {

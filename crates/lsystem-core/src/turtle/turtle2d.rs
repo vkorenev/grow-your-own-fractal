@@ -4,8 +4,8 @@ use super::Turtle;
 use crate::{D2, Segment2DWithTopologicalDepth};
 
 /// Turtle state plus the single symbol transition consumed by `DepthSegments`.
-/// Template building also drives it directly to capture the exit state after a
-/// rule expansion.
+/// Template building reads the exit state after a rule expansion through the
+/// `Turtle` accessors.
 pub(crate) struct TurtleState2D {
     rot_plus: Vec2,
     rot_minus: Vec2,

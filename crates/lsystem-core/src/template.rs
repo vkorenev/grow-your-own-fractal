@@ -15,12 +15,9 @@
 //! compute-explosion and the two-level-instancing designs of issue #120 read
 //! this same data.
 
-use glam::{Quat, Vec2, Vec3};
-
 use crate::compiled_generation::{CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D};
 use crate::grammar::CompiledGrammar;
-use crate::turtle::turtle2d::TurtleState2D;
-use crate::turtle::turtle3d::TurtleState3D;
+use crate::turtle::{Turtle, TurtleDimension};
 use crate::{D2, D3, Dimension};
 
 /// One template segment in the local frame.
@@ -154,227 +151,259 @@ pub trait TemplateDimension: Dimension {
     ) -> StampStats;
 }
 
-/// Implements `build` and `emit_stamps` for one template-set type. The 2D
-/// and 3D pipelines are the same walk over different geometry types: the
+/// Builds templates for every ruled symbol by expanding it
+/// `template_iterations` times through the turtle in the local frame. The
+/// 2D and 3D pipelines are the same walk over different geometry types: the
 /// turtle helpers (`heading`, `normalized_heading`, `compose_heading`) hide
-/// the heading representation and `$rotate` names the rotation-apply method,
-/// so the logic exists once and the two instantiations cannot drift apart.
-macro_rules! impl_template_set {
-    ($Dimension:ty, $Set:ident, $Generation:ident, $Template:ident, $Segment:ident, $Stamp:ident,
-     $Vec:ty, $Turtle:ty, $rot_identity:expr, $rotate:ident) => {
-        impl $Set {
-            /// Builds templates for every ruled symbol by expanding it
-            /// `template_iterations` times through the turtle in the local
-            /// frame. When `template_iterations` is outside
-            /// `1..=generation`'s iteration count, returns the generation
-            /// back as the error so the caller can reuse it for the interpreter
-            /// fallback path.
-            pub fn build(
-                generation: $Generation,
-                template_iterations: u16,
-            ) -> Result<Self, $Generation> {
-                if template_iterations == 0 || template_iterations > generation.params.iterations {
-                    return Err(generation);
-                }
+/// the heading representation and `TurtleDimension` supplies the rotation
+/// application, so the logic exists once and the two instantiations cannot
+/// drift apart.
+fn build_generic<D: TurtleDimension>(
+    generation: CompiledGeneration<D>,
+    template_iterations: u16,
+) -> Result<TemplateSet<D>, CompiledGeneration<D>> {
+    if template_iterations == 0 || template_iterations > generation.params.iterations {
+        return Err(generation);
+    }
 
-                let grammar = &generation.grammar;
-                let params = generation.params;
+    let grammar = &generation.grammar;
+    let params = generation.params;
 
-                let unit_end = <$Vec>::X * params.step;
-                let mut templates = vec![$Template {
-                    segments: vec![$Segment {
-                        start: <$Vec>::ZERO,
-                        end: unit_end,
-                        depth_offset: 0,
-                    }],
-                    exit_pos: unit_end,
-                    exit_rot: $rot_identity,
-                    exit_depth_delta: 1,
-                    max_depth_offset: 0,
-                }];
-                let mut symbol_to_template = [None; 256];
+    let unit_end = D::unit_step(params.step);
+    let mut templates = vec![Template {
+        segments: vec![TemplateSegment {
+            start: D::POINT_ZERO,
+            end: unit_end,
+            depth_offset: 0,
+        }],
+        exit_pos: unit_end,
+        exit_rot: D::ROT_IDENTITY,
+        exit_depth_delta: 1,
+        max_depth_offset: 0,
+    }];
+    let mut symbol_to_template = [None; 256];
 
-                for symbol in grammar.ruled_symbols() {
-                    let mut state = <$Turtle>::new(params.angle, params.step, 0.0);
-                    let mut segments = Vec::new();
-                    let mut max_depth_offset = 0;
-                    grammar
-                        .expand_rule_effects(symbol, template_iterations)
-                        .for_each(|byte| {
-                            if let Some(segment) = state.apply(byte) {
-                                let [start, end] = segment.points;
-                                max_depth_offset = max_depth_offset.max(segment.topological_depth);
-                                segments.push($Segment {
-                                    start,
-                                    end,
-                                    depth_offset: segment.topological_depth,
-                                });
-                            }
-                        });
-                    debug_assert!(state.stack.is_empty(), "balanced RHS leaves stack empty");
-
-                    symbol_to_template[symbol as usize] = Some(templates.len() as u16);
-                    templates.push($Template {
-                        segments,
-                        exit_pos: state.position,
-                        exit_rot: state.normalized_heading(),
-                        exit_depth_delta: state.topological_depth,
-                        max_depth_offset,
+    for symbol in grammar.ruled_symbols() {
+        let mut state = <D::Turtle as Turtle>::new(params.angle, params.step, 0.0);
+        let mut segments = Vec::new();
+        let mut max_depth_offset = 0;
+        grammar
+            .expand_rule_effects(symbol, template_iterations)
+            .for_each(|byte| {
+                if let Some(segment) = state.apply(byte) {
+                    let [start, end] = segment.points;
+                    max_depth_offset = max_depth_offset.max(segment.topological_depth);
+                    segments.push(TemplateSegment {
+                        start,
+                        end,
+                        depth_offset: segment.topological_depth,
                     });
                 }
+            });
+        debug_assert!(state.stack_is_empty(), "balanced RHS leaves stack empty");
 
-                Ok(Self {
-                    templates,
-                    symbol_to_template,
-                    template_iterations,
-                    generation,
-                })
-            }
+        symbol_to_template[symbol as usize] = Some(templates.len() as u16);
+        templates.push(Template {
+            segments,
+            exit_pos: state.position(),
+            exit_rot: state.normalized_heading(),
+            exit_depth_delta: state.topological_depth(),
+            max_depth_offset,
+        });
+    }
 
-            /// Builds at the largest template depth whose total template
-            /// segment count fits `max_template_segments`. Returns the generation
-            /// back as the error when no depth fits, so the caller can
-            /// reuse it for the interpreter fallback path.
-            pub fn build_within_budget(
-                generation: $Generation,
-                max_template_segments: u64,
-            ) -> Result<Self, $Generation> {
-                let template_iterations = choose_template_iterations(
-                    &generation.grammar,
-                    generation.params.iterations,
-                    max_template_segments,
-                );
-                Self::build(generation, template_iterations)
-            }
-
-            /// Walks the boundary expansion (`iterations -
-            /// template_iterations` levels, unfiltered so ruled symbols
-            /// surface) and streams one stamp per template placement that
-            /// contributes segments, in traversal order. Placements of
-            /// geometry-free templates advance the cursor but emit nothing.
-            pub fn emit_stamps(&self, mut sink: impl FnMut($Stamp, &$Template)) -> StampStats {
-                let params = self.generation.params;
-                let grammar = &self.generation.grammar;
-                // The cursor is a plain turtle: effect symbols advance it via
-                // the shared apply() transition, so walk semantics cannot
-                // drift from the interpreter.
-                let mut state = <$Turtle>::new(params.angle, params.step, params.initial_heading);
-                let mut order: u32 = 0;
-                let mut stats = StampStats {
-                    total_segments: 0,
-                    max_depth: 0,
-                };
-                let mut place = |stamp: $Stamp, template: &$Template| {
-                    stats.max_depth = stats
-                        .max_depth
-                        .max(stamp.depth_base.saturating_add(template.max_depth_offset));
-                    stats.total_segments += template.segments.len() as u64;
-                    sink(stamp, template);
-                };
-
-                grammar
-                    .expand(params.iterations - self.template_iterations)
-                    .for_each(|byte| {
-                        let template_index =
-                            if let Some(index) = self.symbol_to_template[byte as usize] {
-                                index
-                            } else if byte == b'F' {
-                                // Bare unruled F: stamp the built-in unit
-                                // template. apply() emits the entry state (as
-                                // a segment) and advances the cursor.
-                                let rot = state.heading();
-                                let segment = state.apply(byte).expect("F always yields a segment");
-                                place(
-                                    $Stamp {
-                                        template: 0,
-                                        pos: segment.points[0],
-                                        rot,
-                                        depth_base: segment.topological_depth,
-                                        order_base: order,
-                                    },
-                                    &self.templates[0],
-                                );
-                                order = order.saturating_add(1);
-                                return;
-                            } else {
-                                state.apply(byte);
-                                return;
-                            };
-
-                        let template = &self.templates[template_index as usize];
-                        let rot = state.heading();
-                        if !template.segments.is_empty() {
-                            place(
-                                $Stamp {
-                                    template: template_index,
-                                    pos: state.position,
-                                    rot,
-                                    depth_base: state.topological_depth,
-                                    order_base: order,
-                                },
-                                template,
-                            );
-                        }
-                        state.position += rot.$rotate(template.exit_pos);
-                        state.compose_heading(template.exit_rot);
-                        state.topological_depth = state
-                            .topological_depth
-                            .saturating_add(template.exit_depth_delta);
-                        order = order.saturating_add(template.segments.len() as u32);
-                    });
-
-                debug_assert!(
-                    u32::try_from(stats.total_segments).is_ok(),
-                    "stamp order_base saturated: {} segments exceed u32::MAX",
-                    stats.total_segments
-                );
-                stats
-            }
-        }
-
-        impl TemplateDimension for $Dimension {
-            fn build_within_budget(
-                generation: CompiledGeneration<Self>,
-                max_template_segments: u64,
-            ) -> Result<TemplateSet<Self>, CompiledGeneration<Self>> {
-                <$Set>::build_within_budget(generation, max_template_segments)
-            }
-
-            fn emit_stamps(
-                set: &TemplateSet<Self>,
-                sink: impl FnMut(Stamp<Self>, &Template<Self>),
-            ) -> StampStats {
-                <$Set>::emit_stamps(set, sink)
-            }
-        }
-    };
+    Ok(TemplateSet {
+        templates,
+        symbol_to_template,
+        template_iterations,
+        generation,
+    })
 }
 
-impl_template_set!(
-    D2,
-    TemplateSet2D,
-    CompiledGeneration2D,
-    Template2D,
-    TemplateSegment2D,
-    Stamp2D,
-    Vec2,
-    TurtleState2D,
-    Vec2::X,
-    rotate
-);
+/// Builds at the largest template depth whose total template segment count
+/// fits `max_template_segments`. Returns the generation back as the error
+/// when no depth fits, so the caller can reuse it for the interpreter
+/// fallback path.
+fn build_within_budget_generic<D: TurtleDimension>(
+    generation: CompiledGeneration<D>,
+    max_template_segments: u64,
+) -> Result<TemplateSet<D>, CompiledGeneration<D>> {
+    let template_iterations = choose_template_iterations(
+        &generation.grammar,
+        generation.params.iterations,
+        max_template_segments,
+    );
+    build_generic(generation, template_iterations)
+}
 
-impl_template_set!(
-    D3,
-    TemplateSet3D,
-    CompiledGeneration3D,
-    Template3D,
-    TemplateSegment3D,
-    Stamp3D,
-    Vec3,
-    TurtleState3D,
-    Quat::IDENTITY,
-    mul_vec3
-);
+/// Walks the boundary expansion (`iterations - template_iterations` levels,
+/// unfiltered so ruled symbols surface) and streams one stamp per template
+/// placement that contributes segments, in traversal order. Placements of
+/// geometry-free templates advance the cursor but emit nothing.
+fn emit_stamps_generic<D: TurtleDimension>(
+    set: &TemplateSet<D>,
+    mut sink: impl FnMut(Stamp<D>, &Template<D>),
+) -> StampStats {
+    let params = set.generation.params;
+    let grammar = &set.generation.grammar;
+    // The cursor is a plain turtle: effect symbols advance it via
+    // the shared apply() transition, so walk semantics cannot
+    // drift from the interpreter.
+    let mut state = <D::Turtle as Turtle>::new(params.angle, params.step, params.initial_heading);
+    let mut order: u32 = 0;
+    let mut stats = StampStats {
+        total_segments: 0,
+        max_depth: 0,
+    };
+    let mut place = |stamp: Stamp<D>, template: &Template<D>| {
+        stats.max_depth = stats
+            .max_depth
+            .max(stamp.depth_base.saturating_add(template.max_depth_offset));
+        stats.total_segments += template.segments.len() as u64;
+        sink(stamp, template);
+    };
+
+    grammar
+        .expand(params.iterations - set.template_iterations)
+        .for_each(|byte| {
+            let template_index = if let Some(index) = set.symbol_to_template[byte as usize] {
+                index
+            } else if byte == b'F' {
+                // Bare unruled F: stamp the built-in unit
+                // template. apply() emits the entry state (as
+                // a segment) and advances the cursor.
+                let rot = state.heading();
+                let segment = state.apply(byte).expect("F always yields a segment");
+                place(
+                    Stamp {
+                        template: 0,
+                        pos: segment.points[0],
+                        rot,
+                        depth_base: segment.topological_depth,
+                        order_base: order,
+                    },
+                    &set.templates[0],
+                );
+                order = order.saturating_add(1);
+                return;
+            } else {
+                state.apply(byte);
+                return;
+            };
+
+            let template = &set.templates[template_index as usize];
+            let rot = state.heading();
+            if !template.segments.is_empty() {
+                place(
+                    Stamp {
+                        template: template_index,
+                        pos: state.position(),
+                        rot,
+                        depth_base: state.topological_depth(),
+                        order_base: order,
+                    },
+                    template,
+                );
+            }
+            state.advance(D::rotate(rot, template.exit_pos));
+            state.compose_heading(template.exit_rot);
+            state.add_topological_depth(template.exit_depth_delta);
+            order = order.saturating_add(template.segments.len() as u32);
+        });
+
+    debug_assert!(
+        u32::try_from(stats.total_segments).is_ok(),
+        "stamp order_base saturated: {} segments exceed u32::MAX",
+        stats.total_segments
+    );
+    stats
+}
+
+impl TemplateSet2D {
+    /// Builds templates for every ruled symbol by expanding it
+    /// `template_iterations` times through the turtle in the local
+    /// frame. When `template_iterations` is outside
+    /// `1..=generation`'s iteration count, returns the generation
+    /// back as the error so the caller can reuse it for the interpreter
+    /// fallback path.
+    pub fn build(
+        generation: CompiledGeneration2D,
+        template_iterations: u16,
+    ) -> Result<Self, CompiledGeneration2D> {
+        build_generic(generation, template_iterations)
+    }
+
+    /// Builds at the largest template depth whose total template
+    /// segment count fits `max_template_segments`. Returns the generation
+    /// back as the error when no depth fits, so the caller can
+    /// reuse it for the interpreter fallback path.
+    pub fn build_within_budget(
+        generation: CompiledGeneration2D,
+        max_template_segments: u64,
+    ) -> Result<Self, CompiledGeneration2D> {
+        build_within_budget_generic(generation, max_template_segments)
+    }
+
+    /// Walks the boundary expansion (`iterations -
+    /// template_iterations` levels, unfiltered so ruled symbols
+    /// surface) and streams one stamp per template placement that
+    /// contributes segments, in traversal order. Placements of
+    /// geometry-free templates advance the cursor but emit nothing.
+    pub fn emit_stamps(&self, sink: impl FnMut(Stamp2D, &Template2D)) -> StampStats {
+        emit_stamps_generic(self, sink)
+    }
+}
+
+impl TemplateSet3D {
+    /// Builds templates for every ruled symbol by expanding it
+    /// `template_iterations` times through the turtle in the local
+    /// frame. When `template_iterations` is outside
+    /// `1..=generation`'s iteration count, returns the generation
+    /// back as the error so the caller can reuse it for the interpreter
+    /// fallback path.
+    pub fn build(
+        generation: CompiledGeneration3D,
+        template_iterations: u16,
+    ) -> Result<Self, CompiledGeneration3D> {
+        build_generic(generation, template_iterations)
+    }
+
+    /// Builds at the largest template depth whose total template
+    /// segment count fits `max_template_segments`. Returns the generation
+    /// back as the error when no depth fits, so the caller can
+    /// reuse it for the interpreter fallback path.
+    pub fn build_within_budget(
+        generation: CompiledGeneration3D,
+        max_template_segments: u64,
+    ) -> Result<Self, CompiledGeneration3D> {
+        build_within_budget_generic(generation, max_template_segments)
+    }
+
+    /// Walks the boundary expansion (`iterations -
+    /// template_iterations` levels, unfiltered so ruled symbols
+    /// surface) and streams one stamp per template placement that
+    /// contributes segments, in traversal order. Placements of
+    /// geometry-free templates advance the cursor but emit nothing.
+    pub fn emit_stamps(&self, sink: impl FnMut(Stamp3D, &Template3D)) -> StampStats {
+        emit_stamps_generic(self, sink)
+    }
+}
+
+impl<D: TurtleDimension> TemplateDimension for D {
+    fn build_within_budget(
+        generation: CompiledGeneration<Self>,
+        max_template_segments: u64,
+    ) -> Result<TemplateSet<Self>, CompiledGeneration<Self>> {
+        build_within_budget_generic(generation, max_template_segments)
+    }
+
+    fn emit_stamps(
+        set: &TemplateSet<Self>,
+        sink: impl FnMut(Stamp<Self>, &Template<Self>),
+    ) -> StampStats {
+        emit_stamps_generic(set, sink)
+    }
+}
 
 #[cfg(test)]
 mod tests {
