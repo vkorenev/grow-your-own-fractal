@@ -4,7 +4,7 @@ use crate::{
     D2, D3, Dimension,
     config::GenerationConfig,
     grammar::CompiledGrammar,
-    turtle::{DepthSegments, turtle2d::TurtleState2D, turtle3d::TurtleState3D},
+    turtle::{DepthSegments, Turtle, TurtleDimension},
 };
 
 /// Dimension-erased result of `GenerationConfig::compile`; match once at a
@@ -82,33 +82,25 @@ pub type Segment2DWithTopologicalDepth = SegmentWithTopologicalDepth<D2>;
 pub type Segment3DWithTopologicalDepth = SegmentWithTopologicalDepth<D3>;
 
 /// Dimension-specific turtle construction used by generic geometry iteration.
-#[doc(hidden)]
+///
+/// Implemented only for [`D2`] and [`D3`] via a blanket impl; add it as a
+/// bound on your own code that is generic over dimension, then call
+/// [`CompiledGeneration::segments`] or [`CompiledGeneration::depth_segments`]
+/// rather than this trait's method directly.
 pub trait GenerationDimension: Dimension {
     fn depth_segments(
         generation: &CompiledGeneration<Self>,
     ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_;
 }
 
-impl GenerationDimension for D2 {
+impl<D: TurtleDimension> GenerationDimension for D {
     fn depth_segments(
         generation: &CompiledGeneration<Self>,
     ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_ {
         let p = generation.params;
         DepthSegments::new(
             generation.grammar.expand_effects(p.iterations),
-            TurtleState2D::new(p.angle, p.step, p.initial_heading),
-        )
-    }
-}
-
-impl GenerationDimension for D3 {
-    fn depth_segments(
-        generation: &CompiledGeneration<Self>,
-    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_ {
-        let p = generation.params;
-        DepthSegments::new(
-            generation.grammar.expand_effects(p.iterations),
-            TurtleState3D::new(p.angle, p.step, p.initial_heading),
+            <D::Turtle as Turtle>::new(p.angle, p.step, p.initial_heading),
         )
     }
 }
