@@ -138,7 +138,12 @@ impl<D: Dimension> TemplateSet<D> {
 
 /// Dimension-specific template construction and stamp emission used by
 /// generic renderer orchestration.
-#[doc(hidden)]
+///
+/// Implemented only for [`D2`] and [`D3`] via a blanket impl. Code that is
+/// generic over dimension calls these as associated functions
+/// (`D::build_within_budget(...)`, `D::emit_stamps(...)`); code that already
+/// knows the concrete dimension should prefer the inherent
+/// [`TemplateSet2D`]/[`TemplateSet3D`] methods of the same names instead.
 pub trait TemplateDimension: Dimension {
     fn build_within_budget(
         generation: CompiledGeneration<Self>,
