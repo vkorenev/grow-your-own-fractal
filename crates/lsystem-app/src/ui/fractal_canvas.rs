@@ -824,9 +824,46 @@ impl FractalPipeline {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use iced::futures::executor::block_on;
+    use lsystem_core::{Dimensions, GenerationConfig, LineColorConfig, Rgb};
 
     use super::*;
+
+    fn generation_config(dimensions: Dimensions, axiom: &str) -> GenerationConfig {
+        GenerationConfig::new(
+            dimensions,
+            axiom.to_string(),
+            0,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config")
+    }
+
+    fn color_config() -> ColorConfig {
+        ColorConfig {
+            background: Rgb::new(0, 0, 0),
+            line: LineColorConfig::Solid(Rgb::new(255, 255, 255)),
+        }
+    }
+
+    fn compile_2d(config: &GenerationConfig) -> CompiledGeneration<D2> {
+        match config.compile() {
+            AnyCompiledGeneration::TwoD(generation) => generation,
+            AnyCompiledGeneration::ThreeD(_) => panic!("expected 2D generation"),
+        }
+    }
+
+    fn compile_3d(config: &GenerationConfig) -> CompiledGeneration<D3> {
+        match config.compile() {
+            AnyCompiledGeneration::ThreeD(generation) => generation,
+            AnyCompiledGeneration::TwoD(_) => panic!("expected 3D generation"),
+        }
+    }
 
     #[test]
     fn drain_cancellable_pushes_active_generation_in_order() {
@@ -880,5 +917,140 @@ mod tests {
         assert!(cancelled);
         assert_eq!(pushed.len(), CANCELLATION_CHECK_INTERVAL);
         assert_eq!(pushed.last(), Some(&(CANCELLATION_CHECK_INTERVAL - 1)));
+    }
+
+    #[test]
+    fn build_typed_scene_maps_plain_and_depth_variants_2d() {
+        let colors = color_config();
+        let current_generation = AtomicU64::new(1);
+
+        let plain = compile_2d(&generation_config(Dimensions::TwoD, "F+F"));
+        let result = block_on(build_typed_scene::<D2>(
+            plain,
+            &colors,
+            Camera::new(),
+            1,
+            &current_generation,
+            Instant::now(),
+        ));
+        match result {
+            SceneBuildResult::Ready { generation, scene } => {
+                assert_eq!(generation, 1);
+                match &scene.geometry {
+                    SceneGeometry::TwoD { segments, .. } => assert_eq!(segments.len(), 2),
+                    _ => panic!("expected TwoD geometry for bracketless 2D axiom"),
+                }
+            }
+            SceneBuildResult::Cancelled => panic!("expected Ready for matching revision"),
+        }
+
+        let depth = compile_2d(&generation_config(Dimensions::TwoD, "F[+F]F"));
+        let result = block_on(build_typed_scene::<D2>(
+            depth,
+            &colors,
+            Camera::new(),
+            1,
+            &current_generation,
+            Instant::now(),
+        ));
+        match result {
+            SceneBuildResult::Ready { generation, scene } => {
+                assert_eq!(generation, 1);
+                match &scene.geometry {
+                    SceneGeometry::TwoDWithTopologicalDepth {
+                        segments,
+                        max_topological_depth,
+                        ..
+                    } => {
+                        assert_eq!(segments.len(), 3);
+                        assert_eq!(*max_topological_depth, 1);
+                    }
+                    _ => {
+                        panic!("expected TwoDWithTopologicalDepth geometry for bracketed 2D axiom")
+                    }
+                }
+            }
+            SceneBuildResult::Cancelled => panic!("expected Ready for matching revision"),
+        }
+    }
+
+    #[test]
+    fn build_typed_scene_maps_plain_and_depth_variants_3d() {
+        let colors = color_config();
+        let current_generation = AtomicU64::new(1);
+
+        let plain = compile_3d(&generation_config(Dimensions::ThreeD, "F+F"));
+        let result = block_on(build_typed_scene::<D3>(
+            plain,
+            &colors,
+            Camera::new(),
+            1,
+            &current_generation,
+            Instant::now(),
+        ));
+        match result {
+            SceneBuildResult::Ready { generation, scene } => {
+                assert_eq!(generation, 1);
+                match &scene.geometry {
+                    SceneGeometry::ThreeD { segments, .. } => assert_eq!(segments.len(), 2),
+                    _ => panic!("expected ThreeD geometry for bracketless 3D axiom"),
+                }
+            }
+            SceneBuildResult::Cancelled => panic!("expected Ready for matching revision"),
+        }
+
+        let depth = compile_3d(&generation_config(Dimensions::ThreeD, "F[+F]F"));
+        let result = block_on(build_typed_scene::<D3>(
+            depth,
+            &colors,
+            Camera::new(),
+            1,
+            &current_generation,
+            Instant::now(),
+        ));
+        match result {
+            SceneBuildResult::Ready { generation, scene } => {
+                assert_eq!(generation, 1);
+                match &scene.geometry {
+                    SceneGeometry::ThreeDWithTopologicalDepth {
+                        segments,
+                        max_topological_depth,
+                        ..
+                    } => {
+                        assert_eq!(segments.len(), 3);
+                        assert_eq!(*max_topological_depth, 1);
+                    }
+                    _ => panic!(
+                        "expected ThreeDWithTopologicalDepth geometry for bracketed 3D axiom"
+                    ),
+                }
+            }
+            SceneBuildResult::Cancelled => panic!("expected Ready for matching revision"),
+        }
+    }
+
+    #[test]
+    fn build_typed_scene_cancels_for_stale_revision() {
+        // Exercises the post-collection cancellation check in
+        // `build_typed_scene` (the `is_cancelled` call after segment
+        // collection completes, distinct from the in-progress check inside
+        // `drain_cancellable` covered above): `current_generation` is bumped
+        // past `generation_revision` before the call, so even though
+        // collection itself completes normally, the stale revision must
+        // still yield `Cancelled`.
+        let colors = color_config();
+        let current_generation = AtomicU64::new(2);
+
+        let plain = compile_2d(&generation_config(Dimensions::TwoD, "F+F"));
+        let result = block_on(build_typed_scene::<D2>(
+            plain,
+            &colors,
+            Camera::new(),
+            1,
+            &current_generation,
+            Instant::now(),
+        ));
+
+        assert!(matches!(result, SceneBuildResult::Cancelled));
     }
 }
