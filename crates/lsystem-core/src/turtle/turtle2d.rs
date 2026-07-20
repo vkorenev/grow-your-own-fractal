@@ -4,8 +4,8 @@ use super::Turtle;
 use crate::{D2, Segment2DWithTopologicalDepth};
 
 /// Turtle state plus the single symbol transition consumed by `DepthSegments`.
-/// Template building also drives it directly to capture the exit state after a
-/// rule expansion.
+/// Template building reads the exit state after a rule expansion through the
+/// `Turtle` accessors.
 pub(crate) struct TurtleState2D {
     rot_plus: Vec2,
     rot_minus: Vec2,
@@ -105,6 +105,51 @@ impl TurtleState2D {
 
 impl Turtle for TurtleState2D {
     type Dimension = D2;
+
+    #[inline]
+    fn new(angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self {
+        TurtleState2D::new(angle_deg, step, initial_heading_deg)
+    }
+
+    #[inline]
+    fn position(&self) -> Vec2 {
+        self.position
+    }
+
+    #[inline]
+    fn advance(&mut self, delta: Vec2) {
+        self.position += delta;
+    }
+
+    #[inline]
+    fn heading(&self) -> Vec2 {
+        self.heading()
+    }
+
+    #[inline]
+    fn normalized_heading(&self) -> Vec2 {
+        self.normalized_heading()
+    }
+
+    #[inline]
+    fn compose_heading(&mut self, rot: Vec2) {
+        self.compose_heading(rot);
+    }
+
+    #[inline]
+    fn topological_depth(&self) -> u32 {
+        self.topological_depth
+    }
+
+    #[inline]
+    fn add_topological_depth(&mut self, delta: u32) {
+        self.topological_depth = self.topological_depth.saturating_add(delta);
+    }
+
+    #[inline]
+    fn stack_is_empty(&self) -> bool {
+        self.stack.is_empty()
+    }
 
     #[inline]
     fn apply(&mut self, symbol: u8) -> Option<Segment2DWithTopologicalDepth> {
