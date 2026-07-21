@@ -147,6 +147,9 @@ impl<D: TemplateDimension> TemplateSet<D> {
     }
 
     /// Lazily yields world-space segment endpoints in traversal order.
+    ///
+    /// Each call starts a fresh boundary walk. The returned iterator is
+    /// resumable, but repeated calls repeat placement expansion.
     pub fn segments(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
         D::stamp_placements(self).flat_map(|(stamp, template)| {
             template
@@ -158,6 +161,9 @@ impl<D: TemplateDimension> TemplateSet<D> {
 
     /// Lazily yields world-space segments with topological depth in traversal
     /// order.
+    ///
+    /// Each call starts a fresh boundary walk. The returned iterator is
+    /// resumable, but repeated calls repeat placement expansion.
     pub fn depth_segments(
         &self,
     ) -> impl Iterator<Item = crate::SegmentWithTopologicalDepth<D>> + '_ {
@@ -364,10 +370,6 @@ impl<'a, D: TurtleDimension> Iterator for StampPlacements<'a, D> {
     }
 }
 
-fn stamp_placements_generic<D: TurtleDimension>(set: &TemplateSet<D>) -> StampPlacements<'_, D> {
-    StampPlacements::new(set)
-}
-
 impl<D: TurtleDimension> TemplateDimension for D {
     fn build_templates(
         generation: CompiledGeneration<Self>,
@@ -379,7 +381,7 @@ impl<D: TurtleDimension> TemplateDimension for D {
     fn stamp_placements<'a>(
         set: &'a TemplateSet<Self>,
     ) -> impl Iterator<Item = (Stamp<Self>, &'a Template<Self>)> + 'a {
-        stamp_placements_generic(set)
+        StampPlacements::new(set)
     }
 }
 

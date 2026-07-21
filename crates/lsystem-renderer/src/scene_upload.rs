@@ -192,6 +192,9 @@ where
             let uploaded_layout = match layout {
                 SegmentLayout::Plain => {
                     let color = color_params_from_config(line, total_segments, None);
+                    // The staging writer enforces the planned count exactly.
+                    // Avoid a placement-only prepass solely to duplicate that
+                    // contract check on the plain hot path.
                     pipeline
                         .upload_from_iter(
                             device,
@@ -207,6 +210,10 @@ where
                     UploadedLayout::Plain
                 }
                 SegmentLayout::TopologicalDepth => {
+                    // Color construction currently needs the maximum depth
+                    // before staging starts. This collection-free metadata
+                    // pass is temporary until iterator upload can accumulate
+                    // depth and write color only after successful staging.
                     let stats = set.emit_stamps(|_, _| {});
                     assert_eq!(
                         stats.total_segments,
