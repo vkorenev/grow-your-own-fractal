@@ -3,13 +3,11 @@ use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
     CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, LineColorConfig,
-    PreparedGeneration, TemplateDimension,
+    PreparedGeneration, SegmentWithTopologicalDepth, TemplateDimension,
 };
 
 use crate::line_renderer::{LinePipeline, RenderDimension, StagingUnavailable, record_limit};
-use crate::lsystem_bridge::{
-    Bounds, collect_depth_segments, collect_plain_segments, color_params_from_config,
-};
+use crate::lsystem_bridge::{Bounds, color_params_from_config};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SegmentLayout {
@@ -140,6 +138,80 @@ fn checked_total<D: RenderDimension>(
     Ok(u32::try_from(total_segments).expect("segment cap fits in u32"))
 }
 
+fn upload_plain<D: RenderDimension>(
+    pipeline: &mut LinePipeline<D>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    segments: impl Iterator<Item = [D::Point; 2]>,
+    line: &LineColorConfig,
+    method: GenerationMethod,
+    total_segments: u32,
+) -> Result<UploadedScene<D>, SceneUploadError> {
+    let mut bounds = Bounds::new();
+    pipeline
+        .upload_from_iter(
+            device,
+            queue,
+            total_segments,
+            segments.map(|[start, end]| {
+                bounds.update(start, end);
+                D::plain_record(start, end)
+            }),
+        )
+        .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
+
+    let (bounds_min, bounds_max) = bounds.finish();
+    pipeline.write_color_params(queue, color_params_from_config(line, total_segments, None));
+    Ok(UploadedScene {
+        method,
+        layout: UploadedLayout::Plain,
+        total_segments,
+        bounds_min,
+        bounds_max,
+    })
+}
+
+fn upload_with_topological_depth<D: RenderDimension>(
+    pipeline: &mut LinePipeline<D>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
+    line: &LineColorConfig,
+    method: GenerationMethod,
+    total_segments: u32,
+) -> Result<UploadedScene<D>, SceneUploadError> {
+    let mut bounds = Bounds::new();
+    let mut max_topological_depth = 0;
+    pipeline
+        .upload_depth_from_iter(
+            device,
+            queue,
+            total_segments,
+            segments.map(|segment| {
+                let [start, end] = segment.points;
+                bounds.update(start, end);
+                max_topological_depth = max_topological_depth.max(segment.topological_depth);
+                D::depth_record(start, end, segment.topological_depth)
+            }),
+        )
+        .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
+
+    let (bounds_min, bounds_max) = bounds.finish();
+    pipeline.write_color_params(
+        queue,
+        color_params_from_config(line, total_segments, Some(max_topological_depth)),
+    );
+    Ok(UploadedScene {
+        method,
+        layout: UploadedLayout::TopologicalDepth {
+            max_topological_depth,
+        },
+        total_segments,
+        bounds_min,
+        bounds_max,
+    })
+}
+
 /// Generates and uploads a scene.
 ///
 /// A segment-limit error is returned before the pipeline is mutated, so its
@@ -188,110 +260,46 @@ where
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
             };
-            let mut bounds = Bounds::new();
-            let uploaded_layout = match layout {
-                SegmentLayout::Plain => {
-                    let color = color_params_from_config(line, total_segments, None);
-                    // The staging writer enforces the planned count exactly.
-                    // Avoid a placement-only prepass solely to duplicate that
-                    // contract check on the plain hot path.
-                    pipeline
-                        .upload_from_iter(
-                            device,
-                            queue,
-                            total_segments,
-                            set.segments().map(|[start, end]| {
-                                bounds.update(start, end);
-                                D::plain_record(start, end)
-                            }),
-                            color,
-                        )
-                        .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
-                    UploadedLayout::Plain
-                }
-                SegmentLayout::TopologicalDepth => {
-                    // Color construction currently needs the maximum depth
-                    // before staging starts. This collection-free metadata
-                    // pass is temporary until iterator upload can accumulate
-                    // depth and write color only after successful staging.
-                    let stats = set.emit_stamps(|_, _| {});
-                    assert_eq!(
-                        stats.total_segments,
-                        counted_total,
-                        "stamped {:?} segment count must match the compiled recurrence",
-                        D::RUNTIME
-                    );
-                    let max_topological_depth = stats.max_depth;
-                    let color =
-                        color_params_from_config(line, total_segments, Some(max_topological_depth));
-                    pipeline
-                        .upload_depth_from_iter(
-                            device,
-                            queue,
-                            total_segments,
-                            set.depth_segments().map(|segment| {
-                                let [start, end] = segment.points;
-                                bounds.update(start, end);
-                                D::depth_record(start, end, segment.topological_depth)
-                            }),
-                            color,
-                        )
-                        .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
-                    UploadedLayout::TopologicalDepth {
-                        max_topological_depth,
-                    }
-                }
-            };
-            let (bounds_min, bounds_max) = bounds.finish();
-            Ok(UploadedScene {
-                method,
-                layout: uploaded_layout,
-                total_segments,
-                bounds_min,
-                bounds_max,
-            })
+            match layout {
+                SegmentLayout::Plain => upload_plain(
+                    pipeline,
+                    device,
+                    queue,
+                    set.segments(),
+                    line,
+                    method,
+                    total_segments,
+                ),
+                SegmentLayout::TopologicalDepth => upload_with_topological_depth(
+                    pipeline,
+                    device,
+                    queue,
+                    set.depth_segments(),
+                    line,
+                    method,
+                    total_segments,
+                ),
+            }
         }
         PreparedGeneration::Interpreted(generation) => match layout {
-            SegmentLayout::Plain => {
-                let data = collect_plain_segments::<D>(generation.segments());
-                assert_eq!(
-                    data.segments.len(),
-                    total_segments as usize,
-                    "interpreted {:?} segment count must match the compiled recurrence",
-                    D::RUNTIME
-                );
-                let color = color_params_from_config(line, total_segments, None);
-                pipeline.upload(device, queue, &data.segments, color);
-                Ok(UploadedScene {
-                    method: GenerationMethod::Interpreted,
-                    layout: UploadedLayout::Plain,
-                    total_segments,
-                    bounds_min: data.bounds_min,
-                    bounds_max: data.bounds_max,
-                })
-            }
-            SegmentLayout::TopologicalDepth => {
-                let data = collect_depth_segments::<D>(generation.depth_segments());
-                assert_eq!(
-                    data.segments.len(),
-                    total_segments as usize,
-                    "interpreted depth-aware {:?} segment count must match the compiled recurrence",
-                    D::RUNTIME
-                );
-                let max_topological_depth = data.max_topological_depth();
-                let color =
-                    color_params_from_config(line, total_segments, Some(max_topological_depth));
-                pipeline.upload_with_topological_depth(device, queue, &data.segments, color);
-                Ok(UploadedScene {
-                    method: GenerationMethod::Interpreted,
-                    layout: UploadedLayout::TopologicalDepth {
-                        max_topological_depth,
-                    },
-                    total_segments,
-                    bounds_min: data.bounds_min,
-                    bounds_max: data.bounds_max,
-                })
-            }
+            SegmentLayout::Plain => upload_plain(
+                pipeline,
+                device,
+                queue,
+                generation.segments(),
+                line,
+                GenerationMethod::Interpreted,
+                total_segments,
+            ),
+            SegmentLayout::TopologicalDepth => upload_with_topological_depth(
+                pipeline,
+                device,
+                queue,
+                generation.depth_segments(),
+                line,
+                GenerationMethod::Interpreted,
+                total_segments,
+            ),
         },
     }
 }
@@ -593,6 +601,33 @@ mod gpu_tests {
                 DEFAULT_TEMPLATE_SEGMENT_BUDGET as u32
             );
 
+            let interpreter_depth = generation(
+                Dimensions::TwoD,
+                "A",
+                1,
+                [(
+                    'A',
+                    format!("[{}]", "F".repeat(DEFAULT_TEMPLATE_SEGMENT_BUDGET as usize)),
+                )]
+                .into(),
+            );
+            let scene = upload_scene(
+                &mut pipeline_2d,
+                &device,
+                &queue,
+                compile_2d(&interpreter_depth),
+                &line_color(),
+                SegmentLayout::TopologicalDepth,
+            )
+            .expect("depth-aware interpreter upload");
+            assert_eq!(scene.method(), GenerationMethod::Interpreted);
+            assert_eq!(
+                scene.layout(),
+                UploadedLayout::TopologicalDepth {
+                    max_topological_depth: DEFAULT_TEMPLATE_SEGMENT_BUDGET as u32 - 1,
+                }
+            );
+
             let plain_3d = generation(Dimensions::ThreeD, "F", 1, [('F', "F".to_string())].into());
             let scene = upload_scene(
                 &mut pipeline_3d,
@@ -755,13 +790,8 @@ mod gpu_tests {
             let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let record_size = std::mem::size_of::<Segment2D>() as u64;
             let invalid_count = (device.limits().max_buffer_size / record_size + 1) as u32;
-            let result = pipeline.upload_from_iter(
-                &device,
-                &queue,
-                invalid_count,
-                std::iter::empty(),
-                ColorParams::default(),
-            );
+            let result =
+                pipeline.upload_from_iter(&device, &queue, invalid_count, std::iter::empty());
             assert!(matches!(result, Err(StagingUnavailable)));
             assert!(
                 error_scope.pop().await.is_some(),

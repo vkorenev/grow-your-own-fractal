@@ -227,14 +227,12 @@ offscreen exports.
   generation), the public renderer operation for web and offscreen scene
   generation/upload. It plans the generation, clamps the requested layout for
   bracketless grammars, checks segment caps via per-record `record_limit`
-  before preparation, then uses the selected stamped or interpreted path, and
-  returns `UploadedScene<D>` metadata with point-typed bounds and
-  per-dimension array getters. A cap error preserves the previous pipeline
-  scene; a staging error clears the attempted target layout. Stamped depth
-  uploads currently run a collection-free placement metadata pass before the
-  geometry pass because color construction needs maximum depth before staging;
-  plain uploads rely on the staging writer's exact-count contract without an
-  extra placement pass.
+  before preparation, then streams the selected stamped or interpreted
+  iterator directly into wgpu staging while accumulating bounds and maximum
+  topological depth. Color parameters are written only after the geometry
+  drain succeeds. It returns `UploadedScene<D>` metadata with point-typed
+  bounds and per-dimension array getters. A cap error preserves the previous
+  pipeline scene; a staging error clears the attempted target layout.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature. Segment-limit and
   staging failures surface as typed export errors instead of empty images.

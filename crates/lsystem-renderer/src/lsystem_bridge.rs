@@ -95,7 +95,7 @@ impl<P: BoundsPoint> Bounds<P> {
     }
 }
 
-/// Segment records collected for a stamped scene, with their bounds.
+/// Segment records collected for a native scene, with their bounds.
 ///
 /// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
 /// geometry they fall back to the unit box.
@@ -160,6 +160,7 @@ impl<R, P: BoundsPoint> SegmentCollector<R, P> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn collect_plain_segments<D: RenderDimension>(
     segments: impl Iterator<Item = [D::Point; 2]>,
 ) -> CollectedSegmentData<D::PlainRecord, D::Point> {
@@ -168,6 +169,7 @@ pub(crate) fn collect_plain_segments<D: RenderDimension>(
     builder.finish()
 }
 
+#[cfg(test)]
 pub(crate) fn collect_depth_segments<D: RenderDimension>(
     segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
 ) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
