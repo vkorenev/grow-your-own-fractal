@@ -236,6 +236,7 @@ pub trait TemplateDimension: GenerationDimension {
         template_iterations: u16,
     ) -> Result<TemplateSet<Self>, TemplateBuildError<Self>>;
 
+    #[doc(hidden)]
     fn emit_stamps(
         set: &TemplateSet<Self>,
         sink: impl FnMut(Stamp<Self>, &Template<Self>),
@@ -1004,6 +1005,29 @@ mod tests {
         let plan = compile_2d(&config).plan_templates(1);
         assert_eq!(plan.selected_template_iterations(), Some(2));
         assert_eq!(plan.total_segments(), 0);
+    }
+
+    #[test]
+    fn three_d_zero_budget_prepares_interpreted_generation() {
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "F[&F]F".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::new(),
+        )
+        .expect("balanced config");
+
+        let plan = compile_3d(&config).plan_templates(0);
+        assert_eq!(plan.total_segments(), 3);
+        assert_eq!(plan.selected_template_iterations(), None);
+        let PreparedGeneration::Interpreted(generation) = plan.prepare() else {
+            panic!("zero budget cannot fit the built-in unit template")
+        };
+        assert!(generation.has_stack_directives());
+        assert_eq!(generation.depth_segments().count(), 3);
     }
 
     #[test]
