@@ -1,9 +1,11 @@
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 
 use crate::{
     D2, D3, Dimension,
     config::GenerationConfig,
     grammar::CompiledGrammar,
+    template::{TemplateDimension, TemplateSet},
     turtle::{DepthSegments, Turtle, TurtleDimension},
 };
 
@@ -31,10 +33,12 @@ pub struct CompiledGeneration<D: Dimension> {
 /// A 3D value cannot be passed to a 2D template set:
 ///
 /// ```compile_fail
-/// use lsystem_core::{CompiledGeneration3D, TemplateSet2D};
+/// use lsystem_core::CompiledGeneration3D;
 ///
 /// fn build_wrong_dimension(generation: CompiledGeneration3D) {
-///     let _ = TemplateSet2D::build(generation, 1);
+///     let set: lsystem_core::TemplateSet2D = generation
+///         .build_templates(1)
+///         .unwrap();
 /// }
 /// ```
 pub type CompiledGeneration2D = CompiledGeneration<D2>;
@@ -44,13 +48,86 @@ pub type CompiledGeneration2D = CompiledGeneration<D2>;
 /// A 2D value cannot be passed to a 3D template set:
 ///
 /// ```compile_fail
-/// use lsystem_core::{CompiledGeneration2D, TemplateSet3D};
+/// use lsystem_core::CompiledGeneration2D;
 ///
 /// fn build_wrong_dimension(generation: CompiledGeneration2D) {
-///     let _ = TemplateSet3D::build(generation, 1);
+///     let set: lsystem_core::TemplateSet3D = generation
+///         .build_templates(1)
+///         .unwrap();
 /// }
 /// ```
 pub type CompiledGeneration3D = CompiledGeneration<D3>;
+
+/// An allocation-free generation plan that owns the compiled generation until
+/// the caller is ready to prepare its selected strategy.
+pub struct GenerationPlan<D: Dimension> {
+    pub(crate) generation: CompiledGeneration<D>,
+    total_segments: u64,
+    selected_template_iterations: Option<u16>,
+}
+
+/// A generation prepared using the strategy selected by [`GenerationPlan`].
+// Keep the public strategy payloads direct: preparation already owns either
+// value, and adding a box would impose a second allocation on template users.
+#[allow(clippy::large_enum_variant)]
+pub enum PreparedGeneration<D: Dimension> {
+    Stamped(TemplateSet<D>),
+    Interpreted(CompiledGeneration<D>),
+}
+
+/// Failure to build a template set at an explicitly requested depth.
+pub struct TemplateBuildError<D: Dimension> {
+    generation: CompiledGeneration<D>,
+    requested_iterations: u16,
+    available_iterations: u16,
+}
+
+impl<D: Dimension> TemplateBuildError<D> {
+    pub(crate) fn new(generation: CompiledGeneration<D>, requested_iterations: u16) -> Self {
+        let available_iterations = generation.params.iterations;
+        Self {
+            generation,
+            requested_iterations,
+            available_iterations,
+        }
+    }
+
+    /// The invalid template depth supplied by the caller.
+    pub fn requested_iterations(&self) -> u16 {
+        self.requested_iterations
+    }
+
+    /// The generation's maximum valid template depth.
+    pub fn available_iterations(&self) -> u16 {
+        self.available_iterations
+    }
+
+    /// Recovers the owned generation after a failed fixed-depth build.
+    pub fn into_generation(self) -> CompiledGeneration<D> {
+        self.generation
+    }
+}
+
+impl<D: Dimension> Debug for TemplateBuildError<D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemplateBuildError")
+            .field("requested_iterations", &self.requested_iterations)
+            .field("available_iterations", &self.available_iterations)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<D: Dimension> Display for TemplateBuildError<D> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "template iteration count {} is outside 1..={} for this generation",
+            self.requested_iterations, self.available_iterations
+        )
+    }
+}
+
+impl<D: Dimension> std::error::Error for TemplateBuildError<D> {}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GenerationParams {
@@ -132,12 +209,47 @@ impl<D: Dimension> CompiledGeneration<D> {
     pub fn has_stack_directives(&self) -> bool {
         self.has_stack_directives
     }
+}
 
-    /// Number of drawn segments in this generation without expanding it.
-    ///
-    /// The count is exact while representable and saturates at `u64::MAX`.
-    pub fn drawn_segment_count(&self) -> u64 {
-        self.grammar.drawn_segment_count(self.params.iterations)
+impl<D: TemplateDimension> CompiledGeneration<D> {
+    /// Plans output counting and bounded template selection in one
+    /// allocation-free recurrence pass.
+    pub fn plan_templates(self, max_template_segments: u64) -> GenerationPlan<D> {
+        let mut yields = [0u64; 256];
+        yields[b'F' as usize] = 1;
+        let mut selected_template_iterations = None;
+
+        // Always run every round. Accepted grammars may shrink, remain fixed,
+        // or oscillate, so a failed depth does not imply later depths fail.
+        for template_iterations in 1..=self.params.iterations {
+            yields = self.grammar.advance_drawn_segment_yields(&yields);
+            if self.grammar.template_segment_count(&yields) <= max_template_segments {
+                selected_template_iterations = Some(template_iterations);
+            }
+        }
+
+        GenerationPlan {
+            total_segments: self.grammar.axiom_drawn_segment_count(&yields),
+            generation: self,
+            selected_template_iterations,
+        }
+    }
+}
+
+impl<D: Dimension> GenerationPlan<D> {
+    /// Exact output segment count while representable, saturating at
+    /// `u64::MAX`.
+    pub fn total_segments(&self) -> u64 {
+        self.total_segments
+    }
+
+    pub fn has_stack_directives(&self) -> bool {
+        self.generation.has_stack_directives
+    }
+
+    /// Selected stamped template depth, or `None` when no depth fits.
+    pub fn selected_template_iterations(&self) -> Option<u16> {
+        self.selected_template_iterations
     }
 }
 
@@ -228,16 +340,115 @@ mod tests {
         let AnyCompiledGeneration::TwoD(two_d) = config(Dimensions::TwoD).compile() else {
             panic!("expected 2D generation")
         };
-        assert_eq!(two_d.drawn_segment_count(), 16);
-        assert_eq!(two_d.drawn_segment_count(), two_d.segments().count() as u64);
+        let two_d_total = two_d.plan_templates(u64::MAX).total_segments();
+        assert_eq!(two_d_total, 16);
+        assert_eq!(
+            two_d_total,
+            config(Dimensions::TwoD)
+                .compile_for::<D2>()
+                .segments()
+                .count() as u64
+        );
 
         let AnyCompiledGeneration::ThreeD(three_d) = config(Dimensions::ThreeD).compile() else {
             panic!("expected 3D generation")
         };
-        assert_eq!(three_d.drawn_segment_count(), 16);
+        let three_d_total = three_d.plan_templates(u64::MAX).total_segments();
+        assert_eq!(three_d_total, 16);
         assert_eq!(
-            three_d.drawn_segment_count(),
-            three_d.segments().count() as u64
+            three_d_total,
+            config(Dimensions::ThreeD)
+                .compile_for::<D3>()
+                .segments()
+                .count() as u64
         );
+    }
+
+    fn compile_2d_case(
+        axiom: &str,
+        iterations: u16,
+        rules: BTreeMap<char, String>,
+    ) -> CompiledGeneration2D {
+        GenerationConfig::new(
+            Dimensions::TwoD,
+            axiom.to_string(),
+            iterations,
+            90.0,
+            1.0,
+            0.0,
+            rules,
+        )
+        .expect("valid generation")
+        .compile_for::<D2>()
+    }
+
+    #[test]
+    fn planning_totals_cover_supported_grammar_shapes() {
+        let cases = [
+            (
+                "growing",
+                compile_2d_case("F", 8, [('F', "FF".to_string())].into()),
+            ),
+            (
+                "shrinking",
+                compile_2d_case("F", 8, [('F', "f".to_string())].into()),
+            ),
+            (
+                "fixed",
+                compile_2d_case("F", 8, [('F', "F".to_string())].into()),
+            ),
+            (
+                "oscillating",
+                compile_2d_case(
+                    "F",
+                    8,
+                    [('F', "G".to_string()), ('G', "F".to_string())].into(),
+                ),
+            ),
+            ("empty", compile_2d_case("", 8, BTreeMap::new())),
+            (
+                "non-ASCII",
+                compile_2d_case("ä", 4, [('ä', "Fä".to_string())].into()),
+            ),
+            (
+                "multi-rule",
+                compile_2d_case(
+                    "A",
+                    3,
+                    [('A', "FB".to_string()), ('B', "FF".to_string())].into(),
+                ),
+            ),
+        ];
+
+        for (name, generation) in cases {
+            let expected = generation.segments().count() as u64;
+            assert_eq!(
+                generation.plan_templates(u64::MAX).total_segments(),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn planning_runs_to_the_u16_rewrite_bound_without_expansion() {
+        let shrinking = compile_2d_case("F", u16::MAX, [('F', "f".to_string())].into());
+        assert_eq!(shrinking.plan_templates(0).total_segments(), 0);
+
+        let fixed = compile_2d_case("F", u16::MAX, [('F', "F".to_string())].into());
+        assert_eq!(fixed.plan_templates(2).total_segments(), 1);
+
+        let oscillating = compile_2d_case(
+            "F",
+            u16::MAX,
+            [('F', "G".to_string()), ('G', "F".to_string())].into(),
+        );
+        assert_eq!(oscillating.plan_templates(u64::MAX).total_segments(), 0);
+    }
+
+    #[test]
+    fn planning_counts_saturating_growth() {
+        let generation = compile_2d_case("F", 64, [('F', "FF".to_string())].into());
+        assert_eq!(generation.plan_templates(1).total_segments(), u64::MAX);
     }
 }

@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
-    CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationDimension,
-    LineColorConfig, TemplateDimension,
+    CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, LineColorConfig,
+    PreparedGeneration, TemplateDimension,
 };
 
 use crate::line_renderer::{LinePipeline, RenderDimension, StagingUnavailable, record_limit};
@@ -176,14 +176,15 @@ pub fn upload_scene<D>(
     layout: SegmentLayout,
 ) -> Result<UploadedScene<D>, SceneUploadError>
 where
-    D: RenderDimension + GenerationDimension + TemplateDimension,
+    D: RenderDimension + TemplateDimension,
 {
-    let layout = actual_layout(layout, generation.has_stack_directives());
-    let counted_total = generation.drawn_segment_count();
+    let plan = generation.plan_templates(DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+    let layout = actual_layout(layout, plan.has_stack_directives());
+    let counted_total = plan.total_segments();
     let total_segments = checked_total::<D>(counted_total, layout)?;
 
-    match D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET) {
-        Ok(set) => {
+    match plan.prepare() {
+        PreparedGeneration::Stamped(set) => {
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
             };
@@ -243,7 +244,7 @@ where
                 bounds_max,
             })
         }
-        Err(generation) => match layout {
+        PreparedGeneration::Interpreted(generation) => match layout {
             SegmentLayout::Plain => {
                 let data = collect_plain_segments::<D>(generation.segments());
                 assert_eq!(

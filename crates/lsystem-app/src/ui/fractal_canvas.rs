@@ -4,7 +4,7 @@ use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Th
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
     AnyCompiledGeneration, ColorConfig, CompiledGeneration, Config, D2, D3,
-    DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationDimension, TemplateDimension,
+    DEFAULT_TEMPLATE_SEGMENT_BUDGET, PreparedGeneration, TemplateDimension,
 };
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
@@ -82,7 +82,7 @@ impl SceneGeometry {
 
 /// Maps a dimension marker to its [`SceneGeometry`] variants. App-local so
 /// the renderer stays ignorant of Iced scene types.
-trait SceneDimension: RenderDimension + GenerationDimension + TemplateDimension {
+trait SceneDimension: RenderDimension + TemplateDimension {
     fn plain_geometry(data: CollectedSegmentData<Self::PlainRecord, Self::Point>) -> SceneGeometry;
     fn depth_geometry(
         data: CollectedDepthSegmentData<Self::DepthRecord, Self::Point>,
@@ -350,18 +350,20 @@ async fn build_typed_scene<D: SceneDimension>(
 ) -> SceneBuildResult {
     // Depth geometry is decided by fractal structure, not color mode, so color
     // changes after this build never require a geometry rebuild.
-    let use_topological_depth = compiled_generation.has_stack_directives();
+    let plan = compiled_generation.plan_templates(DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+    let use_topological_depth = plan.has_stack_directives();
+    let template_iterations = plan.selected_template_iterations().unwrap_or(0);
 
     // The stamped walk is a tight synchronous loop with no yield or
     // cancellation points; it is fast enough that checking cancellation only
     // around it keeps responsiveness acceptable. The per-segment interpreter
     // fallback keeps its cooperative yields.
-    let set = D::build_within_budget(compiled_generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+    let prepared = plan.prepare();
 
     let (segment_count, geometry) = if use_topological_depth {
-        let data = match &set {
-            Ok(set) => collect_stamped_depth_segments::<D>(set),
-            Err(generation) => {
+        let data = match &prepared {
+            PreparedGeneration::Stamped(set) => collect_stamped_depth_segments::<D>(set),
+            PreparedGeneration::Interpreted(generation) => {
                 let mut builder = DepthSegmentDataBuilder::<D>::new();
                 if drain_cancellable(
                     generation.depth_segments(),
@@ -378,9 +380,9 @@ async fn build_typed_scene<D: SceneDimension>(
         };
         (data.segments.len(), D::depth_geometry(data))
     } else {
-        let data = match &set {
-            Ok(set) => collect_stamped_segments::<D>(set),
-            Err(generation) => {
+        let data = match &prepared {
+            PreparedGeneration::Stamped(set) => collect_stamped_segments::<D>(set),
+            PreparedGeneration::Interpreted(generation) => {
                 let mut builder = PlainSegmentDataBuilder::<D>::new();
                 if drain_cancellable(
                     generation.segments(),
@@ -402,7 +404,7 @@ async fn build_typed_scene<D: SceneDimension>(
         return SceneBuildResult::Cancelled;
     }
 
-    log_generation_duration(started, segment_count);
+    log_generation_duration(started, segment_count, template_iterations);
 
     SceneBuildResult::Ready {
         generation: generation_revision,
@@ -410,10 +412,10 @@ async fn build_typed_scene<D: SceneDimension>(
     }
 }
 
-fn log_generation_duration(started: Instant, segment_count: usize) {
+fn log_generation_duration(started: Instant, segment_count: usize, template_iterations: u16) {
     let elapsed = started.elapsed();
     log::info!(
-        "generation_wall_ms={:.2} segments={segment_count}",
+        "generation_wall_ms={:.2} segments={segment_count} template_iterations={template_iterations}",
         elapsed.as_secs_f64() * 1000.0,
     );
 }

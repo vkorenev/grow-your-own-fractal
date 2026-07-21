@@ -2,7 +2,7 @@ use glam::Vec2;
 
 use crate::{
     AnyCompiledGeneration, ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig,
-    LineColorConfig, Segment2DWithTopologicalDepth, TemplateSet2D,
+    LineColorConfig, PreparedGeneration, Segment2DWithTopologicalDepth,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -20,17 +20,18 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
         return Err(SvgExportError::ThreeDimensional);
     };
     let colors = config.colors;
-    let has_stack_directives = generation.has_stack_directives();
-    let set = TemplateSet2D::build_within_budget(generation, DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+    let plan = generation.plan_templates(DEFAULT_TEMPLATE_SEGMENT_BUDGET);
+    let has_stack_directives = plan.has_stack_directives();
+    let prepared = plan.prepare();
     if colors.line.needs_topological_depth() && has_stack_directives {
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
-        match &set {
-            Ok(set) => {
+        match &prepared {
+            PreparedGeneration::Stamped(set) => {
                 set.emit_depth_segments(|segment| segments.push(segment));
             }
             // for_each drives the pipeline's specialized `fold`; `collect`
             // would pull every symbol one at a time through `next`.
-            Err(generation) => generation
+            PreparedGeneration::Interpreted(generation) => generation
                 .depth_segments()
                 .for_each(|segment| segments.push(segment)),
         }
@@ -43,12 +44,12 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
     }
 
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
-    match &set {
-        Ok(set) => {
+    match &prepared {
+        PreparedGeneration::Stamped(set) => {
             set.emit_segments(|segment| segments.push(segment));
         }
         // for_each drives the pipeline's specialized `fold` (see above).
-        Err(generation) => generation
+        PreparedGeneration::Interpreted(generation) => generation
             .segments()
             .for_each(|segment| segments.push(segment)),
     }
