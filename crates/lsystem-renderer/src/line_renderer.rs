@@ -197,15 +197,16 @@ pub(crate) struct StagingUnavailable;
 /// internal contract violations and panic in every build so callers can never
 /// report metadata for a partial upload.
 fn write_records<V: bytemuck::Pod>(
-    mut view: wgpu::WriteOnly<'_, [u8]>,
+    view: wgpu::WriteOnly<'_, [u8]>,
     records: impl Iterator<Item = V>,
 ) {
-    for record in records {
+    let view = records.fold(view, |mut view, record| {
         let mut chunk = view
             .split_off(..std::mem::size_of::<V>())
             .expect("more records than staging bytes");
         chunk.copy_from_slice(bytemuck::bytes_of(&record));
-    }
+        view
+    });
     assert!(view.is_empty(), "fewer records than staging bytes");
 }
 
@@ -247,6 +248,8 @@ impl GrowableVertexBuffer {
         label: &str,
     ) -> Result<(), StagingUnavailable> {
         if count == 0 {
+            let had_records = records.fold(false, |_, _| true);
+            assert!(!had_records, "more records than staging bytes");
             self.count = 0;
             return Ok(());
         }
@@ -290,7 +293,6 @@ enum ActiveSegmentBuffer {
 struct PipelineUploadTarget<'a> {
     vertex_buffer: &'a mut GrowableVertexBuffer,
     active_segment_buffer: &'a mut ActiveSegmentBuffer,
-    color_params_buffer: &'a wgpu::Buffer,
     label: &'static str,
     target: ActiveSegmentBuffer,
 }
@@ -302,7 +304,6 @@ impl PipelineUploadTarget<'_> {
         queue: &wgpu::Queue,
         count: u32,
         records: impl Iterator<Item = V>,
-        color_params: ColorParams,
     ) -> Result<(), StagingUnavailable> {
         let result = self
             .vertex_buffer
@@ -310,9 +311,6 @@ impl PipelineUploadTarget<'_> {
         // Switch even on failure: the target buffer now has count zero, while
         // leaving the other layout active could draw a stale incompatible scene.
         *self.active_segment_buffer = self.target;
-        if result.is_ok() {
-            queue.write_buffer(self.color_params_buffer, 0, &color_params.uniform_bytes());
-        }
         result
     }
 }
@@ -637,16 +635,14 @@ impl<D: RenderDimension> LinePipeline<D> {
         queue: &wgpu::Queue,
         count: u32,
         segments: impl Iterator<Item = D::PlainRecord>,
-        color_params: ColorParams,
     ) -> Result<(), StagingUnavailable> {
         PipelineUploadTarget {
             vertex_buffer: &mut self.segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
-            color_params_buffer: &self.color_params_buffer,
             label: self.labels.segment,
             target: ActiveSegmentBuffer::Normal,
         }
-        .upload(device, queue, count, segments, color_params)
+        .upload(device, queue, count, segments)
     }
 
     pub fn upload_with_topological_depth(
@@ -668,16 +664,14 @@ impl<D: RenderDimension> LinePipeline<D> {
         queue: &wgpu::Queue,
         count: u32,
         segments: impl Iterator<Item = D::DepthRecord>,
-        color_params: ColorParams,
     ) -> Result<(), StagingUnavailable> {
         PipelineUploadTarget {
             vertex_buffer: &mut self.depth_segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
-            color_params_buffer: &self.color_params_buffer,
             label: self.labels.depth_segment,
             target: ActiveSegmentBuffer::TopologicalDepth,
         }
-        .upload(device, queue, count, segments, color_params)
+        .upload(device, queue, count, segments)
     }
 
     pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
@@ -925,6 +919,34 @@ mod tests {
 
     use super::*;
 
+    struct FoldOnly<T> {
+        items: std::vec::IntoIter<T>,
+    }
+
+    impl<T> FoldOnly<T> {
+        fn new(items: impl IntoIterator<Item = T>) -> Self {
+            Self {
+                items: items.into_iter().collect::<Vec<_>>().into_iter(),
+            }
+        }
+    }
+
+    impl<T> Iterator for FoldOnly<T> {
+        type Item = T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            panic!("staging writer must drain records through fold")
+        }
+
+        fn fold<B, F>(self, init: B, f: F) -> B
+        where
+            Self: Sized,
+            F: FnMut(B, Self::Item) -> B,
+        {
+            self.items.fold(init, f)
+        }
+    }
+
     fn sample_params(mode: ColorMode, hue_start: f32) -> ColorParams {
         let color_start = glam::vec4(0.1, 0.2, 0.3, 1.0);
         let color_end = glam::vec4(0.7, 0.8, 0.9, 1.0);
@@ -1041,7 +1063,10 @@ mod tests {
         let expected = bytemuck::cast_slice(&segments);
         let mut bytes = vec![0u8; expected.len()];
 
-        write_records(wgpu::WriteOnly::from_mut(&mut bytes), segments.into_iter());
+        write_records(
+            wgpu::WriteOnly::from_mut(&mut bytes),
+            FoldOnly::new(segments),
+        );
 
         assert_eq!(bytes, expected);
     }

@@ -95,7 +95,7 @@ impl<P: BoundsPoint> Bounds<P> {
     }
 }
 
-/// Segment records collected for a stamped scene, with their bounds.
+/// Segment records collected for a native scene, with their bounds.
 ///
 /// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
 /// geometry they fall back to the unit box.
@@ -160,24 +160,8 @@ impl<R, P: BoundsPoint> SegmentCollector<R, P> {
     }
 }
 
-pub(crate) fn collect_plain_segments<D: RenderDimension>(
-    segments: impl Iterator<Item = [D::Point; 2]>,
-) -> CollectedSegmentData<D::PlainRecord, D::Point> {
-    let mut builder = PlainSegmentDataBuilder::<D>::new();
-    segments.for_each(|segment| builder.push_segment(segment));
-    builder.finish()
-}
-
-pub(crate) fn collect_depth_segments<D: RenderDimension>(
-    segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
-) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
-    let mut builder = DepthSegmentDataBuilder::<D>::new();
-    segments.for_each(|segment| builder.push_segment(segment));
-    builder.finish()
-}
-
-/// Incremental generic counterpart of `collect_plain_segments` for callers
-/// that need work between pushes (e.g. cancellation checks).
+/// Incremental plain-segment builder for callers that need work between
+/// pushes, such as cancellation checks.
 pub struct PlainSegmentDataBuilder<D: RenderDimension> {
     collector: SegmentCollector<D::PlainRecord, D::Point>,
 }
@@ -209,7 +193,7 @@ impl<D: RenderDimension> Default for PlainSegmentDataBuilder<D> {
     }
 }
 
-/// Incremental generic counterpart of `collect_depth_segments`.
+/// Incremental topological-depth segment builder.
 pub struct DepthSegmentDataBuilder<D: RenderDimension> {
     collector: SegmentCollector<D::DepthRecord, D::Point>,
 }
@@ -334,6 +318,22 @@ mod tests {
     use super::*;
 
     const EPS: f32 = 1e-5;
+
+    fn collect_plain_segments<D: RenderDimension>(
+        segments: impl Iterator<Item = [D::Point; 2]>,
+    ) -> CollectedSegmentData<D::PlainRecord, D::Point> {
+        let mut builder = PlainSegmentDataBuilder::<D>::new();
+        segments.for_each(|segment| builder.push_segment(segment));
+        builder.finish()
+    }
+
+    fn collect_depth_segments<D: RenderDimension>(
+        segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
+    ) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
+        let mut builder = DepthSegmentDataBuilder::<D>::new();
+        segments.for_each(|segment| builder.push_segment(segment));
+        builder.finish()
+    }
 
     fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
         let AnyCompiledGeneration::TwoD(generation) = config.compile() else {
