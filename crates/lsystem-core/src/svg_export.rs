@@ -26,19 +26,7 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
         match &set {
             Ok(set) => {
-                set.emit_stamps(|stamp, template| {
-                    for segment in &template.segments {
-                        segments.push(Segment2DWithTopologicalDepth {
-                            points: [
-                                stamp.pos + stamp.rot.rotate(segment.start),
-                                stamp.pos + stamp.rot.rotate(segment.end),
-                            ],
-                            topological_depth: stamp
-                                .depth_base
-                                .saturating_add(segment.depth_offset),
-                        });
-                    }
-                });
+                set.emit_depth_segments(|segment| segments.push(segment));
             }
             // for_each drives the pipeline's specialized `fold`; `collect`
             // would pull every symbol one at a time through `next`.
@@ -57,14 +45,7 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
     match &set {
         Ok(set) => {
-            set.emit_stamps(|stamp, template| {
-                for segment in &template.segments {
-                    segments.push([
-                        stamp.pos + stamp.rot.rotate(segment.start),
-                        stamp.pos + stamp.rot.rotate(segment.end),
-                    ]);
-                }
-            });
+            set.emit_segments(|segment| segments.push(segment));
         }
         // for_each drives the pipeline's specialized `fold` (see above).
         Err(generation) => generation

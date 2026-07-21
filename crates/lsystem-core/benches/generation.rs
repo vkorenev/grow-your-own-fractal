@@ -57,14 +57,8 @@ fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
 fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
     let set =
         TemplateSet2D::build(compile_2d(config), template_iterations).expect("template set builds");
-    let mut acc = 0.0f32;
-    set.emit_stamps(|stamp, template| {
-        for segment in &template.segments {
-            let a = stamp.pos + stamp.rot.rotate(segment.start);
-            let b = stamp.pos + stamp.rot.rotate(segment.end);
-            acc += a.x + a.y + b.x + b.y;
-        }
-    });
+    let mut acc = 0.0;
+    set.emit_segments(|[a, b]| acc += a.x + a.y + b.x + b.y);
     acc
 }
 
@@ -74,14 +68,10 @@ fn checksum_2d_stamped_with_topological_depth(
 ) -> f32 {
     let set =
         TemplateSet2D::build(compile_2d(config), template_iterations).expect("template set builds");
-    let mut acc = 0.0f32;
-    set.emit_stamps(|stamp, template| {
-        for segment in &template.segments {
-            let a = stamp.pos + stamp.rot.rotate(segment.start);
-            let b = stamp.pos + stamp.rot.rotate(segment.end);
-            let depth = stamp.depth_base.saturating_add(segment.depth_offset);
-            acc += a.x + a.y + b.x + b.y + depth as f32;
-        }
+    let mut acc = 0.0;
+    set.emit_depth_segments(|segment| {
+        let [a, b] = segment.points;
+        acc += a.x + a.y + b.x + b.y + segment.topological_depth as f32;
     });
     acc
 }
@@ -89,14 +79,8 @@ fn checksum_2d_stamped_with_topological_depth(
 fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
     let set =
         TemplateSet3D::build(compile_3d(config), template_iterations).expect("template set builds");
-    let mut acc = 0.0f32;
-    set.emit_stamps(|stamp, template| {
-        for segment in &template.segments {
-            let a = stamp.pos + stamp.rot * segment.start;
-            let b = stamp.pos + stamp.rot * segment.end;
-            acc += a.x + a.y + a.z + b.x + b.y + b.z;
-        }
-    });
+    let mut acc = 0.0;
+    set.emit_segments(|[a, b]| acc += a.x + a.y + a.z + b.x + b.y + b.z);
     acc
 }
 
@@ -106,14 +90,10 @@ fn checksum_3d_stamped_with_topological_depth(
 ) -> f32 {
     let set =
         TemplateSet3D::build(compile_3d(config), template_iterations).expect("template set builds");
-    let mut acc = 0.0f32;
-    set.emit_stamps(|stamp, template| {
-        for segment in &template.segments {
-            let a = stamp.pos + stamp.rot * segment.start;
-            let b = stamp.pos + stamp.rot * segment.end;
-            let depth = stamp.depth_base.saturating_add(segment.depth_offset);
-            acc += a.x + a.y + a.z + b.x + b.y + b.z + depth as f32;
-        }
+    let mut acc = 0.0;
+    set.emit_depth_segments(|segment| {
+        let [a, b] = segment.points;
+        acc += a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32;
     });
     acc
 }
