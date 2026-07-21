@@ -39,11 +39,12 @@ GenerationConfig
 The expansion and turtle layers are streaming iterators. They do not build the
 full expanded string or an intermediate vertex list before yielding geometry.
 For stamped web and offscreen rendering, transformed segment records stream
-directly into wgpu staging memory; only the bounded stamp list remains in CPU
-memory. The native Iced app generates without GPU access, and interpreter
-fallback remains the semantic oracle, so those paths intentionally collect one
-bounded segment-instance `Vec` and upload it as a slice. Do not add another
-collection of expanded symbols, raw geometry, or vertices to either path.
+directly from the placement iterator into wgpu staging memory without a stamp
+or segment collection. The native Iced app generates without GPU access, and
+interpreter fallback remains the semantic oracle, so those paths intentionally
+collect one bounded segment-instance `Vec` and upload it as a slice. Do not add
+another collection of expanded symbols, raw geometry, or vertices to either
+path.
 
 Config editing has a separate parse/validate/resolve pipeline.
 
@@ -71,7 +72,7 @@ Compiled generations are consumed into an allocation-free `GenerationPlan`
 that fuses exact drawn-segment counting and bounded template-depth selection in
 one saturating byte-domain recurrence. Renderer scene upload uses the plan's
 count to enforce the actual plain/depth record-layout cap before preparation,
-template construction, stamp collection, interpreter generation, or pipeline
+template construction, output iteration, interpreter generation, or pipeline
 mutation.
 
 ## Core Model
@@ -107,17 +108,18 @@ mutation.
   `TemplateSet2D/3D` and the related concrete names remain aliases for concise
   call sites. The build and placement walks share one generic algorithm over
   the two turtle representations, while a marker capability exposes budgeted
-  construction and stamp emission to dimension-generic orchestration.
-  `TemplateSet::stamped_segments` collects the placement list and
-  exposes repeatable streaming `segments()` and `depth_segments()` iterators
-  in world space; this CPU geometry operation therefore stays in core rather
-  than the renderer. A set owns its typed compiled generation, so stamping
-  needs no config re-supply. A
+  construction and lazy placement to dimension-generic orchestration. A
+  private placement iterator owns the boundary expansion, turtle state, and
+  `u64` traversal order; its resumable `next` and optimized `fold` paths share
+  the same symbol transition. `TemplateSet::segments()` and
+  `depth_segments()` flat-map those placements over template-local geometry,
+  keeping world-space transformation in core without collecting stamps or
+  segments. `emit_stamps` drains the same placement iterator for low-level
+  template-aware consumers and metadata. A set owns its typed compiled
+  generation, so stamping needs no config re-supply. A
   stamp's `order_base` is the running segment count, so it doubles as the
   offset into a flat traversal-ordered segment buffer for GPU consumers.
-  Template sets are small, budget-bounded collections. One-pass
-  `emit_segments`/`emit_depth_segments` calls keep stamps streamed; the
-  repeatable `StampedSegments` view retains only the placement list.
+  Template sets are small, budget-bounded collections.
   `CompiledGeneration::plan_templates` picks the largest template depth whose
   templates fit a caller-supplied budget while simultaneously counting exact
   output. `GenerationPlan::prepare` then builds that depth or returns
@@ -217,10 +219,9 @@ offscreen exports.
   stamped iterators use `Queue::write_buffer_with` to fill mapped staging memory
   directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters. Stamped paths consume
-  `lsystem-core`'s world-space stamped-segment APIs; consumers
-  accumulate bounds from those points before constructing dimension-specific
-  GPU records through `RenderDimension`.
+  maps `LineColorConfig` into shader color parameters. Consumers accumulate
+  bounds from core's world-space points before constructing
+  dimension-specific GPU records through `RenderDimension`.
 - `scene_upload.rs` owns the single generic `upload_scene<D>` (composing
   `RenderDimension + TemplateDimension`, whose core bound includes interpreted
   generation), the public renderer operation for web and offscreen scene
@@ -229,7 +230,11 @@ offscreen exports.
   before preparation, then uses the selected stamped or interpreted path, and
   returns `UploadedScene<D>` metadata with point-typed bounds and
   per-dimension array getters. A cap error preserves the previous pipeline
-  scene; a staging error clears the attempted target layout.
+  scene; a staging error clears the attempted target layout. Stamped depth
+  uploads currently run a collection-free placement metadata pass before the
+  geometry pass because color construction needs maximum depth before staging;
+  plain uploads rely on the staging writer's exact-count contract without an
+  extra placement pass.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature. Segment-limit and
   staging failures surface as typed export errors instead of empty images.
@@ -274,10 +279,10 @@ changes. Geometry and color revisions let the shader upload segment data only
 when geometry changes and update only color uniforms for color-only edits.
 Scene geometry is built once generically per dimension marker
 (`build_typed_scene<D>` over an app-local `SceneDimension` trait). It prepares
-the planned strategy, collects through the renderer bridge's generic stamped
-collectors, and uses incremental builders with periodic cancellation checks
-for interpreted generation. Native telemetry reports the selected template
-iteration count, with zero denoting interpreted generation.
+the planned strategy and drains either stamped or interpreted lazy iterators
+through the same incremental renderer-record builders with periodic
+cancellation checks. Native telemetry reports the selected template iteration
+count, with zero denoting interpreted generation.
 
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/

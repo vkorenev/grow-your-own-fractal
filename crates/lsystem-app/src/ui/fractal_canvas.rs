@@ -14,8 +14,7 @@ use lsystem_renderer::line_renderer::{
 use lsystem_renderer::lsystem_bridge::{
     CollectedDepthSegmentData, CollectedSegmentData, DepthSegmentDataBuilder,
     PlainSegmentDataBuilder, SegmentData2D, SegmentData3D, TopologicalDepthSegmentData2D,
-    TopologicalDepthSegmentData3D, collect_stamped_depth_segments, collect_stamped_segments,
-    color_params_from_config,
+    TopologicalDepthSegmentData3D, color_params_from_config,
 };
 use std::fmt;
 use std::sync::{
@@ -354,49 +353,61 @@ async fn build_typed_scene<D: SceneDimension>(
     let use_topological_depth = plan.has_stack_directives();
     let template_iterations = plan.selected_template_iterations().unwrap_or(0);
 
-    // The stamped walk is a tight synchronous loop with no yield or
-    // cancellation points; it is fast enough that checking cancellation only
-    // around it keeps responsiveness acceptable. The per-segment interpreter
-    // fallback keeps its cooperative yields.
     let prepared = plan.prepare();
 
     let (segment_count, geometry) = if use_topological_depth {
-        let data = match &prepared {
-            PreparedGeneration::Stamped(set) => collect_stamped_depth_segments::<D>(set),
+        let mut builder = DepthSegmentDataBuilder::<D>::new();
+        let cancelled = match &prepared {
+            PreparedGeneration::Stamped(set) => {
+                drain_cancellable(
+                    set.depth_segments(),
+                    |segment| builder.push_segment(segment),
+                    generation_revision,
+                    current_generation,
+                )
+                .await
+            }
             PreparedGeneration::Interpreted(generation) => {
-                let mut builder = DepthSegmentDataBuilder::<D>::new();
-                if drain_cancellable(
+                drain_cancellable(
                     generation.depth_segments(),
                     |segment| builder.push_segment(segment),
                     generation_revision,
                     current_generation,
                 )
                 .await
-                {
-                    return SceneBuildResult::Cancelled;
-                }
-                builder.finish()
             }
         };
+        if cancelled {
+            return SceneBuildResult::Cancelled;
+        }
+        let data = builder.finish();
         (data.segments.len(), D::depth_geometry(data))
     } else {
-        let data = match &prepared {
-            PreparedGeneration::Stamped(set) => collect_stamped_segments::<D>(set),
+        let mut builder = PlainSegmentDataBuilder::<D>::new();
+        let cancelled = match &prepared {
+            PreparedGeneration::Stamped(set) => {
+                drain_cancellable(
+                    set.segments(),
+                    |segment| builder.push_segment(segment),
+                    generation_revision,
+                    current_generation,
+                )
+                .await
+            }
             PreparedGeneration::Interpreted(generation) => {
-                let mut builder = PlainSegmentDataBuilder::<D>::new();
-                if drain_cancellable(
+                drain_cancellable(
                     generation.segments(),
                     |segment| builder.push_segment(segment),
                     generation_revision,
                     current_generation,
                 )
                 .await
-                {
-                    return SceneBuildResult::Cancelled;
-                }
-                builder.finish()
             }
         };
+        if cancelled {
+            return SceneBuildResult::Cancelled;
+        }
+        let data = builder.finish();
         (data.segments.len(), D::plain_geometry(data))
     };
 
@@ -919,6 +930,57 @@ mod tests {
         assert!(cancelled);
         assert_eq!(pushed.len(), CANCELLATION_CHECK_INTERVAL);
         assert_eq!(pushed.last(), Some(&(CANCELLATION_CHECK_INTERVAL - 1)));
+    }
+
+    fn cancellable_generation() -> GenerationConfig {
+        GenerationConfig::new(
+            Dimensions::TwoD,
+            "F".to_string(),
+            14,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('F', "FF".to_string())]),
+        )
+        .expect("balanced config")
+    }
+
+    fn assert_generation_drain_is_cancellable(
+        iter: impl Iterator<Item = [<D2 as lsystem_core::Dimension>::Point; 2]>,
+    ) {
+        let current_generation = AtomicU64::new(7);
+        let mut pushed = 0;
+        let cancelled = block_on(drain_cancellable(
+            iter,
+            |_| {
+                pushed += 1;
+                if pushed == 1 {
+                    current_generation.store(8, Ordering::Release);
+                }
+            },
+            7,
+            &current_generation,
+        ));
+
+        assert!(cancelled);
+        assert_eq!(pushed, CANCELLATION_CHECK_INTERVAL);
+    }
+
+    #[test]
+    fn interpreted_generation_drain_is_cancellable() {
+        let generation = compile_2d(&cancellable_generation());
+        assert_generation_drain_is_cancellable(generation.segments());
+    }
+
+    #[test]
+    fn stamped_generation_drain_is_cancellable() {
+        let prepared = compile_2d(&cancellable_generation())
+            .plan_templates(DEFAULT_TEMPLATE_SEGMENT_BUDGET)
+            .prepare();
+        let PreparedGeneration::Stamped(set) = prepared else {
+            panic!("the fixture must select stamped generation")
+        };
+        assert_generation_drain_is_cancellable(set.segments());
     }
 
     #[test]

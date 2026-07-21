@@ -23,7 +23,7 @@ pub use config::{
 pub use dimension::{D2, D3, Dimension};
 pub use grammar::{max_safe_iterations, unused_rules};
 pub use template::{
-    DEFAULT_TEMPLATE_SEGMENT_BUDGET, Stamp, Stamp2D, Stamp3D, StampStats, StampedSegments,
-    Template, Template2D, Template3D, TemplateDimension, TemplateSegment, TemplateSegment2D,
-    TemplateSegment3D, TemplateSet, TemplateSet2D, TemplateSet3D,
+    DEFAULT_TEMPLATE_SEGMENT_BUDGET, Stamp, Stamp2D, Stamp3D, StampStats, Template, Template2D,
+    Template3D, TemplateDimension, TemplateSegment, TemplateSegment2D, TemplateSegment3D,
+    TemplateSet, TemplateSet2D, TemplateSet3D,
 };

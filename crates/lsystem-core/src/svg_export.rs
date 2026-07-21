@@ -26,9 +26,9 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
     if colors.line.needs_topological_depth() && has_stack_directives {
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
         match &prepared {
-            PreparedGeneration::Stamped(set) => {
-                set.emit_depth_segments(|segment| segments.push(segment));
-            }
+            PreparedGeneration::Stamped(set) => set
+                .depth_segments()
+                .for_each(|segment| segments.push(segment)),
             // for_each drives the pipeline's specialized `fold`; `collect`
             // would pull every symbol one at a time through `next`.
             PreparedGeneration::Interpreted(generation) => generation
@@ -46,7 +46,7 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
     match &prepared {
         PreparedGeneration::Stamped(set) => {
-            set.emit_segments(|segment| segments.push(segment));
+            set.segments().for_each(|segment| segments.push(segment))
         }
         // for_each drives the pipeline's specialized `fold` (see above).
         PreparedGeneration::Interpreted(generation) => generation

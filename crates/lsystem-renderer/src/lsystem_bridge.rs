@@ -1,5 +1,5 @@
 use glam::{Vec2, Vec3, Vec4};
-use lsystem_core::{LineColorConfig, SegmentWithTopologicalDepth, TemplateDimension, TemplateSet};
+use lsystem_core::{LineColorConfig, SegmentWithTopologicalDepth};
 
 use crate::line_renderer::{
     ColorParams, RenderDimension, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -157,53 +157,6 @@ impl<R, P: BoundsPoint> SegmentCollector<R, P> {
             bounds_max,
             self.max_topological_depth,
         )
-    }
-}
-
-/// Stamped counterpart of the interpreted collection paths: transforms each
-/// stamp's template segments into world space in a tight per-segment loop,
-/// skipping per-symbol interpretation of the template-depth iterations.
-pub fn collect_stamped_segments<D>(
-    set: &TemplateSet<D>,
-) -> CollectedSegmentData<D::PlainRecord, D::Point>
-where
-    D: RenderDimension + TemplateDimension,
-{
-    let mut collector = SegmentCollector::new();
-    set.emit_segments(|points @ [a, b]| {
-        collector.push(points, 0, D::plain_record(a, b));
-    });
-    let (segments, bounds_min, bounds_max, _) = collector.finish();
-    CollectedSegmentData {
-        segments,
-        bounds_min,
-        bounds_max,
-    }
-}
-
-/// Stamped counterpart of the interpreted depth collection path; see
-/// [`collect_stamped_segments`].
-pub fn collect_stamped_depth_segments<D>(
-    set: &TemplateSet<D>,
-) -> CollectedDepthSegmentData<D::DepthRecord, D::Point>
-where
-    D: RenderDimension + TemplateDimension,
-{
-    let mut collector = SegmentCollector::new();
-    set.emit_depth_segments(|segment| {
-        let [a, b] = segment.points;
-        collector.push(
-            segment.points,
-            segment.topological_depth,
-            D::depth_record(a, b, segment.topological_depth),
-        );
-    });
-    let (segments, bounds_min, bounds_max, max_topological_depth) = collector.finish();
-    CollectedDepthSegmentData {
-        segments,
-        bounds_min,
-        bounds_max,
-        max_topological_depth,
     }
 }
 
@@ -373,7 +326,7 @@ mod tests {
     use lsystem_core::{
         AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, D2,
         D3, Dimensions, GenerationConfig, GenerationDimension, Rgb, Segment2DWithTopologicalDepth,
-        Segment3DWithTopologicalDepth,
+        Segment3DWithTopologicalDepth, TemplateDimension, TemplateSet,
     };
     use std::collections::BTreeMap;
     use std::ops::Index;
@@ -462,7 +415,7 @@ mod tests {
         .expect("balanced config");
         let set = compile_2d(&config).build_templates(2).expect("set builds");
 
-        let stamped = collect_stamped_segments::<D2>(&set);
+        let stamped = collect_plain_segments::<D2>(set.segments());
         let interpreted = collect_plain_segments::<D2>(compile_2d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
@@ -487,7 +440,7 @@ mod tests {
         .expect("balanced config");
         let set = compile_3d(&config).build_templates(2).expect("set builds");
 
-        let stamped = collect_stamped_segments::<D3>(&set);
+        let stamped = collect_plain_segments::<D3>(set.segments());
         let interpreted = collect_plain_segments::<D3>(compile_3d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
@@ -502,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_stamped_segments_report_zero_and_collect_with_fallback_bounds() {
+    fn empty_stamped_iterators_report_zero_and_collect_with_fallback_bounds() {
         let config = GenerationConfig::new(
             Dimensions::TwoD,
             "A".to_string(),
@@ -515,17 +468,17 @@ mod tests {
         .expect("balanced config");
         let set = compile_2d(&config).build_templates(1).expect("set builds");
 
-        let segments = set.stamped_segments();
-        assert_eq!(segments.total_segments(), 0);
-        assert_eq!(segments.max_topological_depth(), 0);
-        assert_eq!(segments.segments().count(), 0);
+        let stats = set.emit_stamps(|_, _| {});
+        assert_eq!(stats.total_segments, 0);
+        assert_eq!(stats.max_depth, 0);
+        assert_eq!(set.segments().count(), 0);
 
-        let data = collect_stamped_segments::<D2>(&set);
+        let data = collect_plain_segments::<D2>(set.segments());
         assert!(data.segments.is_empty());
         assert_eq!(data.bounds_min, Vec2::splat(-1.0));
         assert_eq!(data.bounds_max, Vec2::splat(1.0));
 
-        let depth_data = collect_stamped_depth_segments::<D2>(&set);
+        let depth_data = collect_depth_segments::<D2>(set.depth_segments());
         assert!(depth_data.segments.is_empty());
         assert_eq!(depth_data.max_topological_depth(), 0);
         assert_eq!(depth_data.bounds_min, Vec2::splat(-1.0));
@@ -544,7 +497,7 @@ mod tests {
         D: RenderDimension + TemplateDimension + GenerationDimension,
         D::Point: Index<usize, Output = f32>,
     {
-        let stamped = collect_stamped_depth_segments::<D>(set);
+        let stamped = collect_depth_segments::<D>(set.depth_segments());
         let interpreted = collect_depth_segments::<D>(generation.depth_segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
