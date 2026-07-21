@@ -10,10 +10,10 @@
 //!
 //! Stamps stream in traversal order and `order_base` is the running segment
 //! count, so it doubles as the output offset into a flat traversal-ordered
-//! segment buffer. Consumers can transform templates on the CPU (see the
-//! renderer bridge) or upload templates + stamps to the GPU; both the
-//! compute-explosion and the two-level-instancing designs of issue #120 read
-//! this same data.
+//! segment buffer. [`StampedSegments`] is the high-level CPU generation API;
+//! consumers targeting template-aware GPU designs can instead read the
+//! templates and stamps directly. Both the compute-explosion and the
+//! two-level-instancing designs of issue #120 use this same low-level data.
 
 use crate::compiled_generation::{CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D};
 use crate::grammar::CompiledGrammar;
@@ -80,12 +80,81 @@ pub struct Stamp<D: Dimension> {
 pub type Stamp2D = Stamp<D2>;
 pub type Stamp3D = Stamp<D3>;
 
+impl<D: Dimension> Stamp<D> {
+    /// Transforms one template-local segment into world-space endpoints.
+    pub fn transform_segment(&self, segment: &TemplateSegment<D>) -> [D::Point; 2] {
+        [
+            D::transform_point(self.pos, self.rot, segment.start),
+            D::transform_point(self.pos, self.rot, segment.end),
+        ]
+    }
+
+    /// Transforms one template-local segment and applies this placement's
+    /// topological-depth base.
+    pub fn transform_depth_segment(
+        &self,
+        segment: &TemplateSegment<D>,
+    ) -> crate::SegmentWithTopologicalDepth<D> {
+        crate::SegmentWithTopologicalDepth {
+            points: self.transform_segment(segment),
+            topological_depth: self.depth_base.saturating_add(segment.depth_offset),
+        }
+    }
+}
+
 /// Totals of a stamp walk, sufficient to size a flat output buffer and select
 /// depth-gradient color parameters without transforming any geometry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StampStats {
     pub total_segments: u64,
     pub max_depth: u32,
+}
+
+/// A collected placement walk over a [`TemplateSet`].
+///
+/// Collection retains only the placement list. Geometry remains
+/// streaming: [`Self::segments`] and [`Self::depth_segments`] transform the
+/// referenced templates into world space in traversal order without building
+/// an intermediate segment list. The iterators are repeatable, which lets a
+/// consumer inspect metadata before choosing a record layout or output sink.
+pub struct StampedSegments<'a, D: Dimension> {
+    set: &'a TemplateSet<D>,
+    stamps: Vec<Stamp<D>>,
+    stats: StampStats,
+}
+
+impl<D: Dimension> StampedSegments<'_, D> {
+    pub fn total_segments(&self) -> u64 {
+        self.stats.total_segments
+    }
+
+    pub fn max_topological_depth(&self) -> u32 {
+        self.stats.max_depth
+    }
+
+    /// World-space segment endpoints in traversal order.
+    pub fn segments(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
+        let templates = self.set.templates();
+        self.stamps.iter().flat_map(move |stamp| {
+            templates[stamp.template as usize]
+                .segments
+                .iter()
+                .map(move |segment| stamp.transform_segment(segment))
+        })
+    }
+
+    /// World-space segments with topological depth, in traversal order.
+    pub fn depth_segments(
+        &self,
+    ) -> impl Iterator<Item = crate::SegmentWithTopologicalDepth<D>> + '_ {
+        let templates = self.set.templates();
+        self.stamps.iter().flat_map(move |stamp| {
+            templates[stamp.template as usize]
+                .segments
+                .iter()
+                .map(move |segment| stamp.transform_depth_segment(segment))
+        })
+    }
 }
 
 /// Recommended template-segment budget for `build_within_budget` callers.
@@ -136,14 +205,60 @@ impl<D: Dimension> TemplateSet<D> {
     }
 }
 
+impl<D: TemplateDimension> TemplateSet<D> {
+    /// Streams world-space segment endpoints in traversal order without
+    /// retaining stamps or materialized segments.
+    pub fn emit_segments(&self, mut sink: impl FnMut([D::Point; 2])) -> StampStats {
+        D::emit_stamps(self, |stamp, template| {
+            for segment in &template.segments {
+                sink(stamp.transform_segment(segment));
+            }
+        })
+    }
+
+    /// Streams world-space segments with topological depth in traversal order
+    /// without retaining stamps or materialized segments.
+    pub fn emit_depth_segments(
+        &self,
+        mut sink: impl FnMut(crate::SegmentWithTopologicalDepth<D>),
+    ) -> StampStats {
+        D::emit_stamps(self, |stamp, template| {
+            for segment in &template.segments {
+                sink(stamp.transform_depth_segment(segment));
+            }
+        })
+    }
+
+    /// Collects this set's placement walk and returns repeatable streaming
+    /// iterators over the resulting world-space segments.
+    pub fn stamped_segments(&self) -> StampedSegments<'_, D> {
+        let mut stamps = Vec::new();
+        let mut running = 0u64;
+        let stats = D::emit_stamps(self, |stamp, template| {
+            debug_assert_eq!(
+                u64::from(stamp.order_base),
+                running,
+                "stamps must stream in traversal order"
+            );
+            running += template.segments.len() as u64;
+            stamps.push(stamp);
+        });
+        StampedSegments {
+            set: self,
+            stamps,
+            stats,
+        }
+    }
+}
+
 /// Dimension-specific template construction and stamp emission used by
-/// generic renderer orchestration.
+/// generic consumers.
 ///
 /// Implemented only for [`D2`] and [`D3`] via a blanket impl. Code that is
-/// generic over dimension calls these as associated functions
-/// (`D::build_within_budget(...)`, `D::emit_stamps(...)`); code that already
-/// knows the concrete dimension should prefer the inherent
-/// [`TemplateSet2D`]/[`TemplateSet3D`] methods of the same names instead.
+/// generic over dimension normally uses the inherent high-level methods on
+/// [`TemplateSet`] and calls these associated functions only to construct a
+/// budgeted set. Code that already knows the concrete dimension can use the
+/// inherent [`TemplateSet2D`]/[`TemplateSet3D`] constructors.
 pub trait TemplateDimension: Dimension {
     fn build_within_budget(
         generation: CompiledGeneration<Self>,
@@ -442,12 +557,37 @@ mod tests {
         let set = D::build_within_budget(generation, u64::MAX).expect("template set builds");
         assert_eq!(set.template_iterations(), 1);
 
-        let mut emitted_segments = 0u64;
-        let stats = D::emit_stamps(&set, |_, template| {
-            emitted_segments += template.segments.len() as u64;
-        });
-        assert_eq!(stats.total_segments, 1);
-        assert_eq!(emitted_segments, stats.total_segments);
+        let segments = set.stamped_segments();
+        assert_eq!(segments.total_segments(), 1);
+        assert_eq!(
+            segments.segments().count() as u64,
+            segments.total_segments()
+        );
+        assert_eq!(
+            segments.depth_segments().count() as u64,
+            segments.total_segments()
+        );
+        assert_eq!(segments.max_topological_depth(), 0);
+    }
+
+    fn assert_stamped_segments_match_stats<D: TemplateDimension>(set: &TemplateSet<D>) {
+        let segments = set.stamped_segments();
+
+        assert!(segments.total_segments() > 0);
+        assert_eq!(
+            segments.segments().count() as u64,
+            segments.total_segments()
+        );
+        assert_eq!(
+            segments.depth_segments().count() as u64,
+            segments.total_segments()
+        );
+        let per_segment_max = segments
+            .depth_segments()
+            .map(|segment| segment.topological_depth)
+            .max()
+            .unwrap_or(0);
+        assert_eq!(segments.max_topological_depth(), per_segment_max);
     }
 
     fn stamped_segments_2d(
@@ -456,22 +596,7 @@ mod tests {
     ) -> (Vec<Segment2DWithTopologicalDepth>, StampStats) {
         let set = build_2d(config, template_iterations).expect("set builds");
         let mut segments = Vec::new();
-        let stats = set.emit_stamps(|stamp, template| {
-            assert_eq!(
-                stamp.order_base as usize,
-                segments.len(),
-                "order_base must equal segments emitted so far"
-            );
-            for segment in &template.segments {
-                segments.push(Segment2DWithTopologicalDepth {
-                    points: [
-                        stamp.pos + stamp.rot.rotate(segment.start),
-                        stamp.pos + stamp.rot.rotate(segment.end),
-                    ],
-                    topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
-                });
-            }
-        });
+        let stats = set.emit_depth_segments(|segment| segments.push(segment));
         (segments, stats)
     }
 
@@ -481,22 +606,7 @@ mod tests {
     ) -> (Vec<Segment3DWithTopologicalDepth>, StampStats) {
         let set = build_3d(config, template_iterations).expect("set builds");
         let mut segments = Vec::new();
-        let stats = set.emit_stamps(|stamp, template| {
-            assert_eq!(
-                stamp.order_base as usize,
-                segments.len(),
-                "order_base must equal segments emitted so far"
-            );
-            for segment in &template.segments {
-                segments.push(Segment3DWithTopologicalDepth {
-                    points: [
-                        stamp.pos + stamp.rot * segment.start,
-                        stamp.pos + stamp.rot * segment.end,
-                    ],
-                    topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
-                });
-            }
-        });
+        let stats = set.emit_depth_segments(|segment| segments.push(segment));
         (segments, stats)
     }
 
@@ -664,6 +774,14 @@ mod tests {
     }
 
     #[test]
+    fn collected_2d_stamped_segments_match_stats() {
+        let config = plant();
+        let set = build_2d(&config, 2).expect("set builds");
+
+        assert_stamped_segments_match_stats(&set);
+    }
+
+    #[test]
     fn uturn_inside_rule_matches_interpreter() {
         let config = GenerationConfig::new(
             Dimensions::TwoD,
@@ -707,6 +825,14 @@ mod tests {
         for m in 1..=3 {
             assert_matches_interpreter_3d(&tree_roll_3d(), m);
         }
+    }
+
+    #[test]
+    fn collected_3d_stamped_segments_match_stats() {
+        let config = tree_roll_3d();
+        let set = build_3d(&config, 2).expect("set builds");
+
+        assert_stamped_segments_match_stats(&set);
     }
 
     #[test]

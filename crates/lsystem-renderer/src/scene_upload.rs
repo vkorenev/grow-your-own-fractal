@@ -8,7 +8,7 @@ use lsystem_core::{
 
 use crate::line_renderer::{LinePipeline, RenderDimension, StagingUnavailable, record_limit};
 use crate::lsystem_bridge::{
-    Bounds, StampedScene, collect_depth_segments, collect_plain_segments, color_params_from_config,
+    Bounds, collect_depth_segments, collect_plain_segments, color_params_from_config,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,9 +187,9 @@ where
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
             };
-            let scene = StampedScene::collect(&set);
+            let segments = set.stamped_segments();
             assert_eq!(
-                scene.total_segments(),
+                segments.total_segments(),
                 counted_total,
                 "stamped {:?} segment count must match the compiled recurrence",
                 D::RUNTIME
@@ -203,7 +203,7 @@ where
                             device,
                             queue,
                             total_segments,
-                            scene.segment_points().map(|[start, end]| {
+                            segments.segments().map(|[start, end]| {
                                 bounds.update(start, end);
                                 D::plain_record(start, end)
                             }),
@@ -213,7 +213,7 @@ where
                     UploadedLayout::Plain
                 }
                 SegmentLayout::TopologicalDepth => {
-                    let max_topological_depth = scene.max_topological_depth();
+                    let max_topological_depth = segments.max_topological_depth();
                     let color =
                         color_params_from_config(line, total_segments, Some(max_topological_depth));
                     pipeline
@@ -221,7 +221,7 @@ where
                             device,
                             queue,
                             total_segments,
-                            scene.depth_segments().map(|segment| {
+                            segments.depth_segments().map(|segment| {
                                 let [start, end] = segment.points;
                                 bounds.update(start, end);
                                 D::depth_record(start, end, segment.topological_depth)

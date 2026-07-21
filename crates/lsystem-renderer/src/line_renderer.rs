@@ -52,7 +52,6 @@ pub trait RenderDimension: Dimension<Point: BoundsPoint> {
     type PlainRecord: bytemuck::Pod;
     type DepthRecord: bytemuck::Pod;
 
-    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point;
     fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord;
     fn depth_record(
         start: Self::Point,
@@ -64,10 +63,6 @@ pub trait RenderDimension: Dimension<Point: BoundsPoint> {
 impl RenderDimension for D2 {
     type PlainRecord = Segment2D;
     type DepthRecord = TopologicalDepthSegment2D;
-
-    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point {
-        rotation.rotate(point)
-    }
 
     fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord {
         Segment2D { start, end }
@@ -89,10 +84,6 @@ impl RenderDimension for D2 {
 impl RenderDimension for D3 {
     type PlainRecord = Segment3D;
     type DepthRecord = TopologicalDepthSegment3D;
-
-    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point {
-        rotation * point
-    }
 
     fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord {
         Segment3D { start, end }
@@ -1015,12 +1006,9 @@ mod tests {
     }
 
     #[test]
-    fn render_dimension_2d_rotates_and_constructs_records() {
+    fn render_dimension_2d_constructs_records() {
         let start = glam::vec2(1.0, 2.0);
         let end = glam::vec2(3.0, 4.0);
-
-        let rotated = D2::rotate(glam::Vec2::from_angle(std::f32::consts::FRAC_PI_2), start);
-        assert!(rotated.abs_diff_eq(glam::vec2(-2.0, 1.0), 1.0e-6));
 
         let plain = D2::plain_record(start, end);
         assert_eq!(plain.start, start);
@@ -1033,15 +1021,9 @@ mod tests {
     }
 
     #[test]
-    fn render_dimension_3d_rotates_and_constructs_records() {
+    fn render_dimension_3d_constructs_records() {
         let start = glam::vec3(1.0, 2.0, 3.0);
         let end = glam::vec3(4.0, 5.0, 6.0);
-
-        let rotated = D3::rotate(
-            glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-            start,
-        );
-        assert!(rotated.abs_diff_eq(glam::vec3(-2.0, 1.0, 3.0), 1.0e-6));
 
         let plain = D3::plain_record(start, end);
         assert_eq!(plain.start, start);

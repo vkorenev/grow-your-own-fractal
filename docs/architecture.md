@@ -76,7 +76,8 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
 - `dimension.rs` defines the sealed `D2`/`D3` markers and maps each marker to
-  its point and rotation representations through the `Dimension` trait.
+  its point and rotation representations and local-to-world point transform
+  through the `Dimension` trait.
 - `compiled_generation.rs` is the runtime compilation boundary. It compiles
   grammar, scalar parameters, and stack metadata together, then exposes an
   opaque `CompiledGeneration<D2>` or `CompiledGeneration<D3>` payload inside
@@ -100,14 +101,19 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
   stamps in traversal order. `TemplateSegment<D>`, `Template<D>`, `Stamp<D>`,
   and `TemplateSet<D>` keep every payload paired with its dimension;
   `TemplateSet2D/3D` and the related concrete names remain aliases for concise
-  call sites. The build and placement walks remain one macro-defined algorithm
-  specialized for the two turtle representations, while a hidden marker
-  capability exposes only budgeted construction and stamp emission to the
-  generic renderer orchestration (`upload_scene`, `StampedScene`). A set owns
-  its typed compiled generation, so stamping needs no config re-supply. A
+  call sites. The build and placement walks share one generic algorithm over
+  the two turtle representations, while a marker capability exposes budgeted
+  construction and stamp emission to dimension-generic orchestration.
+  `TemplateSet::stamped_segments` collects the placement list and
+  exposes repeatable streaming `segments()` and `depth_segments()` iterators
+  in world space; this CPU geometry operation therefore stays in core rather
+  than the renderer. A set owns its typed compiled generation, so stamping
+  needs no config re-supply. A
   stamp's `order_base` is the running segment count, so it doubles as the
   offset into a flat traversal-ordered segment buffer for GPU consumers.
-  Template sets are small, budget-bounded collections; stamps stay streamed.
+  Template sets are small, budget-bounded collections. One-pass
+  `emit_segments`/`emit_depth_segments` calls keep stamps streamed; the
+  repeatable `StampedSegments` view retains only the placement list.
   `build_within_budget` picks the largest
   template depth whose templates fit `DEFAULT_TEMPLATE_SEGMENT_BUDGET` for
   interactive consumers and hands the typed generation back when none fits,
@@ -195,7 +201,7 @@ offscreen exports.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   the marker-keyed `LinePipeline<D>`, color uniforms, and surface frame
   handling. `RenderDimension` maps `D2`/`D3` to their plain and depth record
-  layouts and rotation operations. Generated shader and bind-group
+  layouts and constructors. Generated shader and bind-group
   construction plus view-uniform writes remain specialized, while buffer
   uploads, color writes, and draw dispatch are shared. A crate-private
   `DimensionBindGroup` bound on the shared constructor ties each generated bind
@@ -204,11 +210,10 @@ offscreen exports.
   stamped iterators use `Queue::write_buffer_with` to fill mapped staging memory
   directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters. Its marker-keyed
-  `StampedScene<D>` collects stamps and then streams transformed point pairs or
-  depth-aware geometry in traversal order. Consumers accumulate bounds from
-  those points before constructing dimension-specific GPU records through
-  `RenderDimension`.
+  maps `LineColorConfig` into shader color parameters. Stamped paths consume
+  `lsystem-core`'s world-space stamped-segment APIs; consumers
+  accumulate bounds from those points before constructing dimension-specific
+  GPU records through `RenderDimension`.
 - `scene_upload.rs` owns the single generic `upload_scene<D>` (composing
   `RenderDimension + GenerationDimension + TemplateDimension` at the use
   site), the public renderer operation for web and offscreen scene

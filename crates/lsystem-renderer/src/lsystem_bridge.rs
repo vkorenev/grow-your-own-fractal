@@ -1,7 +1,5 @@
 use glam::{Vec2, Vec3, Vec4};
-use lsystem_core::{
-    LineColorConfig, SegmentWithTopologicalDepth, Stamp, StampStats, TemplateDimension, TemplateSet,
-};
+use lsystem_core::{LineColorConfig, SegmentWithTopologicalDepth, TemplateDimension, TemplateSet};
 
 use crate::line_renderer::{
     ColorParams, RenderDimension, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -97,83 +95,6 @@ impl<P: BoundsPoint> Bounds<P> {
     }
 }
 
-/// Two-phase view of a stamped scene.
-///
-/// Phase 1 ([`Self::collect`]) walks the boundary expansion once and keeps
-/// only the stamps, so the exact segment total and maximum topological depth
-/// are known before any geometry is materialized. Phase 2
-/// ([`Self::segment_points`] / [`Self::depth_segments`]) streams transformed
-/// geometry in traversal order — the order the gradient shaders index by —
-/// yielding exactly [`Self::total_segments`] items, which lets callers size a
-/// GPU buffer up front, accumulate bounds, and construct records in a single
-/// pass.
-pub struct StampedScene<'a, D: RenderDimension> {
-    set: &'a TemplateSet<D>,
-    stamps: Vec<Stamp<D>>,
-    stats: StampStats,
-}
-
-impl<'a, D: RenderDimension> StampedScene<'a, D> {
-    pub fn collect(set: &'a TemplateSet<D>) -> Self
-    where
-        D: TemplateDimension,
-    {
-        let mut stamps = Vec::new();
-        let mut running: u64 = 0;
-        let stats = D::emit_stamps(set, |stamp, template| {
-            debug_assert_eq!(
-                u64::from(stamp.order_base),
-                running,
-                "stamps must stream in traversal order"
-            );
-            running += template.segments.len() as u64;
-            stamps.push(stamp);
-        });
-        Self { set, stamps, stats }
-    }
-
-    pub fn total_segments(&self) -> u64 {
-        self.stats.total_segments
-    }
-
-    pub fn max_topological_depth(&self) -> u32 {
-        self.stats.max_depth
-    }
-
-    /// World-space segment endpoints in traversal order.
-    pub fn segment_points(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
-        let templates = self.set.templates();
-        self.stamps.iter().flat_map(move |stamp| {
-            templates[stamp.template as usize]
-                .segments
-                .iter()
-                .map(move |segment| {
-                    [
-                        stamp.pos + D::rotate(stamp.rot, segment.start),
-                        stamp.pos + D::rotate(stamp.rot, segment.end),
-                    ]
-                })
-        })
-    }
-
-    /// World-space segments with topological depth, in traversal order.
-    pub fn depth_segments(&self) -> impl Iterator<Item = SegmentWithTopologicalDepth<D>> + '_ {
-        let templates = self.set.templates();
-        self.stamps.iter().flat_map(move |stamp| {
-            templates[stamp.template as usize]
-                .segments
-                .iter()
-                .map(move |segment| SegmentWithTopologicalDepth {
-                    points: [
-                        stamp.pos + D::rotate(stamp.rot, segment.start),
-                        stamp.pos + D::rotate(stamp.rot, segment.end),
-                    ],
-                    topological_depth: stamp.depth_base.saturating_add(segment.depth_offset),
-                })
-        })
-    }
-}
-
 /// Segment records collected for a stamped scene, with their bounds.
 ///
 /// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
@@ -248,9 +169,8 @@ pub fn collect_stamped_segments<D>(
 where
     D: RenderDimension + TemplateDimension,
 {
-    let scene = StampedScene::collect(set);
     let mut collector = SegmentCollector::new();
-    scene.segment_points().for_each(|points @ [a, b]| {
+    set.emit_segments(|points @ [a, b]| {
         collector.push(points, 0, D::plain_record(a, b));
     });
     let (segments, bounds_min, bounds_max, _) = collector.finish();
@@ -269,9 +189,8 @@ pub fn collect_stamped_depth_segments<D>(
 where
     D: RenderDimension + TemplateDimension,
 {
-    let scene = StampedScene::collect(set);
     let mut collector = SegmentCollector::new();
-    scene.depth_segments().for_each(|segment| {
+    set.emit_depth_segments(|segment| {
         let [a, b] = segment.points;
         collector.push(
             segment.points,
@@ -582,66 +501,8 @@ mod tests {
         }
     }
 
-    fn check_stamped_scene_counts<D: RenderDimension + TemplateDimension>(set: &TemplateSet<D>) {
-        let scene = StampedScene::collect(set);
-
-        assert!(scene.total_segments() > 0);
-        assert_eq!(
-            scene.segment_points().count() as u64,
-            scene.total_segments()
-        );
-        assert_eq!(
-            scene.depth_segments().count() as u64,
-            scene.total_segments()
-        );
-        let per_segment_max = scene
-            .depth_segments()
-            .map(|segment| segment.topological_depth)
-            .max()
-            .unwrap_or(0);
-        assert_eq!(scene.max_topological_depth(), per_segment_max);
-    }
-
     #[test]
-    fn stamped_scene_counts_match_stats() {
-        let config = GenerationConfig::new(
-            Dimensions::TwoD,
-            "X".to_string(),
-            5,
-            23.4,
-            1.0,
-            90.0,
-            BTreeMap::from([
-                ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
-                ('F', "FF".to_string()),
-            ]),
-        )
-        .expect("balanced config");
-        let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
-        check_stamped_scene_counts::<D2>(&set);
-    }
-
-    #[test]
-    fn stamped_scene_3d_counts_match_stats() {
-        let config = GenerationConfig::new(
-            Dimensions::ThreeD,
-            "A".to_string(),
-            5,
-            40.0,
-            1.0,
-            90.0,
-            BTreeMap::from([
-                ('A', r"F[+/A]/[-/A]F[&/A]/[^/A]".to_string()),
-                ('F', "FF".to_string()),
-            ]),
-        )
-        .expect("balanced config");
-        let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
-        check_stamped_scene_counts::<D3>(&set);
-    }
-
-    #[test]
-    fn empty_stamped_scene_reports_zero_segments_and_fallback_bounds() {
+    fn empty_stamped_segments_report_zero_and_collect_with_fallback_bounds() {
         let config = GenerationConfig::new(
             Dimensions::TwoD,
             "A".to_string(),
@@ -654,10 +515,10 @@ mod tests {
         .expect("balanced config");
         let set = TemplateSet2D::build(compile_2d(&config), 1).expect("set builds");
 
-        let scene = StampedScene::collect(&set);
-        assert_eq!(scene.total_segments(), 0);
-        assert_eq!(scene.max_topological_depth(), 0);
-        assert_eq!(scene.segment_points().count(), 0);
+        let segments = set.stamped_segments();
+        assert_eq!(segments.total_segments(), 0);
+        assert_eq!(segments.max_topological_depth(), 0);
+        assert_eq!(segments.segments().count(), 0);
 
         let data = collect_stamped_segments::<D2>(&set);
         assert!(data.segments.is_empty());

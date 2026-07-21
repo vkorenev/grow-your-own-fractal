@@ -31,7 +31,10 @@ pub(crate) trait TurtleDimension: Dimension {
     /// `+X` scaled by the step length: the unit-`F` template's end point.
     fn unit_step(step: f32) -> Self::Point;
     /// Applies a rotation to a local-frame point (world placement).
-    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point;
+    #[inline]
+    fn rotate(rotation: Self::Rotation, point: Self::Point) -> Self::Point {
+        Self::transform_point(Self::POINT_ZERO, rotation, point)
+    }
 }
 
 impl TurtleDimension for D2 {
@@ -45,11 +48,6 @@ impl TurtleDimension for D2 {
     fn unit_step(step: f32) -> Vec2 {
         Vec2::X * step
     }
-
-    #[inline]
-    fn rotate(rotation: Vec2, point: Vec2) -> Vec2 {
-        rotation.rotate(point)
-    }
 }
 
 impl TurtleDimension for D3 {
@@ -61,11 +59,6 @@ impl TurtleDimension for D3 {
     #[inline]
     fn unit_step(step: f32) -> Vec3 {
         Vec3::X * step
-    }
-
-    #[inline]
-    fn rotate(rotation: Quat, point: Vec3) -> Vec3 {
-        rotation * point
     }
 }
 
