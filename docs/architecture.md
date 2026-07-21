@@ -76,8 +76,8 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
 - `dimension.rs` defines the sealed `D2`/`D3` markers and maps each marker to
-  its point and rotation representations and local-to-world point transform
-  through the `Dimension` trait.
+  its point and rotation representations and local-to-world point and segment
+  transforms through the `Dimension` trait.
 - `compiled_generation.rs` is the runtime compilation boundary. It compiles
   grammar, scalar parameters, and stack metadata together, then exposes an
   opaque `CompiledGeneration<D2>` or `CompiledGeneration<D3>` payload inside

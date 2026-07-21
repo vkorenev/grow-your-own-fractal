@@ -83,10 +83,7 @@ pub type Stamp3D = Stamp<D3>;
 impl<D: Dimension> Stamp<D> {
     /// Transforms one template-local segment into world-space endpoints.
     pub fn transform_segment(&self, segment: &TemplateSegment<D>) -> [D::Point; 2] {
-        [
-            D::transform_point(self.pos, self.rot, segment.start),
-            D::transform_point(self.pos, self.rot, segment.end),
-        ]
+        D::transform_points(self.pos, self.rot, [segment.start, segment.end])
     }
 
     /// Transforms one template-local segment and applies this placement's
