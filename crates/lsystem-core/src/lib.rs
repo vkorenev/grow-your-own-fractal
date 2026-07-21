@@ -14,8 +14,8 @@ pub(crate) mod turtle;
 pub use alphabet::{contains_3d_symbols, validate_bracket_balance, validate_symbols};
 pub use compiled_generation::{
     AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D,
-    GenerationDimension, Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth,
-    SegmentWithTopologicalDepth,
+    GenerationDimension, GenerationPlan, PreparedGeneration, Segment2DWithTopologicalDepth,
+    Segment3DWithTopologicalDepth, SegmentWithTopologicalDepth, TemplateBuildError,
 };
 pub use config::{
     ColorConfig, Config, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb, RgbError,

@@ -15,8 +15,9 @@
 //! templates and stamps directly. Both the compute-explosion and the
 //! two-level-instancing designs of issue #120 use this same low-level data.
 
-use crate::compiled_generation::{CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D};
-use crate::grammar::CompiledGrammar;
+use crate::compiled_generation::{
+    CompiledGeneration, GenerationDimension, GenerationPlan, PreparedGeneration, TemplateBuildError,
+};
 use crate::turtle::{Turtle, TurtleDimension};
 use crate::{D2, D3, Dimension};
 
@@ -72,9 +73,8 @@ pub struct Stamp<D: Dimension> {
     pub rot: D::Rotation,
     pub depth_base: u32,
     /// Number of segments emitted before this stamp; also the stamp's offset
-    /// into a flat traversal-ordered segment buffer. Saturates at
-    /// `u32::MAX`; the stamp walk debug-asserts the total stays in range.
-    pub order_base: u32,
+    /// into a flat traversal-ordered segment buffer.
+    pub order_base: u64,
 }
 
 pub type Stamp2D = Stamp<D2>;
@@ -154,41 +154,10 @@ impl<D: Dimension> StampedSegments<'_, D> {
     }
 }
 
-/// Recommended template-segment budget for `build_within_budget` callers.
+/// Recommended template-segment budget for generation planning callers.
 /// Bounds precomputed template memory (segments × ~20-32 bytes, ≈1-2 MiB),
 /// not output size; large enough that typical systems get a deep template.
 pub const DEFAULT_TEMPLATE_SEGMENT_BUDGET: u64 = 65_536;
-
-/// Returns the largest template iteration count in `1..=iterations` whose
-/// total template segment count stays within `max_template_segments`, or 0
-/// when no iteration count fits the budget (callers then fall back to the
-/// interpreter path). The total counts every segment a built set stores,
-/// including the built-in one-segment unit-`F` template.
-pub(crate) fn choose_template_iterations(
-    grammar: &CompiledGrammar,
-    iterations: u16,
-    max_template_segments: u64,
-) -> u16 {
-    let ruled: Vec<u8> = grammar.ruled_symbols().collect();
-
-    // yields[b] = number of drawn segments symbol `b` produces when expanded
-    // `m` times.
-    let mut yields = [0u64; 256];
-    yields[b'F' as usize] = 1;
-    let mut best = 0;
-    for m in 1..=iterations {
-        yields = grammar.advance_drawn_segment_yields(&yields);
-        // Start at 1 for the built-in unit-F template every set stores.
-        let total = ruled
-            .iter()
-            .map(|&symbol| yields[symbol as usize])
-            .fold(1u64, |a, x| a.saturating_add(x));
-        if total <= max_template_segments {
-            best = m;
-        }
-    }
-    best
-}
 
 impl<D: Dimension> TemplateSet<D> {
     /// Built templates; index 0 is the built-in bare-`F` unit template.
@@ -203,10 +172,16 @@ impl<D: Dimension> TemplateSet<D> {
 }
 
 impl<D: TemplateDimension> TemplateSet<D> {
+    /// Walks the boundary expansion and streams placements that contribute
+    /// geometry in traversal order.
+    pub fn emit_stamps(&self, sink: impl FnMut(Stamp<D>, &Template<D>)) -> StampStats {
+        D::emit_stamps(self, sink)
+    }
+
     /// Streams world-space segment endpoints in traversal order without
     /// retaining stamps or materialized segments.
     pub fn emit_segments(&self, mut sink: impl FnMut([D::Point; 2])) -> StampStats {
-        D::emit_stamps(self, |stamp, template| {
+        self.emit_stamps(|stamp, template| {
             for segment in &template.segments {
                 sink(stamp.transform_segment(segment));
             }
@@ -219,7 +194,7 @@ impl<D: TemplateDimension> TemplateSet<D> {
         &self,
         mut sink: impl FnMut(crate::SegmentWithTopologicalDepth<D>),
     ) -> StampStats {
-        D::emit_stamps(self, |stamp, template| {
+        self.emit_stamps(|stamp, template| {
             for segment in &template.segments {
                 sink(stamp.transform_depth_segment(segment));
             }
@@ -231,10 +206,9 @@ impl<D: TemplateDimension> TemplateSet<D> {
     pub fn stamped_segments(&self) -> StampedSegments<'_, D> {
         let mut stamps = Vec::new();
         let mut running = 0u64;
-        let stats = D::emit_stamps(self, |stamp, template| {
+        let stats = self.emit_stamps(|stamp, template| {
             debug_assert_eq!(
-                u64::from(stamp.order_base),
-                running,
+                stamp.order_base, running,
                 "stamps must stream in traversal order"
             );
             running += template.segments.len() as u64;
@@ -253,14 +227,14 @@ impl<D: TemplateDimension> TemplateSet<D> {
 ///
 /// Implemented only for [`D2`] and [`D3`] via a blanket impl. Code that is
 /// generic over dimension normally uses the inherent high-level methods on
-/// [`TemplateSet`] and calls these associated functions only to construct a
-/// budgeted set. Code that already knows the concrete dimension can use the
-/// inherent [`TemplateSet2D`]/[`TemplateSet3D`] constructors.
-pub trait TemplateDimension: Dimension {
-    fn build_within_budget(
+/// [`CompiledGeneration`] and [`TemplateSet`]; the associated functions are
+/// implementation hooks for those dimension-generic APIs.
+pub trait TemplateDimension: GenerationDimension {
+    #[doc(hidden)]
+    fn build_templates(
         generation: CompiledGeneration<Self>,
-        max_template_segments: u64,
-    ) -> Result<TemplateSet<Self>, CompiledGeneration<Self>>;
+        template_iterations: u16,
+    ) -> Result<TemplateSet<Self>, TemplateBuildError<Self>>;
 
     fn emit_stamps(
         set: &TemplateSet<Self>,
@@ -278,9 +252,9 @@ pub trait TemplateDimension: Dimension {
 fn build_generic<D: TurtleDimension>(
     generation: CompiledGeneration<D>,
     template_iterations: u16,
-) -> Result<TemplateSet<D>, CompiledGeneration<D>> {
+) -> Result<TemplateSet<D>, TemplateBuildError<D>> {
     if template_iterations == 0 || template_iterations > generation.params.iterations {
-        return Err(generation);
+        return Err(TemplateBuildError::new(generation, template_iterations));
     }
 
     let grammar = &generation.grammar;
@@ -337,22 +311,6 @@ fn build_generic<D: TurtleDimension>(
     })
 }
 
-/// Builds at the largest template depth whose total template segment count
-/// fits `max_template_segments`. Returns the generation back as the error
-/// when no depth fits, so the caller can reuse it for the interpreter
-/// fallback path.
-fn build_within_budget_generic<D: TurtleDimension>(
-    generation: CompiledGeneration<D>,
-    max_template_segments: u64,
-) -> Result<TemplateSet<D>, CompiledGeneration<D>> {
-    let template_iterations = choose_template_iterations(
-        &generation.grammar,
-        generation.params.iterations,
-        max_template_segments,
-    );
-    build_generic(generation, template_iterations)
-}
-
 /// Walks the boundary expansion (`iterations - template_iterations` levels,
 /// unfiltered so ruled symbols surface) and streams one stamp per template
 /// placement that contributes segments, in traversal order. Placements of
@@ -367,7 +325,7 @@ fn emit_stamps_generic<D: TurtleDimension>(
     // the shared apply() transition, so walk semantics cannot
     // drift from the interpreter.
     let mut state = <D::Turtle as Turtle>::new(params.angle, params.step, params.initial_heading);
-    let mut order: u32 = 0;
+    let mut order: u64 = 0;
     let mut stats = StampStats {
         total_segments: 0,
         max_depth: 0,
@@ -401,7 +359,7 @@ fn emit_stamps_generic<D: TurtleDimension>(
                     },
                     &set.templates[0],
                 );
-                order = order.saturating_add(1);
+                order += 1;
                 return;
             } else {
                 state.apply(byte);
@@ -425,93 +383,17 @@ fn emit_stamps_generic<D: TurtleDimension>(
             state.advance(D::rotate(rot, template.exit_pos));
             state.compose_heading(template.exit_rot);
             state.add_topological_depth(template.exit_depth_delta);
-            order = order.saturating_add(template.segments.len() as u32);
+            order += template.segments.len() as u64;
         });
-
-    debug_assert!(
-        u32::try_from(stats.total_segments).is_ok(),
-        "stamp order_base saturated: {} segments exceed u32::MAX",
-        stats.total_segments
-    );
     stats
 }
 
-impl TemplateSet2D {
-    /// Builds templates for every ruled symbol by expanding it
-    /// `template_iterations` times through the turtle in the local
-    /// frame. When `template_iterations` is outside
-    /// `1..=generation`'s iteration count, returns the generation
-    /// back as the error so the caller can reuse it for the interpreter
-    /// fallback path.
-    pub fn build(
-        generation: CompiledGeneration2D,
-        template_iterations: u16,
-    ) -> Result<Self, CompiledGeneration2D> {
-        build_generic(generation, template_iterations)
-    }
-
-    /// Builds at the largest template depth whose total template
-    /// segment count fits `max_template_segments`. Returns the generation
-    /// back as the error when no depth fits, so the caller can
-    /// reuse it for the interpreter fallback path.
-    pub fn build_within_budget(
-        generation: CompiledGeneration2D,
-        max_template_segments: u64,
-    ) -> Result<Self, CompiledGeneration2D> {
-        build_within_budget_generic(generation, max_template_segments)
-    }
-
-    /// Walks the boundary expansion (`iterations -
-    /// template_iterations` levels, unfiltered so ruled symbols
-    /// surface) and streams one stamp per template placement that
-    /// contributes segments, in traversal order. Placements of
-    /// geometry-free templates advance the cursor but emit nothing.
-    pub fn emit_stamps(&self, sink: impl FnMut(Stamp2D, &Template2D)) -> StampStats {
-        emit_stamps_generic(self, sink)
-    }
-}
-
-impl TemplateSet3D {
-    /// Builds templates for every ruled symbol by expanding it
-    /// `template_iterations` times through the turtle in the local
-    /// frame. When `template_iterations` is outside
-    /// `1..=generation`'s iteration count, returns the generation
-    /// back as the error so the caller can reuse it for the interpreter
-    /// fallback path.
-    pub fn build(
-        generation: CompiledGeneration3D,
-        template_iterations: u16,
-    ) -> Result<Self, CompiledGeneration3D> {
-        build_generic(generation, template_iterations)
-    }
-
-    /// Builds at the largest template depth whose total template
-    /// segment count fits `max_template_segments`. Returns the generation
-    /// back as the error when no depth fits, so the caller can
-    /// reuse it for the interpreter fallback path.
-    pub fn build_within_budget(
-        generation: CompiledGeneration3D,
-        max_template_segments: u64,
-    ) -> Result<Self, CompiledGeneration3D> {
-        build_within_budget_generic(generation, max_template_segments)
-    }
-
-    /// Walks the boundary expansion (`iterations -
-    /// template_iterations` levels, unfiltered so ruled symbols
-    /// surface) and streams one stamp per template placement that
-    /// contributes segments, in traversal order. Placements of
-    /// geometry-free templates advance the cursor but emit nothing.
-    pub fn emit_stamps(&self, sink: impl FnMut(Stamp3D, &Template3D)) -> StampStats {
-        emit_stamps_generic(self, sink)
-    }
-}
-
 impl<D: TurtleDimension> TemplateDimension for D {
-    fn build_within_budget(
+    fn build_templates(
         generation: CompiledGeneration<Self>,
-        max_template_segments: u64,
-    ) -> Result<TemplateSet<Self>, CompiledGeneration<Self>> {
-        build_within_budget_generic(generation, max_template_segments)
+        template_iterations: u16,
+    ) -> Result<TemplateSet<Self>, TemplateBuildError<Self>> {
+        build_generic(generation, template_iterations)
     }
 
     fn emit_stamps(
@@ -519,6 +401,33 @@ impl<D: TurtleDimension> TemplateDimension for D {
         sink: impl FnMut(Stamp<Self>, &Template<Self>),
     ) -> StampStats {
         emit_stamps_generic(set, sink)
+    }
+}
+
+impl<D: TemplateDimension> CompiledGeneration<D> {
+    /// Builds templates at an explicitly requested expansion depth.
+    pub fn build_templates(
+        self,
+        template_iterations: u16,
+    ) -> Result<TemplateSet<D>, TemplateBuildError<D>> {
+        D::build_templates(self, template_iterations)
+    }
+}
+
+impl<D: TemplateDimension> GenerationPlan<D> {
+    /// Builds the selected template set, or returns the owned generation for
+    /// interpreted output when no template depth fit the planning budget.
+    pub fn prepare(self) -> PreparedGeneration<D> {
+        match self.selected_template_iterations() {
+            Some(template_iterations) => {
+                let set = match self.generation.build_templates(template_iterations) {
+                    Ok(set) => set,
+                    Err(_) => unreachable!("a planned template depth must be valid"),
+                };
+                PreparedGeneration::Stamped(set)
+            }
+            None => PreparedGeneration::Interpreted(self.generation),
+        }
     }
 }
 
@@ -539,19 +448,21 @@ mod tests {
     fn build_2d(
         config: &GenerationConfig,
         template_iterations: u16,
-    ) -> Result<TemplateSet2D, crate::CompiledGeneration2D> {
-        TemplateSet2D::build(compile_2d(config), template_iterations)
+    ) -> Result<TemplateSet2D, crate::TemplateBuildError<D2>> {
+        compile_2d(config).build_templates(template_iterations)
     }
 
     fn build_3d(
         config: &GenerationConfig,
         template_iterations: u16,
-    ) -> Result<TemplateSet3D, crate::CompiledGeneration3D> {
-        TemplateSet3D::build(compile_3d(config), template_iterations)
+    ) -> Result<TemplateSet3D, crate::TemplateBuildError<D3>> {
+        compile_3d(config).build_templates(template_iterations)
     }
 
     fn assert_template_dimension_dispatch<D: TemplateDimension>(generation: CompiledGeneration<D>) {
-        let set = D::build_within_budget(generation, u64::MAX).expect("template set builds");
+        let PreparedGeneration::Stamped(set) = generation.plan_templates(u64::MAX).prepare() else {
+            panic!("template set builds")
+        };
         assert_eq!(set.template_iterations(), 1);
 
         let segments = set.stamped_segments();
@@ -838,15 +749,18 @@ mod tests {
             let max_iterations = config.iterations;
             for iterations in 0..=max_iterations {
                 config.iterations = iterations;
-                let generation = compile_2d(&config);
-                let counted = generation.drawn_segment_count();
+                let counted = compile_2d(&config)
+                    .plan_templates(u64::MAX)
+                    .total_segments();
                 assert_eq!(
                     counted,
-                    generation.segments().count() as u64,
+                    compile_2d(&config).segments().count() as u64,
                     "2D count at iteration {iterations}"
                 );
                 if iterations > 0 {
-                    let set = TemplateSet2D::build(generation, 1).expect("template set builds");
+                    let set = compile_2d(&config)
+                        .build_templates(1)
+                        .expect("template set builds");
                     assert_eq!(
                         counted,
                         set.emit_stamps(|_, _| {}).total_segments,
@@ -860,15 +774,18 @@ mod tests {
         let max_iterations = config.iterations;
         for iterations in 0..=max_iterations {
             config.iterations = iterations;
-            let generation = compile_3d(&config);
-            let counted = generation.drawn_segment_count();
+            let counted = compile_3d(&config)
+                .plan_templates(u64::MAX)
+                .total_segments();
             assert_eq!(
                 counted,
-                generation.segments().count() as u64,
+                compile_3d(&config).segments().count() as u64,
                 "3D count at iteration {iterations}"
             );
             if iterations > 0 {
-                let set = TemplateSet3D::build(generation, 1).expect("template set builds");
+                let set = compile_3d(&config)
+                    .build_templates(1)
+                    .expect("template set builds");
                 assert_eq!(
                     counted,
                     set.emit_stamps(|_, _| {}).total_segments,
@@ -957,34 +874,44 @@ mod tests {
     }
 
     #[test]
-    fn build_within_budget_picks_largest_fitting_depth() {
+    fn planning_picks_largest_fitting_depth() {
         // Koch's only ruled symbol is F with 4^m template segments, plus the
         // unit-F template: budget 20 fits m=2 (16 + 1), and budget 3 fits no
         // depth at all (m=1 needs 4 + 1).
         let config = koch();
-        let set = TemplateSet2D::build_within_budget(compile_2d(&config), 20)
-            .expect("budget 20 fits depth 2");
+        let plan = compile_2d(&config).plan_templates(20);
+        assert_eq!(plan.selected_template_iterations(), Some(2));
+        let PreparedGeneration::Stamped(set) = plan.prepare() else {
+            panic!("budget 20 fits depth 2")
+        };
         assert_eq!(set.template_iterations(), 2);
 
-        assert!(TemplateSet2D::build_within_budget(compile_2d(&config), 3).is_err());
+        let plan = compile_2d(&config).plan_templates(3);
+        assert_eq!(plan.selected_template_iterations(), None);
+        assert!(matches!(plan.prepare(), PreparedGeneration::Interpreted(_)));
     }
 
     #[test]
-    fn choose_template_iterations_respects_budget() {
+    fn planning_respects_budget() {
         // Koch's only ruled symbol is F with 4^m template segments.
         let config = koch();
-        let grammar = CompiledGrammar::compile(&config);
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, 20),
-            2
+            compile_2d(&config)
+                .plan_templates(20)
+                .selected_template_iterations(),
+            Some(2)
         );
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, 3),
-            0
+            compile_2d(&config)
+                .plan_templates(3)
+                .selected_template_iterations(),
+            None
         );
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, u64::MAX),
-            4
+            compile_2d(&config)
+                .plan_templates(u64::MAX)
+                .selected_template_iterations(),
+            Some(4)
         );
     }
 
@@ -1000,8 +927,10 @@ mod tests {
             BTreeMap::from([('F', "F".to_string())]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build_within_budget(compile_2d(&config), 2)
-            .expect("fixed-point template fits the budget");
+        let PreparedGeneration::Stamped(set) = compile_2d(&config).plan_templates(2).prepare()
+        else {
+            panic!("fixed-point template fits the budget")
+        };
 
         assert_eq!(set.template_iterations(), 31);
     }
@@ -1011,14 +940,23 @@ mod tests {
         // Koch at m=2 stores 16 ruled + 1 unit segments: a budget of exactly
         // 16 no longer fits m=2, while 17 does.
         let config = koch();
-        let grammar = CompiledGrammar::compile(&config);
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, 16),
-            1
+            compile_2d(&config)
+                .plan_templates(16)
+                .selected_template_iterations(),
+            Some(1)
         );
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, 17),
-            2
+            compile_2d(&config)
+                .plan_templates(17)
+                .selected_template_iterations(),
+            Some(2)
+        );
+        assert_eq!(
+            compile_2d(&config)
+                .plan_templates(18)
+                .selected_template_iterations(),
+            Some(2)
         );
 
         // A ruleless grammar still stores the one-segment unit template, so
@@ -1033,16 +971,39 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let grammar = CompiledGrammar::compile(&config);
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, 0),
-            0
+            compile_2d(&config)
+                .plan_templates(0)
+                .selected_template_iterations(),
+            None
         );
         assert_eq!(
-            choose_template_iterations(&grammar, config.iterations, 1),
-            2
+            compile_2d(&config)
+                .plan_templates(1)
+                .selected_template_iterations(),
+            Some(2)
         );
-        assert!(TemplateSet2D::build_within_budget(compile_2d(&config), 0).is_err());
+    }
+
+    #[test]
+    fn planning_keeps_searching_after_a_depth_exceeds_budget() {
+        // At depth 1, A stores two segments and the unit template makes three.
+        // At depth 2, both ruled templates are geometry-free, so only the unit
+        // template remains and the later depth fits budget 1.
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "A".to_string(),
+            2,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('A', "FF".to_string()), ('F', "f".to_string())]),
+        )
+        .expect("balanced config");
+
+        let plan = compile_2d(&config).plan_templates(1);
+        assert_eq!(plan.selected_template_iterations(), Some(2));
+        assert_eq!(plan.total_segments(), 0);
     }
 
     #[test]
@@ -1057,10 +1018,17 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let generation = match build_2d(&config, 0) {
+        let error = match build_2d(&config, 0) {
             Ok(_) => panic!("depth zero must be invalid"),
-            Err(generation) => generation,
+            Err(error) => error,
         };
+        assert_eq!(error.requested_iterations(), 0);
+        assert_eq!(error.available_iterations(), 1);
+        assert_eq!(
+            error.to_string(),
+            "template iteration count 0 is outside 1..=1 for this generation"
+        );
+        let generation = error.into_generation();
         assert!(generation.has_stack_directives());
         assert_eq!(generation.segments().count(), 3);
 
@@ -1074,10 +1042,13 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let generation = match TemplateSet3D::build_within_budget(compile_3d(&config), 0) {
-            Ok(_) => panic!("budget zero must not fit the unit template"),
-            Err(generation) => generation,
+        let error = match compile_3d(&config).build_templates(2) {
+            Ok(_) => panic!("depth above the generation must be invalid"),
+            Err(error) => error,
         };
+        assert_eq!(error.requested_iterations(), 2);
+        assert_eq!(error.available_iterations(), 1);
+        let generation = error.into_generation();
         assert!(generation.has_stack_directives());
         assert_eq!(generation.depth_segments().count(), 3);
     }

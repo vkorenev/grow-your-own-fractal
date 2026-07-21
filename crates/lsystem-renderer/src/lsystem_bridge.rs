@@ -373,7 +373,7 @@ mod tests {
     use lsystem_core::{
         AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, D2,
         D3, Dimensions, GenerationConfig, GenerationDimension, Rgb, Segment2DWithTopologicalDepth,
-        Segment3DWithTopologicalDepth, TemplateSet2D, TemplateSet3D,
+        Segment3DWithTopologicalDepth,
     };
     use std::collections::BTreeMap;
     use std::ops::Index;
@@ -460,7 +460,7 @@ mod tests {
             BTreeMap::from([('F', "F-F++F-F".to_string())]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
+        let set = compile_2d(&config).build_templates(2).expect("set builds");
 
         let stamped = collect_stamped_segments::<D2>(&set);
         let interpreted = collect_plain_segments::<D2>(compile_2d(&config).segments());
@@ -485,7 +485,7 @@ mod tests {
             BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
         )
         .expect("balanced config");
-        let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
+        let set = compile_3d(&config).build_templates(2).expect("set builds");
 
         let stamped = collect_stamped_segments::<D3>(&set);
         let interpreted = collect_plain_segments::<D3>(compile_3d(&config).segments());
@@ -513,7 +513,7 @@ mod tests {
             BTreeMap::new(),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(compile_2d(&config), 1).expect("set builds");
+        let set = compile_2d(&config).build_templates(1).expect("set builds");
 
         let segments = set.stamped_segments();
         assert_eq!(segments.total_segments(), 0);
@@ -586,7 +586,7 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let set = TemplateSet2D::build(compile_2d(&config), 2).expect("set builds");
+        let set = compile_2d(&config).build_templates(2).expect("set builds");
         let generation = compile_2d(&config);
 
         check_stamped_depth_matches_interpreted::<D2>(
@@ -614,7 +614,7 @@ mod tests {
             ]),
         )
         .expect("balanced config");
-        let set = TemplateSet3D::build(compile_3d(&config), 2).expect("set builds");
+        let set = compile_3d(&config).build_templates(2).expect("set builds");
         let generation = compile_3d(&config);
 
         check_stamped_depth_matches_interpreted::<D3>(

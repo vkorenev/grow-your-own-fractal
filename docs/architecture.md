@@ -29,6 +29,8 @@ Runtime generation starts from a resolved `GenerationConfig`.
 GenerationConfig
   -> AnyCompiledGeneration
   -> CompiledGeneration<D2> / CompiledGeneration<D3>
+  -> GenerationPlan<D> (exact count + bounded strategy selection)
+  -> PreparedGeneration<D> (stamped templates or interpreter)
   -> template stamps or interpreted turtle segments (segments() / depth_segments())
   -> renderer scene upload
   -> wgpu instance buffer
@@ -65,10 +67,12 @@ apps additionally clamp iterations to a smaller segment-budget-derived
 maximum. The type bound limits iteration-linear work; the segment cap remains
 necessary because expanded output can grow exponentially.
 
-Compiled generations can calculate their exact drawn-segment count with a
-saturating byte-domain recurrence before expansion. Renderer scene upload uses
-that count to enforce the actual plain/depth record-layout cap before template
-construction, stamp collection, interpreter generation, or pipeline mutation.
+Compiled generations are consumed into an allocation-free `GenerationPlan`
+that fuses exact drawn-segment counting and bounded template-depth selection in
+one saturating byte-domain recurrence. Renderer scene upload uses the plan's
+count to enforce the actual plain/depth record-layout cap before preparation,
+template construction, stamp collection, interpreter generation, or pipeline
+mutation.
 
 ## Core Model
 
@@ -114,10 +118,13 @@ construction, stamp collection, interpreter generation, or pipeline mutation.
   Template sets are small, budget-bounded collections. One-pass
   `emit_segments`/`emit_depth_segments` calls keep stamps streamed; the
   repeatable `StampedSegments` view retains only the placement list.
-  `build_within_budget` picks the largest
-  template depth whose templates fit `DEFAULT_TEMPLATE_SEGMENT_BUDGET` for
-  interactive consumers and hands the typed generation back when none fits,
-  so callers can use the interpreter path, which remains the semantic oracle.
+  `CompiledGeneration::plan_templates` picks the largest template depth whose
+  templates fit a caller-supplied budget while simultaneously counting exact
+  output. `GenerationPlan::prepare` then builds that depth or returns
+  `PreparedGeneration::Interpreted` with the owned generation when none fits.
+  Fixed-depth tests and benchmarks use `CompiledGeneration::build_templates`,
+  whose structured error returns the generation when the requested depth is
+  invalid. The interpreter remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
   `GenerationConfig::new` is the only way to build a generation config; it
   enforces single-letter rule keys and bracket balance on the axiom and every
@@ -215,11 +222,11 @@ offscreen exports.
   accumulate bounds from those points before constructing dimension-specific
   GPU records through `RenderDimension`.
 - `scene_upload.rs` owns the single generic `upload_scene<D>` (composing
-  `RenderDimension + GenerationDimension + TemplateDimension` at the use
-  site), the public renderer operation for web and offscreen scene
-  generation/upload. It clamps the requested layout for bracketless
-  grammars, checks segment caps via per-record `record_limit`, prefers the
-  stamped streaming path with the interpreted slice path as fallback, and
+  `RenderDimension + TemplateDimension`, whose core bound includes interpreted
+  generation), the public renderer operation for web and offscreen scene
+  generation/upload. It plans the generation, clamps the requested layout for
+  bracketless grammars, checks segment caps via per-record `record_limit`
+  before preparation, then uses the selected stamped or interpreted path, and
   returns `UploadedScene<D>` metadata with point-typed bounds and
   per-dimension array getters. A cap error preserves the previous pipeline
   scene; a staging error clears the attempted target layout.
@@ -266,10 +273,11 @@ and tokenized so stale generation results can be ignored after rapid input
 changes. Geometry and color revisions let the shader upload segment data only
 when geometry changes and update only color uniforms for color-only edits.
 Scene geometry is built once generically per dimension marker
-(`build_typed_scene<D>` over an app-local `SceneDimension` trait), collecting
-through the renderer bridge's generic stamped collectors and — on the
-interpreter fallback — incremental builders with periodic cancellation
-checks.
+(`build_typed_scene<D>` over an app-local `SceneDimension` trait). It prepares
+the planned strategy, collects through the renderer bridge's generic stamped
+collectors, and uses incremental builders with periodic cancellation checks
+for interpreted generation. Native telemetry reports the selected template
+iteration count, with zero denoting interpreted generation.
 
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/

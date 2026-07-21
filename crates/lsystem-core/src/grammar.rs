@@ -264,26 +264,22 @@ impl CompiledGrammar {
         next
     }
 
-    /// Number of drawn segments (`F` symbols) in the full `iterations`-deep
-    /// expansion, computed without expanding. Exact while representable;
-    /// saturates at `u64::MAX`.
-    pub(crate) fn drawn_segment_count(&self, iterations: u16) -> u64 {
-        let mut yields = [0u64; 256];
-        yields[b'F' as usize] = 1;
-
-        // Always run every round. Segment counts are not monotone: a grammar
-        // can shrink to zero or oscillate after an intermediate saturation,
-        // so neither value permits an early return.
-        for _ in 0..iterations {
-            yields = self.advance_drawn_segment_yields(&yields);
-        }
-
+    /// Counts the axiom's drawn yield using a fully advanced yield table.
+    pub(crate) fn axiom_drawn_segment_count(&self, yields: &[u64; 256]) -> u64 {
         self.axiom
             .to_slices(&self.arena)
             .full
             .iter()
             .map(|&byte| yields[byte as usize])
             .fold(0u64, u64::saturating_add)
+    }
+
+    /// Counts all segments a template set at the yield table's depth would
+    /// store, including the built-in unit-`F` template.
+    pub(crate) fn template_segment_count(&self, yields: &[u64; 256]) -> u64 {
+        self.ruled_symbols()
+            .map(|symbol| yields[symbol as usize])
+            .fold(1u64, u64::saturating_add)
     }
 }
 
@@ -464,46 +460,6 @@ mod tests {
 
     fn koch_rules() -> BTreeMap<char, String> {
         [('F', "F-F++F-F".to_string())].into()
-    }
-
-    #[test]
-    fn drawn_segment_count_tracks_growth_and_saturates() {
-        let grammar = CompiledGrammar::compile_raw("F++F++F", &koch_rules());
-
-        for iterations in 0..=8 {
-            assert_eq!(
-                grammar.drawn_segment_count(iterations),
-                grammar
-                    .expand(iterations)
-                    .filter(|&symbol| symbol == b'F')
-                    .count() as u64
-            );
-        }
-        assert_eq!(grammar.drawn_segment_count(32), u64::MAX);
-    }
-
-    #[test]
-    fn drawn_segment_count_handles_non_monotone_grammars() {
-        let shrinking = CompiledGrammar::compile_raw("F", &[('F', "f".to_string())].into());
-        assert_eq!(shrinking.drawn_segment_count(0), 1);
-        assert_eq!(shrinking.drawn_segment_count(1), 0);
-        assert_eq!(shrinking.drawn_segment_count(u16::MAX), 0);
-
-        let fixed = CompiledGrammar::compile_raw("F", &[('F', "F".to_string())].into());
-        assert_eq!(fixed.drawn_segment_count(u16::MAX), 1);
-
-        let oscillator = CompiledGrammar::compile_raw(
-            "F",
-            &[('F', "G".to_string()), ('G', "F".to_string())].into(),
-        );
-        assert_eq!(oscillator.drawn_segment_count(u16::MAX - 1), 1);
-        assert_eq!(oscillator.drawn_segment_count(u16::MAX), 0);
-    }
-
-    #[test]
-    fn drawn_segment_count_is_zero_for_empty_axiom() {
-        let grammar = CompiledGrammar::compile_raw("", &koch_rules());
-        assert_eq!(grammar.drawn_segment_count(u16::MAX), 0);
     }
 
     #[test]
