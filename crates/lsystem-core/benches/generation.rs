@@ -57,9 +57,8 @@ fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u16) -> f
     let set = compile_2d(config)
         .build_templates(template_iterations)
         .expect("template set builds");
-    let mut acc = 0.0;
-    set.emit_segments(|[a, b]| acc += a.x + a.y + b.x + b.y);
-    acc
+    set.segments()
+        .fold(0.0, |acc, [a, b]| acc + a.x + a.y + b.x + b.y)
 }
 
 fn checksum_2d_stamped_with_topological_depth(
@@ -69,21 +68,18 @@ fn checksum_2d_stamped_with_topological_depth(
     let set = compile_2d(config)
         .build_templates(template_iterations)
         .expect("template set builds");
-    let mut acc = 0.0;
-    set.emit_depth_segments(|segment| {
+    set.depth_segments().fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
-        acc += a.x + a.y + b.x + b.y + segment.topological_depth as f32;
-    });
-    acc
+        acc + a.x + a.y + b.x + b.y + segment.topological_depth as f32
+    })
 }
 
 fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
     let set = compile_3d(config)
         .build_templates(template_iterations)
         .expect("template set builds");
-    let mut acc = 0.0;
-    set.emit_segments(|[a, b]| acc += a.x + a.y + a.z + b.x + b.y + b.z);
-    acc
+    set.segments()
+        .fold(0.0, |acc, [a, b]| acc + a.x + a.y + a.z + b.x + b.y + b.z)
 }
 
 fn checksum_3d_stamped_with_topological_depth(
@@ -93,12 +89,10 @@ fn checksum_3d_stamped_with_topological_depth(
     let set = compile_3d(config)
         .build_templates(template_iterations)
         .expect("template set builds");
-    let mut acc = 0.0;
-    set.emit_depth_segments(|segment| {
+    set.depth_segments().fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
-        acc += a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32;
-    });
-    acc
+        acc + a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32
+    })
 }
 
 /// Benchmarks segment generation cost, not parsing or rendering.

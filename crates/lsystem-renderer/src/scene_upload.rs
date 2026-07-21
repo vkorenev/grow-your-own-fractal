@@ -188,13 +188,6 @@ where
             let method = GenerationMethod::Stamped {
                 template_iterations: set.template_iterations(),
             };
-            let segments = set.stamped_segments();
-            assert_eq!(
-                segments.total_segments(),
-                counted_total,
-                "stamped {:?} segment count must match the compiled recurrence",
-                D::RUNTIME
-            );
             let mut bounds = Bounds::new();
             let uploaded_layout = match layout {
                 SegmentLayout::Plain => {
@@ -204,7 +197,7 @@ where
                             device,
                             queue,
                             total_segments,
-                            segments.segments().map(|[start, end]| {
+                            set.segments().map(|[start, end]| {
                                 bounds.update(start, end);
                                 D::plain_record(start, end)
                             }),
@@ -214,7 +207,14 @@ where
                     UploadedLayout::Plain
                 }
                 SegmentLayout::TopologicalDepth => {
-                    let max_topological_depth = segments.max_topological_depth();
+                    let stats = set.emit_stamps(|_, _| {});
+                    assert_eq!(
+                        stats.total_segments,
+                        counted_total,
+                        "stamped {:?} segment count must match the compiled recurrence",
+                        D::RUNTIME
+                    );
+                    let max_topological_depth = stats.max_depth;
                     let color =
                         color_params_from_config(line, total_segments, Some(max_topological_depth));
                     pipeline
@@ -222,7 +222,7 @@ where
                             device,
                             queue,
                             total_segments,
-                            segments.depth_segments().map(|segment| {
+                            set.depth_segments().map(|segment| {
                                 let [start, end] = segment.points;
                                 bounds.update(start, end);
                                 D::depth_record(start, end, segment.topological_depth)
