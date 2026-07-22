@@ -1,7 +1,6 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use glam::{Vec2, Vec3};
 use lsystem_core::{
     CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, LineColorConfig,
     PreparedGeneration, SegmentWithTopologicalDepth, TemplateDimension,
@@ -92,24 +91,12 @@ impl<D: RenderDimension> UploadedScene<D> {
     pub fn total_segments(&self) -> u32 {
         self.total_segments
     }
-}
 
-impl UploadedScene<D2> {
-    pub fn bounds_min(&self) -> Vec2 {
+    pub fn bounds_min(&self) -> D::Point {
         self.bounds_min
     }
 
-    pub fn bounds_max(&self) -> Vec2 {
-        self.bounds_max
-    }
-}
-
-impl UploadedScene<D3> {
-    pub fn bounds_min(&self) -> Vec3 {
-        self.bounds_min
-    }
-
-    pub fn bounds_max(&self) -> Vec3 {
+    pub fn bounds_max(&self) -> D::Point {
         self.bounds_max
     }
 }
@@ -349,6 +336,7 @@ mod tests {
 
 #[cfg(all(test, feature = "png", not(target_arch = "wasm32")))]
 mod gpu_tests {
+    use glam::Vec2;
     use std::collections::BTreeMap;
 
     use futures_channel::oneshot;
