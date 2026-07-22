@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use encase::UniformBuffer;
-use lsystem_core::{D2, D3, Dimension, Dimensions};
+use lsystem_core::{BoundingCylinder3D, Bounds2D, D2, D3, Dimension, Dimensions};
 use wgpu::util::DeviceExt;
 
 pub use crate::generated_shader_2d::{
@@ -14,7 +14,6 @@ pub use crate::generated_shader_3d::{Mvp, Segment3D, TopologicalDepthSegment3D};
 
 use crate::generated_shader_2d;
 use crate::generated_shader_3d;
-use crate::lsystem_bridge::BoundsPoint;
 use crate::wgpu_util;
 
 impl Default for Mvp {
@@ -48,9 +47,17 @@ pub fn max_segments_for_line_color(dimensions: Dimensions, uses_topological_dept
 }
 
 /// Renderer capabilities selected by a type-level spatial dimension.
-pub trait RenderDimension: Dimension<Point: BoundsPoint> {
+pub trait RenderDimension: Dimension {
     type PlainRecord: bytemuck::Pod;
     type DepthRecord: bytemuck::Pod;
+
+    /// Returns the renderer's usable bounds for a successful empty scene.
+    ///
+    /// Bounds accumulation itself represents empty input as `None`; this is
+    /// the renderer boundary where that absence is mapped to the historical
+    /// unit-box viewport fallback.
+    #[doc(hidden)]
+    fn empty_scene_bounds() -> Self::Bounds;
 
     fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord;
     fn depth_record(
@@ -63,6 +70,13 @@ pub trait RenderDimension: Dimension<Point: BoundsPoint> {
 impl RenderDimension for D2 {
     type PlainRecord = Segment2D;
     type DepthRecord = TopologicalDepthSegment2D;
+
+    fn empty_scene_bounds() -> Self::Bounds {
+        Bounds2D {
+            min: glam::Vec2::splat(-1.0),
+            max: glam::Vec2::splat(1.0),
+        }
+    }
 
     fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord {
         Segment2D { start, end }
@@ -84,6 +98,15 @@ impl RenderDimension for D2 {
 impl RenderDimension for D3 {
     type PlainRecord = Segment3D;
     type DepthRecord = TopologicalDepthSegment3D;
+
+    fn empty_scene_bounds() -> Self::Bounds {
+        BoundingCylinder3D {
+            center_xz: glam::Vec2::ZERO,
+            radius: 2.0_f32.sqrt(),
+            min_y: -1.0,
+            max_y: 1.0,
+        }
+    }
 
     fn plain_record(start: Self::Point, end: Self::Point) -> Self::PlainRecord {
         Segment3D { start, end }
@@ -1060,7 +1083,7 @@ mod tests {
     #[test]
     fn write_records_fills_staging_bytes_sequentially() {
         let segments = sample_segments();
-        let expected = bytemuck::cast_slice(&segments);
+        let expected: &[u8] = bytemuck::cast_slice(&segments);
         let mut bytes = vec![0u8; expected.len()];
 
         write_records(

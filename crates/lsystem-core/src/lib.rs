@@ -2,6 +2,7 @@
 pub mod svg_export;
 
 pub(crate) mod alphabet;
+mod bounds;
 mod compiled_generation;
 pub mod config;
 mod dimension;
@@ -12,6 +13,9 @@ pub(crate) mod test_util;
 pub(crate) mod turtle;
 
 pub use alphabet::{contains_3d_symbols, validate_bracket_balance, validate_symbols};
+pub use bounds::{
+    BoundingCylinder3D, Bounds2D, BoundsAccumulator, BoundsAccumulator2D, BoundsAccumulator3D,
+};
 pub use compiled_generation::{
     AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D,
     GenerationDimension, GenerationPlan, PreparedGeneration, Segment2DWithTopologicalDepth,

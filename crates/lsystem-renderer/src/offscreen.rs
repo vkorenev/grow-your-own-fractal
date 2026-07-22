@@ -3,8 +3,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use glam::{Vec2, Vec3};
-use lsystem_core::{AnyCompiledGeneration, Config, Rgb};
+use glam::Vec2;
+use lsystem_core::{AnyCompiledGeneration, BoundingCylinder3D, Bounds2D, Config, Rgb};
 
 use crate::camera::Camera;
 use crate::line_renderer::{ColorParams, LinePipeline2D, LinePipeline3D};
@@ -55,13 +55,11 @@ pub(crate) fn validate_height(height: u32) -> Result<(), ExportError> {
 enum SceneGeometry {
     TwoD {
         pipeline: LinePipeline2D,
-        bounds_min: Vec2,
-        bounds_max: Vec2,
+        bounds: Bounds2D,
     },
     ThreeD {
         pipeline: LinePipeline3D,
-        bounds_min: Vec3,
-        bounds_max: Vec3,
+        bounds: BoundingCylinder3D,
     },
 }
 
@@ -106,8 +104,7 @@ impl ExportScene {
                 Ok(Self {
                     geometry: SceneGeometry::TwoD {
                         pipeline,
-                        bounds_min: scene.bounds_min(),
-                        bounds_max: scene.bounds_max(),
+                        bounds: scene.bounds(),
                     },
                     color_params,
                 })
@@ -128,8 +125,7 @@ impl ExportScene {
                 Ok(Self {
                     geometry: SceneGeometry::ThreeD {
                         pipeline,
-                        bounds_min: scene.bounds_min(),
-                        bounds_max: scene.bounds_max(),
+                        bounds: scene.bounds(),
                     },
                     color_params,
                 })
@@ -152,22 +148,13 @@ impl ExportScene {
         height: u32,
     ) {
         match &self.geometry {
-            SceneGeometry::TwoD {
-                pipeline,
-                bounds_min,
-                bounds_max,
-            } => pipeline.write_transform(
+            SceneGeometry::TwoD { pipeline, bounds } => pipeline.write_transform(
                 queue,
-                viewport_transform(*bounds_min, *bounds_max, width, height, Vec2::ZERO, 1.0),
+                viewport_transform(*bounds, width, height, Vec2::ZERO, 1.0),
             ),
-            SceneGeometry::ThreeD {
-                pipeline,
-                bounds_min,
-                bounds_max,
-            } => pipeline.write_mvp(
-                queue,
-                camera.compute_mvp_3d(*bounds_min, *bounds_max, width, height),
-            ),
+            SceneGeometry::ThreeD { pipeline, bounds } => {
+                pipeline.write_mvp(queue, camera.compute_mvp_3d(*bounds, width, height))
+            }
         }
     }
 
