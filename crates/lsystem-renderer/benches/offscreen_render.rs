@@ -1,20 +1,13 @@
 use std::collections::BTreeMap;
 use std::hint::black_box;
-use std::ops::RangeInclusive;
-use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use lsystem_core::{ColorConfig, Config, Dimensions, GenerationConfig, LineColorConfig, Rgb};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::png_export::render_rgba;
 use lsystem_renderer::wgpu_util::create_headless_device;
 
-struct RenderBenchCase {
-    fractal_name: &'static str,
-    iterations: RangeInclusive<u16>,
-    image_size: (u32, u32),
-    colors: ColorConfig,
-}
+const IMAGE_SIZE: (u32, u32) = (512, 512);
 
 fn bench_offscreen_render(c: &mut Criterion) {
     let (device, queue) = pollster::block_on(create_headless_device(
@@ -24,47 +17,19 @@ fn bench_offscreen_render(c: &mut Criterion) {
     .expect("no GPU adapter available for offscreen render benchmark");
     let camera = Camera::default();
 
-    let mut bench_render_case =
-        |case: RenderBenchCase, generation_for_iterations: &dyn Fn(u16) -> GenerationConfig| {
-            let (width, height) = case.image_size;
-            let group_name = format!("offscreen_rgba_{}_{}x{}", case.fractal_name, width, height);
-            let mut group = c.benchmark_group(group_name);
-            group
-                .sample_size(50)
-                .measurement_time(Duration::from_secs(10));
-            for iterations in case.iterations {
-                group.bench_with_input(
-                    BenchmarkId::from_parameter(iterations),
-                    &iterations,
-                    |b, &iterations| {
-                        let config = Config {
-                            name: case.fractal_name.to_string(),
-                            generation: generation_for_iterations(iterations),
-                            colors: case.colors,
-                        };
-                        b.iter(|| {
-                            let export = pollster::block_on(render_rgba(
-                                black_box(&device),
-                                black_box(&queue),
-                                black_box(&config),
-                                black_box(width),
-                                black_box(height),
-                                black_box(&camera),
-                            ))
-                            .expect("offscreen RGBA render failed");
-                            black_box(export.rgba.len())
-                        });
-                    },
-                );
-            }
-            group.finish();
-        };
-
-    bench_render_case(
-        RenderBenchCase {
-            fractal_name: "harter_heighway_dragon",
-            iterations: 19..=21,
-            image_size: (512, 512),
+    let configs = [
+        Config {
+            name: "harter_heighway_dragon".to_string(),
+            generation: GenerationConfig::new(
+                Dimensions::TwoD,
+                "FX".to_string(),
+                20,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
+            )
+            .expect("balanced config"),
             colors: ColorConfig {
                 background: Rgb::new(0, 0, 0),
                 line: LineColorConfig::HueCycle {
@@ -72,38 +37,36 @@ fn bench_offscreen_render(c: &mut Criterion) {
                 },
             },
         },
-        &|iterations| {
-            GenerationConfig::new(
+        Config {
+            name: "plant_a".to_string(),
+            generation: GenerationConfig::new(
                 Dimensions::TwoD,
-                "FX".to_string(),
-                iterations,
-                90.0,
+                "X".to_string(),
+                10,
+                23.4,
                 1.0,
-                0.0,
-                BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
+                90.0,
+                BTreeMap::from([
+                    ('X', "F+[[X]-X]-F[-FX]+X".to_string()),
+                    ('F', "FF".to_string()),
+                ]),
             )
-            .expect("balanced config")
-        },
-    );
-    bench_render_case(
-        RenderBenchCase {
-            fractal_name: "branching_3d",
-            iterations: 9..=11,
-            image_size: (512, 512),
+            .expect("balanced config"),
             colors: ColorConfig {
                 background: Rgb::new(0, 0, 0),
                 line: LineColorConfig::Gradient {
-                    start: Rgb::new(89, 89, 13),
-                    end: Rgb::new(51, 217, 64),
-                    topological_depth: false,
+                    start: Rgb::new(13, 89, 13),
+                    end: Rgb::new(153, 230, 26),
+                    topological_depth: true,
                 },
             },
         },
-        &|iterations| {
-            GenerationConfig::new(
+        Config {
+            name: "branching_3d".to_string(),
+            generation: GenerationConfig::new(
                 Dimensions::ThreeD,
                 "X".to_string(),
-                iterations,
+                10,
                 30.0,
                 1.0,
                 90.0,
@@ -113,9 +76,56 @@ fn bench_offscreen_render(c: &mut Criterion) {
                     ('Z', "FZ".to_string()),
                 ]),
             )
-            .expect("balanced config")
+            .expect("balanced config"),
+            colors: ColorConfig {
+                background: Rgb::new(0, 0, 0),
+                line: LineColorConfig::Gradient {
+                    start: Rgb::new(89, 89, 13),
+                    end: Rgb::new(51, 217, 64),
+                    topological_depth: false,
+                },
+            },
         },
-    );
+        Config {
+            name: "hilbert_3d".to_string(),
+            generation: GenerationConfig::new(
+                Dimensions::ThreeD,
+                "X".to_string(),
+                6,
+                90.0,
+                1.0,
+                0.0,
+                BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
+            )
+            .expect("balanced config"),
+            colors: ColorConfig {
+                background: Rgb::new(0, 0, 0),
+                line: LineColorConfig::HueCycle {
+                    initial: Rgb::new(255, 255, 255),
+                },
+            },
+        },
+    ];
+
+    let (width, height) = IMAGE_SIZE;
+    for config in configs {
+        let mut group = c.benchmark_group(&config.name);
+        group.bench_function("render", |b| {
+            b.iter(|| {
+                let export = pollster::block_on(render_rgba(
+                    black_box(&device),
+                    black_box(&queue),
+                    black_box(&config),
+                    black_box(width),
+                    black_box(height),
+                    black_box(&camera),
+                ))
+                .expect("offscreen RGBA render failed");
+                black_box(export.rgba.len())
+            });
+        });
+        group.finish();
+    }
 }
 
 criterion_group!(benches, bench_offscreen_render);
