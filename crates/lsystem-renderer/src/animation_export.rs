@@ -116,7 +116,7 @@ pub async fn render_animation(
 
     let scene = ExportScene::new(device, queue, config)?;
     let target = RenderTarget::new(device, width, height);
-    let background = config.colors.background.to_array();
+    let background = config.colors.background;
     let base_color = scene.color_params();
 
     let mut bytes = Vec::new();

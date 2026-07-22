@@ -150,7 +150,7 @@ pub async fn render_rgba(
 
     let target = RenderTarget::new(device, width, height);
     let rgba = target
-        .render_frame(device, queue, config.colors.background.to_array(), &scene)
+        .render_frame(device, queue, config.colors.background, &scene)
         .await?;
 
     Ok(RgbaExport {

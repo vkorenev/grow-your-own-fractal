@@ -1,3 +1,4 @@
+use glam::Vec2;
 use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
@@ -60,13 +61,11 @@ pub(super) enum Message {
     SceneGenerated(SceneBuildResult),
     Fit,
     FractalPan {
-        dx: f32,
-        dy: f32,
+        delta: Vec2,
         size: Size,
     },
     FractalOrbit {
-        dx: f32,
-        dy: f32,
+        delta: Vec2,
     },
     FractalOrbitStarted,
     FractalOrbitEnded,
@@ -324,12 +323,12 @@ impl FractalApp {
                 self.scene.reset_camera();
                 Task::none()
             }
-            Message::FractalPan { dx, dy, size } => {
-                self.scene.pan_by_pixels(dx, dy, size);
+            Message::FractalPan { delta, size } => {
+                self.scene.pan_by_pixels(delta, size);
                 Task::none()
             }
-            Message::FractalOrbit { dx, dy } => {
-                self.scene.orbit_by_pixels(dx, dy);
+            Message::FractalOrbit { delta } => {
+                self.scene.orbit_by_pixels(delta);
                 Task::none()
             }
             Message::FractalOrbitStarted => {

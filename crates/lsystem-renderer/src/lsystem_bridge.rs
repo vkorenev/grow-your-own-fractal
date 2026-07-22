@@ -1,5 +1,5 @@
 use glam::{Vec2, Vec3, Vec4};
-use lsystem_core::{LineColorConfig, SegmentWithTopologicalDepth};
+use lsystem_core::{LineColorConfig, Rgb, SegmentWithTopologicalDepth};
 
 use crate::line_renderer::{
     ColorParams, RenderDimension, Segment2D, Segment3D, TopologicalDepthSegment2D,
@@ -275,33 +275,36 @@ fn rgb_to_rgba([r, g, b]: [f32; 3]) -> Vec4 {
     Vec4::new(r, g, b, 1.0)
 }
 
-pub fn fitted_pixels_per_unit(
-    bounds_min: [f32; 2],
-    bounds_max: [f32; 2],
-    width: u32,
-    height: u32,
-) -> f32 {
-    let geom_w = (bounds_max[0] - bounds_min[0]).max(1.0);
-    let geom_h = (bounds_max[1] - bounds_min[1]).max(1.0);
-    (width as f32 / geom_w).min(height as f32 / geom_h) * 0.9
+/// Converts to an opaque `wgpu::Color` for use as a render-pass clear color.
+pub fn rgb_to_wgpu_color(color: Rgb) -> wgpu::Color {
+    let [r, g, b] = color.to_array();
+    wgpu::Color {
+        r: r as f64,
+        g: g as f64,
+        b: b as f64,
+        a: 1.0,
+    }
+}
+
+pub fn fitted_pixels_per_unit(bounds_min: Vec2, bounds_max: Vec2, width: u32, height: u32) -> f32 {
+    let geom = (bounds_max - bounds_min).max(Vec2::ONE);
+    (width as f32 / geom.x).min(height as f32 / geom.y) * 0.9
 }
 
 pub fn viewport_transform(
-    bounds_min: [f32; 2],
-    bounds_max: [f32; 2],
+    bounds_min: Vec2,
+    bounds_max: Vec2,
     width: u32,
     height: u32,
-    pan: [f32; 2],
+    pan: Vec2,
     zoom: f32,
 ) -> Transform {
-    let cx = (bounds_min[0] + bounds_max[0]) * 0.5;
-    let cy = (bounds_min[1] + bounds_max[1]) * 0.5;
+    let center = (bounds_min + bounds_max) * 0.5;
     let ppu = fitted_pixels_per_unit(bounds_min, bounds_max, width, height) * zoom;
-    let sx = ppu * 2.0 / width as f32;
-    let sy = ppu * 2.0 / height as f32;
+    let scale = Vec2::new(ppu * 2.0 / width as f32, ppu * 2.0 / height as f32);
     Transform {
-        scale: Vec2::new(sx, sy),
-        offset: Vec2::new((-cx + pan[0]) * sx, (-cy + pan[1]) * sy),
+        scale,
+        offset: (pan - center) * scale,
     }
 }
 
@@ -865,7 +868,14 @@ mod tests {
 
     #[test]
     fn viewport_transform_fits_and_centers_bounds() {
-        let t = viewport_transform([1.0, 0.0], [5.0, 4.0], 200, 200, [0.0, 0.0], 1.0);
+        let t = viewport_transform(
+            Vec2::new(1.0, 0.0),
+            Vec2::new(5.0, 4.0),
+            200,
+            200,
+            Vec2::ZERO,
+            1.0,
+        );
         assert!(close(3.0 * t.scale[0] + t.offset[0], 0.0));
         assert!(close(2.0 * t.scale[1] + t.offset[1], 0.0));
         assert!(close(4.0 * t.scale[0], 1.8));
@@ -874,7 +884,14 @@ mod tests {
 
     #[test]
     fn viewport_transform_keeps_degenerate_bounds_finite() {
-        let t = viewport_transform([5.0, 3.0], [5.0, 3.0], 100, 100, [0.0, 0.0], 1.0);
+        let t = viewport_transform(
+            Vec2::new(5.0, 3.0),
+            Vec2::new(5.0, 3.0),
+            100,
+            100,
+            Vec2::ZERO,
+            1.0,
+        );
         assert!(t.scale[0].is_finite() && t.scale[0] > 0.0);
         assert!(t.scale[1].is_finite() && t.scale[1] > 0.0);
         assert!(close(5.0 * t.scale[0] + t.offset[0], 0.0));

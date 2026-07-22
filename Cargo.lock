@@ -2743,6 +2743,7 @@ dependencies = [
  "console_error_panic_hook",
  "console_log",
  "env_logger",
+ "glam 0.33.2",
  "gloo-file",
  "gloo-timers",
  "iced",
@@ -2803,6 +2804,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "console_log",
+ "glam 0.33.2",
  "gloo-file",
  "gloo-timers",
  "js-sys",

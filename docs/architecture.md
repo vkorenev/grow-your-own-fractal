@@ -231,8 +231,9 @@ offscreen exports.
   iterator directly into wgpu staging while accumulating bounds and maximum
   topological depth. Color parameters are written only after the geometry
   drain succeeds. It returns `UploadedScene<D>` metadata with point-typed
-  bounds and per-dimension array getters. A cap error preserves the previous
-  pipeline scene; a staging error clears the attempted target layout.
+  bounds, exposed via per-dimension `Vec2`/`Vec3` getters. A cap error
+  preserves the previous pipeline scene; a staging error clears the attempted
+  target layout.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature. Segment-limit and
   staging failures surface as typed export errors instead of empty images.

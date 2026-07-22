@@ -1,8 +1,8 @@
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 
 use crate::{
     AnyCompiledGeneration, ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig,
-    LineColorConfig, PreparedGeneration, Segment2DWithTopologicalDepth,
+    LineColorConfig, PreparedGeneration, Rgb, Segment2DWithTopologicalDepth,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -67,20 +67,14 @@ fn export_svg_with_segments(
     segments: impl IntoIterator<Item = [Vec2; 2]>,
     body: String,
 ) -> String {
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (
-        f32::INFINITY,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        f32::NEG_INFINITY,
-    );
+    let mut min = Vec2::splat(f32::INFINITY);
+    let mut max = Vec2::splat(f32::NEG_INFINITY);
     let mut has_segments = false;
     for [a, b] in segments {
         has_segments = true;
         for p in [a, b] {
-            min_x = min_x.min(p.x);
-            min_y = min_y.min(p.y);
-            max_x = max_x.max(p.x);
-            max_y = max_y.max(p.y);
+            min = min.min(p);
+            max = max.max(p);
         }
     }
     if !has_segments {
@@ -92,33 +86,30 @@ fn export_svg_with_segments(
 
     // Pad degenerate (zero-width or zero-height) bounding boxes.
     let pad = generation.step * 0.5;
-    if max_x == min_x {
-        min_x -= pad;
-        max_x += pad;
+    if max.x == min.x {
+        min.x -= pad;
+        max.x += pad;
     }
-    if max_y == min_y {
-        min_y -= pad;
-        max_y += pad;
+    if max.y == min.y {
+        min.y -= pad;
+        max.y += pad;
     }
 
-    let w = max_x - min_x;
-    let h = max_y - min_y;
-    let stroke_width = (w + h) * 0.0005;
+    let size = max - min;
+    let stroke_width = (size.x + size.y) * 0.0005;
 
     // Add a small margin so strokes near the edges are not clipped.
-    let margin = (w + h) * 0.02;
-    min_x -= margin;
-    max_x += margin;
-    min_y -= margin;
-    max_y += margin;
-    let w = max_x - min_x;
-    let h = max_y - min_y;
+    let margin = (size.x + size.y) * 0.02;
+    min -= Vec2::splat(margin);
+    max += Vec2::splat(margin);
+    let size = max - min;
+    let (min_x, w, h) = (min.x, size.x, size.y);
 
     let bg = colors.background.to_string();
     // SVG Y-axis is flipped relative to the turtle (math Y-up vs screen Y-down).
     // We use a group transform "matrix(1 0 0 -1 0 0)" so turtle coordinates can be
     // written as-is. The viewBox compensates: top of image = -max_y in SVG space.
-    let neg_max_y = -max_y;
+    let neg_max_y = -max.y;
 
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{min_x:.3} {neg_max_y:.3} {w:.3} {h:.3}">
@@ -140,19 +131,14 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             format!("<path d=\"{d}\" stroke=\"{color}\"/>\n")
         }
         LineColorConfig::Gradient { start, end, .. } => {
-            let start = start.to_array();
-            let end = end.to_array();
+            let start = rgb_to_vec3(*start);
+            let end = rgb_to_vec3(*end);
             let n = segments.len();
             let denom = (n.max(2) - 1) as f32;
             let mut out = String::new();
             for (i, [a, b]) in segments.iter().enumerate() {
                 let t = i as f32 / denom;
-                let rgb = [
-                    start[0] + (end[0] - start[0]) * t,
-                    start[1] + (end[1] - start[1]) * t,
-                    start[2] + (end[2] - start[2]) * t,
-                ];
-                let color = to_hex(rgb);
+                let color = quantize_rgb(start.lerp(end, t));
                 out.push_str(&format!(
                     "<line x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\" stroke=\"{color}\"/>\n",
                     a.x, a.y, b.x, b.y
@@ -168,8 +154,7 @@ fn build_body(segments: &[[Vec2; 2]], line: &LineColorConfig) -> String {
             for (i, [a, b]) in segments.iter().enumerate() {
                 let t = i as f32 / denom;
                 let hue = start_hue + t * 360.0;
-                let rgb = hsv_to_rgb(hue, saturation, value);
-                let color = to_hex(rgb);
+                let color = quantize_rgb(hsv_to_rgb(hue, saturation, value));
                 out.push_str(&format!(
                     "<line x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\" stroke=\"{color}\"/>\n",
                     a.x, a.y, b.x, b.y
@@ -189,8 +174,8 @@ fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColor
     else {
         unreachable!("depth body requires topological-depth gradient line color")
     };
-    let start = start.to_array();
-    let end = end.to_array();
+    let start = rgb_to_vec3(start);
+    let end = rgb_to_vec3(end);
     let max_topological_depth = segments
         .iter()
         .map(|segment| segment.topological_depth)
@@ -201,12 +186,7 @@ fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColor
     for segment in segments {
         let [a, b] = segment.points;
         let t = segment.topological_depth as f32 / max_topological_depth;
-        let rgb = [
-            start[0] + (end[0] - start[0]) * t,
-            start[1] + (end[1] - start[1]) * t,
-            start[2] + (end[2] - start[2]) * t,
-        ];
-        let color = to_hex(rgb);
+        let color = quantize_rgb(start.lerp(end, t));
         out.push_str(&format!(
             "<line x1=\"{:.3}\" y1=\"{:.3}\" x2=\"{:.3}\" y2=\"{:.3}\" stroke=\"{color}\"/>\n",
             a.x, a.y, b.x, b.y
@@ -218,7 +198,7 @@ fn build_depth_body(segments: &[Segment2DWithTopologicalDepth], line: &LineColor
 /// Port of the WGSL `hsv_to_rgb` in `lsystem-renderer`'s `shaders/common.wesl`.
 /// Inputs must match the shader's conventions: `h` is in any range (modulo 360
 /// is applied internally), `s` and `v` are in [0, 1].
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Vec3 {
     let h6 = (h % 360.0) / 60.0;
     let i = (h6 as u32) % 6;
     let f = h6 - h6.floor();
@@ -226,18 +206,28 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     let q = v * (1.0 - f * s);
     let tc = v * (1.0 - (1.0 - f) * s);
     match i {
-        0 => [v, tc, p],
-        1 => [q, v, p],
-        2 => [p, v, tc],
-        3 => [p, q, v],
-        4 => [tc, p, v],
-        _ => [v, p, q],
+        0 => Vec3::new(v, tc, p),
+        1 => Vec3::new(q, v, p),
+        2 => Vec3::new(p, v, tc),
+        3 => Vec3::new(p, q, v),
+        4 => Vec3::new(tc, p, v),
+        _ => Vec3::new(v, p, q),
     }
 }
 
-fn to_hex(rgb: [f32; 3]) -> String {
-    let [r, g, b] = rgb.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-    format!("#{r:02x}{g:02x}{b:02x}")
+/// Quantizes normalized RGB components to the byte-precision hex `Rgb` used
+/// by the GPU renderer, so exported colors match the shader exactly.
+fn quantize_rgb(rgb: Vec3) -> Rgb {
+    let [r, g, b] = rgb
+        .to_array()
+        .map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    Rgb::new(r, g, b)
+}
+
+/// Inverse of [`quantize_rgb`]: normalizes byte-precision `Rgb` components to
+/// `0.0..=1.0` for gradient lerping.
+fn rgb_to_vec3(rgb: Rgb) -> Vec3 {
+    Vec3::from(rgb.to_array())
 }
 
 #[cfg(test)]
@@ -245,7 +235,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{ColorConfig, Config, Dimensions, GenerationConfig, Rgb};
+    use crate::{ColorConfig, Config, Dimensions, GenerationConfig};
 
     fn make_config(axiom: &str, line: LineColorConfig) -> Config {
         Config {
