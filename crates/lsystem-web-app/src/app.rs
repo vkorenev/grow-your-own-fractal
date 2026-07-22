@@ -1,6 +1,7 @@
 use crate::panels::grammar::GrammarRow;
 use crate::presets::max_iterations_for_editor_config;
 use crate::renderer::{CanvasRenderer, RebuildRenderOutcome, RenderStatus};
+use glam::{DVec2, Vec2};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
@@ -173,7 +174,7 @@ pub(crate) fn App() -> impl IntoView {
     let angle = Memo::new(move |_| editor_generation_config.with(|generation| generation.angle));
 
     let renderer: RendererState = StoredValue::new_local(None::<CanvasRenderer>);
-    let active_pointers = StoredValue::new(std::collections::HashMap::<i32, (f64, f64)>::new());
+    let active_pointers = StoredValue::new(std::collections::HashMap::<i32, DVec2>::new());
 
     let dimensions = Memo::new(move |_| editor_generation_config.with(|g| g.dimensions));
     let is_3d = Memo::new(move |_| matches!(dimensions.get(), Dimensions::ThreeD));
@@ -583,15 +584,14 @@ pub(crate) fn App() -> impl IntoView {
                             if map.len() >= 2 && !map.contains_key(&id) {
                                 map.clear();
                             }
-                            map.insert(id, (ev.client_x() as f64, ev.client_y() as f64));
+                            map.insert(id, DVec2::new(ev.client_x() as f64, ev.client_y() as f64));
                         });
                         if let Some(canvas) = canvas_ref.get_untracked() {
                             let _ = canvas.set_pointer_capture(id);
                         }
                     }
                     on:pointermove=move |ev: web_sys::PointerEvent| {
-                        let x = ev.client_x() as f64;
-                        let y = ev.client_y() as f64;
+                        let pos = DVec2::new(ev.client_x() as f64, ev.client_y() as f64);
                         let id = ev.pointer_id();
 
                         let (prev, other, len) = active_pointers.with_value(|map| {
@@ -600,26 +600,24 @@ pub(crate) fn App() -> impl IntoView {
                             (prev, other, map.len())
                         });
 
-                        let Some((prev_x, prev_y)) = prev else { return; };
+                        let Some(prev) = prev else { return; };
 
-                        active_pointers.update_value(|map| { map.insert(id, (x, y)); });
+                        active_pointers.update_value(|map| { map.insert(id, pos); });
 
                         let Some(canvas) = canvas_ref.get_untracked() else { return; };
 
                         if len == 1 {
-                            let dx = x - prev_x;
-                            let dy = y - prev_y;
+                            let delta = pos - prev;
                             with_renderer(canvas, renderer, recover_after_render,
-                                |r, c| r.drag_and_render(c, dx as f32, dy as f32));
-                        } else if let Some((ox, oy)) = other {
-                            let prev_dist = ((prev_x - ox).powi(2) + (prev_y - oy).powi(2)).sqrt();
+                                |r, c| r.drag_and_render(c, delta.as_vec2()));
+                        } else if let Some(other) = other {
+                            let prev_dist = prev.distance(other);
                             if prev_dist >= 1.0 {
-                                let new_dist = ((x - ox).powi(2) + (y - oy).powi(2)).sqrt();
+                                let new_dist = pos.distance(other);
                                 let factor = (new_dist / prev_dist) as f32;
-                                let mid_x = ((x + ox) / 2.0) as f32;
-                                let mid_y = ((y + oy) / 2.0) as f32;
+                                let mid = ((pos + other) * 0.5).as_vec2();
                                 with_renderer(canvas, renderer, recover_after_render,
-                                    |r, c| r.zoom_by_factor_and_render(c, factor, mid_x, mid_y));
+                                    |r, c| r.zoom_by_factor_and_render(c, factor, mid));
                             }
                         }
                     }
@@ -647,8 +645,7 @@ pub(crate) fn App() -> impl IntoView {
                                         c,
                                         ev.delta_y() as f32,
                                         ev.delta_mode(),
-                                        ev.client_x() as f32,
-                                        ev.client_y() as f32,
+                                        Vec2::new(ev.client_x() as f32, ev.client_y() as f32),
                                     )
                                 },
                             );

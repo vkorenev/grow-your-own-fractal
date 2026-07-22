@@ -91,25 +91,13 @@ impl<D: RenderDimension> UploadedScene<D> {
     pub fn total_segments(&self) -> u32 {
         self.total_segments
     }
-}
 
-impl UploadedScene<D2> {
-    pub fn bounds_min(&self) -> [f32; 2] {
-        self.bounds_min.to_array()
+    pub fn bounds_min(&self) -> D::Point {
+        self.bounds_min
     }
 
-    pub fn bounds_max(&self) -> [f32; 2] {
-        self.bounds_max.to_array()
-    }
-}
-
-impl UploadedScene<D3> {
-    pub fn bounds_min(&self) -> [f32; 3] {
-        self.bounds_min.to_array()
-    }
-
-    pub fn bounds_max(&self) -> [f32; 3] {
-        self.bounds_max.to_array()
+    pub fn bounds_max(&self) -> D::Point {
+        self.bounds_max
     }
 }
 
@@ -348,6 +336,7 @@ mod tests {
 
 #[cfg(all(test, feature = "png", not(target_arch = "wasm32")))]
 mod gpu_tests {
+    use glam::Vec2;
     use std::collections::BTreeMap;
 
     use futures_channel::oneshot;
@@ -540,8 +529,8 @@ mod gpu_tests {
             assert_eq!(scene.layout(), UploadedLayout::Plain);
             assert_eq!(scene.total_segments(), 1);
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
-            assert_eq!(scene.bounds_min(), [0.0, 0.0]);
-            assert_eq!(scene.bounds_max(), [1.0, 0.0]);
+            assert_eq!(scene.bounds_min(), Vec2::new(0.0, 0.0));
+            assert_eq!(scene.bounds_max(), Vec2::new(1.0, 0.0));
 
             let depth = generation(
                 Dimensions::TwoD,
@@ -576,8 +565,8 @@ mod gpu_tests {
             )
             .expect("empty upload");
             assert_eq!(scene.total_segments(), 0);
-            assert_eq!(scene.bounds_min(), [-1.0, -1.0]);
-            assert_eq!(scene.bounds_max(), [1.0, 1.0]);
+            assert_eq!(scene.bounds_min(), Vec2::new(-1.0, -1.0));
+            assert_eq!(scene.bounds_max(), Vec2::new(1.0, 1.0));
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
 
             let interpreter = generation(
@@ -746,7 +735,7 @@ mod gpu_tests {
                     scene.bounds_max(),
                     WIDTH,
                     HEIGHT,
-                    [0.0, 0.0],
+                    Vec2::ZERO,
                     1.0,
                 ),
             );

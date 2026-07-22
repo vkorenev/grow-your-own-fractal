@@ -3,11 +3,12 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use lsystem_core::{AnyCompiledGeneration, Config};
+use glam::{Vec2, Vec3};
+use lsystem_core::{AnyCompiledGeneration, Config, Rgb};
 
 use crate::camera::Camera;
 use crate::line_renderer::{ColorParams, LinePipeline2D, LinePipeline3D};
-use crate::lsystem_bridge::{color_params_from_config, viewport_transform};
+use crate::lsystem_bridge::{color_params_from_config, rgb_to_wgpu_color, viewport_transform};
 use crate::png_export::{ExportError, MAX_DIMENSION, MIN_DIMENSION};
 use crate::scene_upload::{SegmentLayout, upload_scene};
 
@@ -54,13 +55,13 @@ pub(crate) fn validate_height(height: u32) -> Result<(), ExportError> {
 enum SceneGeometry {
     TwoD {
         pipeline: LinePipeline2D,
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
+        bounds_min: Vec2,
+        bounds_max: Vec2,
     },
     ThreeD {
         pipeline: LinePipeline3D,
-        bounds_min: [f32; 3],
-        bounds_max: [f32; 3],
+        bounds_min: Vec3,
+        bounds_max: Vec3,
     },
 }
 
@@ -157,7 +158,7 @@ impl ExportScene {
                 bounds_max,
             } => pipeline.write_transform(
                 queue,
-                viewport_transform(*bounds_min, *bounds_max, width, height, [0.0, 0.0], 1.0),
+                viewport_transform(*bounds_min, *bounds_max, width, height, Vec2::ZERO, 1.0),
             ),
             SceneGeometry::ThreeD {
                 pipeline,
@@ -238,14 +239,13 @@ impl RenderTarget {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        background: [f32; 3],
+        background: Rgb,
         scene: &ExportScene,
     ) -> Result<Vec<u8>, ReadbackError> {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("export_encoder"),
         });
         {
-            let [r, g, b] = background;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("export_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -253,12 +253,7 @@ impl RenderTarget {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: r as f64,
-                            g: g as f64,
-                            b: b as f64,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(rgb_to_wgpu_color(background)),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

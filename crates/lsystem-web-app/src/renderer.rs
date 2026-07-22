@@ -3,13 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use web_time::{Duration, Instant};
 
+use glam::Vec2;
 use lsystem_core::{AnyCompiledGeneration, Config};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
     ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
     LinePipeline3D, SurfaceFrame,
 };
-use lsystem_renderer::lsystem_bridge::color_params_from_config;
+use lsystem_renderer::lsystem_bridge::{color_params_from_config, rgb_to_wgpu_color};
 use lsystem_renderer::scene_upload::{
     GenerationMethod, SceneUploadError, SegmentLayout, UploadedScene2D, UploadedScene3D,
     upload_scene,
@@ -186,13 +187,7 @@ impl CanvasRenderer {
             self.scene.max_topological_depth(),
         );
         self.hue_offset_degrees = 0.0;
-        let [r, g, b] = colors.background.to_array();
-        self.background = wgpu::Color {
-            r: r as f64,
-            g: g as f64,
-            b: b as f64,
-            a: 1.0,
-        };
+        self.background = rgb_to_wgpu_color(colors.background);
         let elapsed = started.elapsed();
         let template_iterations = match method {
             GenerationMethod::Stamped {
@@ -220,13 +215,7 @@ impl CanvasRenderer {
             self.scene.total_segments(),
             self.scene.max_topological_depth(),
         );
-        let [r, g, b] = colors.background.to_array();
-        self.background = wgpu::Color {
-            r: r as f64,
-            g: g as f64,
-            b: b as f64,
-            a: 1.0,
-        };
+        self.background = rgb_to_wgpu_color(colors.background);
         self.write_color_params();
         self.render(canvas)
     }
@@ -251,8 +240,7 @@ impl CanvasRenderer {
     pub fn drag_and_render(
         &mut self,
         canvas: &web_sys::HtmlCanvasElement,
-        css_dx: f32,
-        css_dy: f32,
+        css_delta: Vec2,
     ) -> RenderStatus {
         match &self.scene {
             ActiveScene::NoUpload => {}
@@ -261,8 +249,7 @@ impl CanvasRenderer {
                 let width = canvas.width().max(1);
                 let height = canvas.height().max(1);
                 self.camera.pan_by_pixels(
-                    css_dx * dpr,
-                    css_dy * dpr,
+                    css_delta * dpr,
                     scene.bounds_min(),
                     scene.bounds_max(),
                     width,
@@ -270,7 +257,7 @@ impl CanvasRenderer {
                 );
             }
             ActiveScene::ThreeD(_) => {
-                self.camera.orbit_by_pixels(css_dx, css_dy);
+                self.camera.orbit_by_pixels(css_delta);
             }
         }
         self.render(canvas)
@@ -281,31 +268,29 @@ impl CanvasRenderer {
         canvas: &web_sys::HtmlCanvasElement,
         delta_y: f32,
         delta_mode: u32,
-        client_x: f32,
-        client_y: f32,
+        client: Vec2,
     ) -> RenderStatus {
         let rect = canvas.get_bounding_client_rect();
         let pixel_delta_y = normalize_wheel_delta_y(delta_y, delta_mode, rect.height() as f32);
         let factor = 1.1_f32.powf(-pixel_delta_y / 100.0);
-        self.zoom_by_factor_and_render(canvas, factor, client_x, client_y)
+        self.zoom_by_factor_and_render(canvas, factor, client)
     }
 
     pub fn zoom_by_factor_and_render(
         &mut self,
         canvas: &web_sys::HtmlCanvasElement,
         factor: f32,
-        client_x: f32,
-        client_y: f32,
+        client: Vec2,
     ) -> RenderStatus {
         let (_, _, dpr) = sync_canvas_size(canvas);
         let rect = canvas.get_bounding_client_rect();
         match &self.scene {
             ActiveScene::NoUpload => {}
             ActiveScene::TwoD(scene) => {
-                let cursor = [
-                    (client_x as f64 - rect.left()) as f32 * dpr,
-                    (client_y as f64 - rect.top()) as f32 * dpr,
-                ];
+                let cursor = Vec2::new(
+                    (client.x as f64 - rect.left()) as f32 * dpr,
+                    (client.y as f64 - rect.top()) as f32 * dpr,
+                );
                 self.camera.zoom_toward_cursor(
                     factor,
                     cursor,

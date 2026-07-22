@@ -1,4 +1,4 @@
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec2, Vec3};
 
 use crate::line_renderer::{Mvp, Transform};
 use crate::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
@@ -9,7 +9,7 @@ const NEAR_CLIP_RATIO: f32 = 0.001;
 
 #[derive(Clone, Debug)]
 pub struct Camera {
-    pan: [f32; 2],
+    pan: Vec2,
     zoom: f32,
     pub azimuth: f32,
     pub elevation: f32,
@@ -23,7 +23,7 @@ pub struct Camera {
 impl Camera {
     pub fn new() -> Self {
         Self {
-            pan: [0.0, 0.0],
+            pan: Vec2::ZERO,
             zoom: 1.0,
             azimuth: 0.0,
             elevation: 20.0,
@@ -33,7 +33,7 @@ impl Camera {
     }
 
     pub fn reset(&mut self) {
-        self.pan = [0.0, 0.0];
+        self.pan = Vec2::ZERO;
         self.zoom = 1.0;
         self.azimuth = 0.0;
         self.elevation = 20.0;
@@ -45,25 +45,19 @@ impl Camera {
     /// Captures the current elevation as the new framing reference so the
     /// cylinder-fit framing stays stable for the current view.
     pub fn reset_position(&mut self) {
-        self.pan = [0.0, 0.0];
+        self.pan = Vec2::ZERO;
         self.zoom = 1.0;
         self.framing_elevation = self.elevation;
     }
 
-    fn px_per_unit(
-        &self,
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
-        width: u32,
-        height: u32,
-    ) -> f32 {
+    fn px_per_unit(&self, bounds_min: Vec2, bounds_max: Vec2, width: u32, height: u32) -> f32 {
         fitted_pixels_per_unit(bounds_min, bounds_max, width, height) * self.zoom
     }
 
     pub fn compute_transform(
         &self,
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
+        bounds_min: Vec2,
+        bounds_max: Vec2,
         width: u32,
         height: u32,
     ) -> Transform {
@@ -72,26 +66,24 @@ impl Camera {
 
     pub fn pan_by_pixels(
         &mut self,
-        screen_dx: f32,
-        screen_dy: f32,
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
+        screen_delta: Vec2,
+        bounds_min: Vec2,
+        bounds_max: Vec2,
         width: u32,
         height: u32,
     ) {
         let ppu = self.px_per_unit(bounds_min, bounds_max, width, height);
-        self.pan[0] += screen_dx / ppu;
         // screen Y increases downward, world Y increases upward
-        self.pan[1] -= screen_dy / ppu;
+        self.pan += screen_delta * Vec2::new(1.0, -1.0) / ppu;
     }
 
     /// Zoom by `factor` keeping the world point under `cursor_px` fixed in screen space.
     pub fn zoom_toward_cursor(
         &mut self,
         factor: f32,
-        cursor_px: [f32; 2],
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
+        cursor_px: Vec2,
+        bounds_min: Vec2,
+        bounds_max: Vec2,
         width: u32,
         height: u32,
     ) {
@@ -99,22 +91,25 @@ impl Camera {
             return;
         }
         let ppu = self.px_per_unit(bounds_min, bounds_max, width, height);
-        let sx = ppu * 2.0 / width as f32;
-        let sy = ppu * 2.0 / height as f32;
-        let ndc_x = cursor_px[0] / width as f32 * 2.0 - 1.0;
-        let ndc_y = 1.0 - cursor_px[1] / height as f32 * 2.0;
+        let s = Vec2::new(ppu * 2.0 / width as f32, ppu * 2.0 / height as f32);
+        let ndc = Vec2::new(
+            cursor_px.x / width as f32 * 2.0 - 1.0,
+            1.0 - cursor_px.y / height as f32 * 2.0,
+        );
         // Derived from: world_under_cursor = ndc / scale_old + center - pan.
         // After zoom: ndc = (world_under_cursor - center + pan_new) * scale_new.
         let clamped = (self.zoom * factor).clamp(1e-4, 1e4);
         let actual = clamped / self.zoom;
-        self.pan[0] -= ndc_x / sx * (1.0 - 1.0 / actual);
-        self.pan[1] -= ndc_y / sy * (1.0 - 1.0 / actual);
+        self.pan -= ndc / s * (1.0 - 1.0 / actual);
         self.zoom = clamped;
     }
 
     /// Orbits in response to a screen-space drag, making the model follow the pointer.
-    pub fn orbit_by_pixels(&mut self, dx: f32, dy: f32) {
-        self.orbit_by(-dx * ORBIT_DEG_PER_PIXEL, dy * ORBIT_DEG_PER_PIXEL);
+    pub fn orbit_by_pixels(&mut self, screen_delta: Vec2) {
+        self.orbit_by(
+            -screen_delta.x * ORBIT_DEG_PER_PIXEL,
+            screen_delta.y * ORBIT_DEG_PER_PIXEL,
+        );
     }
 
     pub fn orbit_by(&mut self, d_azimuth: f32, d_elevation: f32) {
@@ -138,15 +133,7 @@ impl Camera {
         }
     }
 
-    pub fn compute_mvp_3d(
-        &self,
-        bounds_min: [f32; 3],
-        bounds_max: [f32; 3],
-        width: u32,
-        height: u32,
-    ) -> Mvp {
-        let min = Vec3::from(bounds_min);
-        let max = Vec3::from(bounds_max);
+    pub fn compute_mvp_3d(&self, min: Vec3, max: Vec3, width: u32, height: u32) -> Mvp {
         let center = (min + max) * 0.5;
         let half_y = (max.y - min.y) * 0.5;
 
@@ -226,8 +213,8 @@ mod tests {
 
     const EPS: f32 = 1e-5;
     // Tall plant-like bounds used across several framing tests.
-    const TALL_MIN: [f32; 3] = [-10.0, 0.0, -10.0];
-    const TALL_MAX: [f32; 3] = [10.0, 60.0, 10.0];
+    const TALL_MIN: Vec3 = Vec3::new(-10.0, 0.0, -10.0);
+    const TALL_MAX: Vec3 = Vec3::new(10.0, 60.0, 10.0);
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < EPS
@@ -235,7 +222,8 @@ mod tests {
 
     #[test]
     fn transform_square_geo_square_viewport() {
-        let t = Camera::new().compute_transform([-1.0, -1.0], [1.0, 1.0], 100, 100);
+        let t =
+            Camera::new().compute_transform(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0), 100, 100);
         assert!(close(t.scale[0], 0.9), "scale x = {}", t.scale[0]);
         assert!(close(t.scale[1], 0.9), "scale y = {}", t.scale[1]);
         assert!(close(t.offset[0], 0.0));
@@ -244,28 +232,29 @@ mod tests {
 
     #[test]
     fn transform_center_maps_to_ndc_origin() {
-        let t = Camera::new().compute_transform([1.0, 0.0], [5.0, 4.0], 200, 200);
+        let t = Camera::new().compute_transform(Vec2::new(1.0, 0.0), Vec2::new(5.0, 4.0), 200, 200);
         assert!(close(3.0 * t.scale[0] + t.offset[0], 0.0));
         assert!(close(2.0 * t.scale[1] + t.offset[1], 0.0));
     }
 
     #[test]
     fn transform_width_constrained_fills_horizontal() {
-        let t = Camera::new().compute_transform([0.0, 0.0], [4.0, 1.0], 100, 100);
+        let t = Camera::new().compute_transform(Vec2::new(0.0, 0.0), Vec2::new(4.0, 1.0), 100, 100);
         assert!(close(4.0 * t.scale[0], 1.8));
         assert!(1.0 * t.scale[1] < 0.9);
     }
 
     #[test]
     fn transform_height_constrained_fills_vertical() {
-        let t = Camera::new().compute_transform([0.0, 0.0], [1.0, 4.0], 100, 100);
+        let t = Camera::new().compute_transform(Vec2::new(0.0, 0.0), Vec2::new(1.0, 4.0), 100, 100);
         assert!(close(4.0 * t.scale[1], 1.8));
         assert!(1.0 * t.scale[0] < 0.9);
     }
 
     #[test]
     fn transform_preserves_aspect_ratio_in_landscape_viewport() {
-        let t = Camera::new().compute_transform([-1.0, -1.0], [1.0, 1.0], 200, 100);
+        let t =
+            Camera::new().compute_transform(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0), 200, 100);
         let px_per_unit_x = t.scale[0] * 100.0;
         let px_per_unit_y = t.scale[1] * 50.0;
         assert!(close(px_per_unit_x, px_per_unit_y));
@@ -273,7 +262,7 @@ mod tests {
 
     #[test]
     fn transform_degenerate_point_geometry_stays_finite() {
-        let t = Camera::new().compute_transform([5.0, 3.0], [5.0, 3.0], 100, 100);
+        let t = Camera::new().compute_transform(Vec2::new(5.0, 3.0), Vec2::new(5.0, 3.0), 100, 100);
         assert!(t.scale[0].is_finite() && t.scale[0] > 0.0);
         assert!(t.scale[1].is_finite() && t.scale[1] > 0.0);
         assert!(close(5.0 * t.scale[0] + t.offset[0], 0.0));
@@ -282,12 +271,12 @@ mod tests {
 
     #[test]
     fn zoom_doubles_scale() {
-        let bounds_min = [-1.0f32, -1.0];
-        let bounds_max = [1.0f32, 1.0];
+        let bounds_min = Vec2::new(-1.0, -1.0);
+        let bounds_max = Vec2::new(1.0, 1.0);
         let (w, h) = (100u32, 100u32);
         let mut cam = Camera::new();
         let t_before = cam.compute_transform(bounds_min, bounds_max, w, h);
-        cam.zoom_toward_cursor(2.0, [50.0, 50.0], bounds_min, bounds_max, w, h);
+        cam.zoom_toward_cursor(2.0, Vec2::new(50.0, 50.0), bounds_min, bounds_max, w, h);
         let t_after = cam.compute_transform(bounds_min, bounds_max, w, h);
         assert!(close(t_after.scale[0], t_before.scale[0] * 2.0));
         assert!(close(t_after.scale[1], t_before.scale[1] * 2.0));
@@ -295,35 +284,35 @@ mod tests {
 
     #[test]
     fn zoom_preserves_world_point_under_cursor() {
-        let bounds_min = [-1.0f32, -1.0];
-        let bounds_max = [1.0f32, 1.0];
+        let bounds_min = Vec2::new(-1.0, -1.0);
+        let bounds_max = Vec2::new(1.0, 1.0);
         let (w, h) = (200u32, 200u32);
         // Cursor at top-right: pixel (150, 50) -> NDC (0.5, 0.5)
-        let cursor = [150.0f32, 50.0];
-        let ndc_x = cursor[0] / w as f32 * 2.0 - 1.0;
-        let ndc_y = 1.0 - cursor[1] / h as f32 * 2.0;
+        let cursor = Vec2::new(150.0, 50.0);
+        let ndc = Vec2::new(
+            cursor.x / w as f32 * 2.0 - 1.0,
+            1.0 - cursor.y / h as f32 * 2.0,
+        );
 
         let mut cam = Camera::new();
         let t_before = cam.compute_transform(bounds_min, bounds_max, w, h);
-        let wp_x = (ndc_x - t_before.offset[0]) / t_before.scale[0];
-        let wp_y = (ndc_y - t_before.offset[1]) / t_before.scale[1];
+        let wp = (ndc - t_before.offset) / t_before.scale;
 
         cam.zoom_toward_cursor(2.0, cursor, bounds_min, bounds_max, w, h);
         let t_after = cam.compute_transform(bounds_min, bounds_max, w, h);
 
-        let ndc_x_after = wp_x * t_after.scale[0] + t_after.offset[0];
-        let ndc_y_after = wp_y * t_after.scale[1] + t_after.offset[1];
-        assert!(close(ndc_x_after, ndc_x), "x: {ndc_x_after} != {ndc_x}");
-        assert!(close(ndc_y_after, ndc_y), "y: {ndc_y_after} != {ndc_y}");
+        let ndc_after = wp * t_after.scale + t_after.offset;
+        assert!(close(ndc_after.x, ndc.x), "x: {} != {}", ndc_after.x, ndc.x);
+        assert!(close(ndc_after.y, ndc.y), "y: {} != {}", ndc_after.y, ndc.y);
     }
 
     #[test]
     fn pan_right_moves_geometry_right() {
-        let bounds_min = [-1.0f32, -1.0];
-        let bounds_max = [1.0f32, 1.0];
+        let bounds_min = Vec2::new(-1.0, -1.0);
+        let bounds_max = Vec2::new(1.0, 1.0);
         let (w, h) = (100u32, 100u32);
         let mut cam = Camera::new();
-        cam.pan_by_pixels(10.0, 0.0, bounds_min, bounds_max, w, h);
+        cam.pan_by_pixels(Vec2::new(10.0, 0.0), bounds_min, bounds_max, w, h);
         let t = cam.compute_transform(bounds_min, bounds_max, w, h);
         let ndc_center = t.offset[0];
         assert!(ndc_center > 0.0, "ndc center x = {ndc_center}");
@@ -332,7 +321,12 @@ mod tests {
     #[test]
     fn mvp_3d_produces_finite_matrix() {
         let cam = Camera::new();
-        let mvp = cam.compute_mvp_3d([-5.0, -5.0, -5.0], [5.0, 5.0, 5.0], 800, 600);
+        let mvp = cam.compute_mvp_3d(
+            Vec3::new(-5.0, -5.0, -5.0),
+            Vec3::new(5.0, 5.0, 5.0),
+            800,
+            600,
+        );
         for column in mvp.matrix.to_cols_array_2d() {
             for v in column {
                 assert!(v.is_finite(), "MVP contains non-finite value: {v}");
@@ -353,29 +347,29 @@ mod tests {
     fn pixel_orbit_makes_model_follow_drag() {
         let mut cam = Camera::new();
 
-        cam.orbit_by_pixels(10.0, 5.0);
+        cam.orbit_by_pixels(Vec2::new(10.0, 5.0));
 
         assert!((cam.azimuth - -3.0).abs() < 1e-6);
         assert!((cam.elevation - 21.5).abs() < 1e-6);
     }
 
-    fn bounding_box_corners(min: [f32; 3], max: [f32; 3]) -> [[f32; 3]; 8] {
+    fn bounding_box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
         [
-            [min[0], min[1], min[2]],
-            [min[0], min[1], max[2]],
-            [min[0], max[1], min[2]],
-            [min[0], max[1], max[2]],
-            [max[0], min[1], min[2]],
-            [max[0], min[1], max[2]],
-            [max[0], max[1], min[2]],
-            [max[0], max[1], max[2]],
+            Vec3::new(min.x, min.y, min.z),
+            Vec3::new(min.x, min.y, max.z),
+            Vec3::new(min.x, max.y, min.z),
+            Vec3::new(min.x, max.y, max.z),
+            Vec3::new(max.x, min.y, min.z),
+            Vec3::new(max.x, min.y, max.z),
+            Vec3::new(max.x, max.y, min.z),
+            Vec3::new(max.x, max.y, max.z),
         ]
     }
 
-    fn all_corners_fit_in_frustum(mvp: &Mvp, min: [f32; 3], max: [f32; 3]) -> bool {
+    fn all_corners_fit_in_frustum(mvp: &Mvp, min: Vec3, max: Vec3) -> bool {
         let tolerance = 1.001;
         for corner in bounding_box_corners(min, max) {
-            let clip = mvp.matrix * glam::Vec4::new(corner[0], corner[1], corner[2], 1.0);
+            let clip = mvp.matrix * corner.extend(1.0);
             let ndc_x = clip.x / clip.w;
             let ndc_y = clip.y / clip.w;
             if ndc_x.abs() > tolerance || ndc_y.abs() > tolerance {
@@ -390,8 +384,8 @@ mod tests {
         // Wide box on a portrait (aspect=0.5) screen: horizontal FOV is narrower,
         // so projected-fit must use the horizontal constraint.
         let cam = Camera::new();
-        let min = [-10.0f32, -3.0, -3.0];
-        let max = [10.0f32, 3.0, 3.0];
+        let min = Vec3::new(-10.0, -3.0, -3.0);
+        let max = Vec3::new(10.0, 3.0, 3.0);
         let mvp = cam.compute_mvp_3d(min, max, 400, 800);
         assert!(
             all_corners_fit_in_frustum(&mvp, min, max),
@@ -402,8 +396,8 @@ mod tests {
     #[test]
     fn mvp_3d_landscape_viewport_fits_geometry() {
         let cam = Camera::new();
-        let min = [-5.0f32, -5.0, -5.0];
-        let max = [5.0f32, 5.0, 5.0];
+        let min = Vec3::new(-5.0, -5.0, -5.0);
+        let max = Vec3::new(5.0, 5.0, 5.0);
         let mvp = cam.compute_mvp_3d(min, max, 800, 600);
         assert!(
             all_corners_fit_in_frustum(&mvp, min, max),
@@ -422,7 +416,7 @@ mod tests {
         let max_ndc_y = bounding_box_corners(TALL_MIN, TALL_MAX)
             .iter()
             .map(|&c| {
-                let clip = mvp.matrix * glam::Vec4::new(c[0], c[1], c[2], 1.0);
+                let clip = mvp.matrix * c.extend(1.0);
                 (clip.y / clip.w).abs()
             })
             .fold(0.0f32, f32::max);
@@ -448,13 +442,9 @@ mod tests {
         );
     }
 
-    fn center_clip_w(cam: &Camera, min: [f32; 3], max: [f32; 3]) -> f32 {
-        let [cx, cy, cz] = [
-            (min[0] + max[0]) * 0.5,
-            (min[1] + max[1]) * 0.5,
-            (min[2] + max[2]) * 0.5,
-        ];
-        (cam.compute_mvp_3d(min, max, 800, 600).matrix * glam::Vec4::new(cx, cy, cz, 1.0)).w
+    fn center_clip_w(cam: &Camera, min: Vec3, max: Vec3) -> f32 {
+        let center = (min + max) * 0.5;
+        (cam.compute_mvp_3d(min, max, 800, 600).matrix * center.extend(1.0)).w
     }
 
     #[test]
@@ -519,8 +509,8 @@ mod tests {
     fn mvp_3d_cylinder_fits_corners_at_all_azimuths() {
         // The bounding cylinder framing must keep all AABB corners inside the
         // frustum at every azimuth during auto-rotation.
-        let min = [-8.0f32, 0.0, -6.0];
-        let max = [8.0f32, 50.0, 6.0]; // asymmetric XZ — worst case for AABB-only framing
+        let min = Vec3::new(-8.0, 0.0, -6.0);
+        let max = Vec3::new(8.0, 50.0, 6.0); // asymmetric XZ — worst case for AABB-only framing
         let mut cam = Camera::new();
         for az_step in 0..8 {
             cam.azimuth = az_step as f32 * 45.0;

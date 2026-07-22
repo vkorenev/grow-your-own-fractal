@@ -1,3 +1,4 @@
+use glam::{Vec2, Vec3};
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme, window};
@@ -31,24 +32,24 @@ const CANCELLATION_CHECK_INTERVAL: usize = 4096;
 enum SceneGeometry {
     TwoD {
         segments: Arc<Vec<Segment2D>>,
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
+        bounds_min: Vec2,
+        bounds_max: Vec2,
     },
     TwoDWithTopologicalDepth {
         segments: Arc<Vec<TopologicalDepthSegment2D>>,
-        bounds_min: [f32; 2],
-        bounds_max: [f32; 2],
+        bounds_min: Vec2,
+        bounds_max: Vec2,
         max_topological_depth: u32,
     },
     ThreeD {
         segments: Arc<Vec<Segment3D>>,
-        bounds_min: [f32; 3],
-        bounds_max: [f32; 3],
+        bounds_min: Vec3,
+        bounds_max: Vec3,
     },
     ThreeDWithTopologicalDepth {
         segments: Arc<Vec<TopologicalDepthSegment3D>>,
-        bounds_min: [f32; 3],
-        bounds_max: [f32; 3],
+        bounds_min: Vec3,
+        bounds_max: Vec3,
         max_topological_depth: u32,
     },
 }
@@ -92,8 +93,8 @@ impl SceneDimension for D2 {
     fn plain_geometry(data: SegmentData2D) -> SceneGeometry {
         SceneGeometry::TwoD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
         }
     }
 
@@ -101,8 +102,8 @@ impl SceneDimension for D2 {
         let max_topological_depth = data.max_topological_depth();
         SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
             max_topological_depth,
         }
     }
@@ -112,8 +113,8 @@ impl SceneDimension for D3 {
     fn plain_geometry(data: SegmentData3D) -> SceneGeometry {
         SceneGeometry::ThreeD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
         }
     }
 
@@ -121,8 +122,8 @@ impl SceneDimension for D3 {
         let max_topological_depth = data.max_topological_depth();
         SceneGeometry::ThreeDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min.to_array(),
-            bounds_max: data.bounds_max.to_array(),
+            bounds_min: data.bounds_min,
+            bounds_max: data.bounds_max,
             max_topological_depth,
         }
     }
@@ -172,7 +173,7 @@ impl Scene {
         self.camera.reset();
     }
 
-    pub(super) fn pan_by_pixels(&mut self, dx: f32, dy: f32, size: Size) {
+    pub(super) fn pan_by_pixels(&mut self, delta: Vec2, size: Size) {
         if let SceneGeometry::TwoD {
             bounds_min,
             bounds_max,
@@ -185,8 +186,7 @@ impl Scene {
         } = &self.geometry
         {
             self.camera.pan_by_pixels(
-                dx,
-                dy,
+                delta,
                 *bounds_min,
                 *bounds_max,
                 size.width.max(1.0) as u32,
@@ -195,8 +195,8 @@ impl Scene {
         }
     }
 
-    pub(super) fn orbit_by_pixels(&mut self, dx: f32, dy: f32) {
-        self.camera.orbit_by_pixels(dx, dy);
+    pub(super) fn orbit_by_pixels(&mut self, delta: Vec2) {
+        self.camera.orbit_by_pixels(delta);
     }
 
     pub(super) fn orbit_by(&mut self, d_az: f32, d_el: f32) {
@@ -226,7 +226,7 @@ impl Scene {
             } => {
                 self.camera.zoom_toward_cursor(
                     factor,
-                    [cursor.x, cursor.y],
+                    Vec2::new(cursor.x, cursor.y),
                     *bounds_min,
                     *bounds_max,
                     size.width.max(1.0) as u32,
@@ -473,8 +473,8 @@ impl Default for Scene {
         Self {
             geometry: SceneGeometry::TwoD {
                 segments: Arc::new(Vec::new()),
-                bounds_min: [-1.0, -1.0],
-                bounds_max: [1.0, 1.0],
+                bounds_min: Vec2::new(-1.0, -1.0),
+                bounds_max: Vec2::new(1.0, 1.0),
             },
             color_params: ColorParams::default(),
             hue_offset_degrees: 0.0,
@@ -582,14 +582,12 @@ impl shader::Program<Message> for FractalProgram {
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
                 let position = cursor_position(cursor)?;
                 let previous = state.last_cursor.replace(position).unwrap_or(position);
-                let dx = position.x - previous.x;
-                let dy = position.y - previous.y;
+                let delta = Vec2::new(position.x - previous.x, position.y - previous.y);
                 let msg = if state.orbit_dragging {
-                    Message::FractalOrbit { dx, dy }
+                    Message::FractalOrbit { delta }
                 } else {
                     Message::FractalPan {
-                        dx,
-                        dy,
+                        delta,
                         size: bounds.size(),
                     }
                 };

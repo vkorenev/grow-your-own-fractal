@@ -8,6 +8,7 @@ license.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+glam.workspace = true
 lsystem-core = { workspace = true, features = ["svg"] }
 lsystem-app-model = { workspace = true }
 lsystem-renderer = { workspace = true, features = ["png"] }
