@@ -1,169 +1,79 @@
-use glam::{Vec2, Vec3, Vec4};
-use lsystem_core::{LineColorConfig, Rgb, SegmentWithTopologicalDepth};
+use glam::{Vec2, Vec4};
+use lsystem_core::{
+    BoundingCylinder3D, Bounds2D, BoundsAccumulator, LineColorConfig, Rgb,
+    SegmentWithTopologicalDepth,
+};
 
 use crate::line_renderer::{
     ColorParams, RenderDimension, Segment2D, Segment3D, TopologicalDepthSegment2D,
     TopologicalDepthSegment3D, Transform,
 };
 
-/// Point operations used by renderer-local bounds accumulation.
-///
-/// Public only so `RenderDimension` can bound `Dimension::Point` with it;
-/// not intended for direct use outside the renderer.
-#[doc(hidden)]
-pub trait BoundsPoint: Copy + std::ops::Add<Output = Self> {
-    const INFINITY: Self;
-    const NEG_INFINITY: Self;
-
-    fn min(self, other: Self) -> Self;
-    fn max(self, other: Self) -> Self;
-    /// Checking a single component suffices: `Bounds` seeds every component
-    /// with infinity and any update makes them all finite together.
-    fn is_unbounded(self) -> bool;
-    fn fallback() -> (Self, Self);
-}
-
-impl BoundsPoint for Vec2 {
-    const INFINITY: Self = Vec2::INFINITY;
-    const NEG_INFINITY: Self = Vec2::NEG_INFINITY;
-
-    fn min(self, other: Self) -> Self {
-        Vec2::min(self, other)
-    }
-
-    fn max(self, other: Self) -> Self {
-        Vec2::max(self, other)
-    }
-
-    fn is_unbounded(self) -> bool {
-        self.x.is_infinite()
-    }
-
-    fn fallback() -> (Self, Self) {
-        (Vec2::splat(-1.0), Vec2::splat(1.0))
-    }
-}
-
-impl BoundsPoint for Vec3 {
-    const INFINITY: Self = Vec3::INFINITY;
-    const NEG_INFINITY: Self = Vec3::NEG_INFINITY;
-
-    fn min(self, other: Self) -> Self {
-        Vec3::min(self, other)
-    }
-
-    fn max(self, other: Self) -> Self {
-        Vec3::max(self, other)
-    }
-
-    fn is_unbounded(self) -> bool {
-        self.x.is_infinite()
-    }
-
-    fn fallback() -> (Self, Self) {
-        (Vec3::splat(-1.0), Vec3::splat(1.0))
-    }
-}
-
-/// Axis-aligned bounds accumulator over segment endpoints.
-pub(crate) struct Bounds<P: BoundsPoint> {
-    min: P,
-    max: P,
-}
-
-impl<P: BoundsPoint> Bounds<P> {
-    pub(crate) fn new() -> Self {
-        Self {
-            min: P::INFINITY,
-            max: P::NEG_INFINITY,
-        }
-    }
-
-    pub(crate) fn update(&mut self, a: P, b: P) {
-        self.min = self.min.min(a).min(b);
-        self.max = self.max.max(a).max(b);
-    }
-
-    /// Falls back to the unit box when no endpoints were seen, so empty
-    /// geometry still yields a usable viewport.
-    pub(crate) fn finish(self) -> (P, P) {
-        if self.min.is_unbounded() {
-            P::fallback()
-        } else {
-            (self.min, self.max)
-        }
-    }
-}
-
 /// Segment records collected for a native scene, with their bounds.
 ///
-/// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
-/// geometry they fall back to the unit box.
-pub struct CollectedSegmentData<R, P> {
+/// `bounds` contains every point in `segments`; for empty geometry it falls
+/// back to the renderer's unit bounds for the matching dimension.
+pub struct CollectedSegmentData<R, B> {
     pub segments: Vec<R>,
-    pub bounds_min: P,
-    pub bounds_max: P,
+    pub bounds: B,
 }
 
 /// Like `CollectedSegmentData`, plus the maximum topological depth seen
 /// across `segments`.
 ///
-/// `bounds_min`/`bounds_max` bound every point in `segments`; for empty
-/// geometry they fall back to the unit box.
-pub struct CollectedDepthSegmentData<R, P> {
+/// `bounds` contains every point in `segments`; for empty geometry it falls
+/// back to the renderer's unit bounds for the matching dimension.
+pub struct CollectedDepthSegmentData<R, B> {
     pub segments: Vec<R>,
-    pub bounds_min: P,
-    pub bounds_max: P,
+    pub bounds: B,
     max_topological_depth: u32,
 }
 
-impl<R, P> CollectedDepthSegmentData<R, P> {
+impl<R, B> CollectedDepthSegmentData<R, B> {
     pub fn max_topological_depth(&self) -> u32 {
         self.max_topological_depth
     }
 }
 
-pub type SegmentData2D = CollectedSegmentData<Segment2D, Vec2>;
-pub type SegmentData3D = CollectedSegmentData<Segment3D, Vec3>;
-pub type TopologicalDepthSegmentData2D = CollectedDepthSegmentData<TopologicalDepthSegment2D, Vec2>;
-pub type TopologicalDepthSegmentData3D = CollectedDepthSegmentData<TopologicalDepthSegment3D, Vec3>;
+pub type SegmentData2D = CollectedSegmentData<Segment2D, Bounds2D>;
+pub type SegmentData3D = CollectedSegmentData<Segment3D, BoundingCylinder3D>;
+pub type TopologicalDepthSegmentData2D =
+    CollectedDepthSegmentData<TopologicalDepthSegment2D, Bounds2D>;
+pub type TopologicalDepthSegmentData3D =
+    CollectedDepthSegmentData<TopologicalDepthSegment3D, BoundingCylinder3D>;
 
-struct SegmentCollector<R, P: BoundsPoint> {
-    bounds: Bounds<P>,
+struct SegmentCollector<R, D: RenderDimension> {
+    bounds: D::BoundsAccumulator,
     max_topological_depth: u32,
     segments: Vec<R>,
 }
 
-impl<R, P: BoundsPoint> SegmentCollector<R, P> {
+impl<R, D: RenderDimension> SegmentCollector<R, D> {
     fn new() -> Self {
         Self {
-            bounds: Bounds::new(),
+            bounds: D::BoundsAccumulator::default(),
             max_topological_depth: 0,
             segments: Vec::new(),
         }
     }
 
-    fn push(&mut self, [a, b]: [P; 2], topological_depth: u32, record: R) {
-        self.bounds.update(a, b);
+    fn push(&mut self, [a, b]: [D::Point; 2], topological_depth: u32, record: R) {
+        self.bounds.include(a);
+        self.bounds.include(b);
         self.max_topological_depth = self.max_topological_depth.max(topological_depth);
         self.segments.push(record);
     }
 
-    fn finish(self) -> (Vec<R>, P, P, u32) {
-        let (bounds_min, bounds_max) = self.bounds.finish();
-        (
-            self.segments,
-            bounds_min,
-            bounds_max,
-            self.max_topological_depth,
-        )
+    fn finish(self) -> (Vec<R>, D::Bounds, u32) {
+        let bounds = self.bounds.finish().unwrap_or_else(D::empty_scene_bounds);
+        (self.segments, bounds, self.max_topological_depth)
     }
 }
 
 /// Incremental plain-segment builder for callers that need work between
 /// pushes, such as cancellation checks.
 pub struct PlainSegmentDataBuilder<D: RenderDimension> {
-    collector: SegmentCollector<D::PlainRecord, D::Point>,
+    collector: SegmentCollector<D::PlainRecord, D>,
 }
 
 impl<D: RenderDimension> PlainSegmentDataBuilder<D> {
@@ -177,13 +87,9 @@ impl<D: RenderDimension> PlainSegmentDataBuilder<D> {
         self.collector.push(points, 0, D::plain_record(a, b));
     }
 
-    pub fn finish(self) -> CollectedSegmentData<D::PlainRecord, D::Point> {
-        let (segments, bounds_min, bounds_max, _) = self.collector.finish();
-        CollectedSegmentData {
-            segments,
-            bounds_min,
-            bounds_max,
-        }
+    pub fn finish(self) -> CollectedSegmentData<D::PlainRecord, D::Bounds> {
+        let (segments, bounds, _) = self.collector.finish();
+        CollectedSegmentData { segments, bounds }
     }
 }
 
@@ -195,7 +101,7 @@ impl<D: RenderDimension> Default for PlainSegmentDataBuilder<D> {
 
 /// Incremental topological-depth segment builder.
 pub struct DepthSegmentDataBuilder<D: RenderDimension> {
-    collector: SegmentCollector<D::DepthRecord, D::Point>,
+    collector: SegmentCollector<D::DepthRecord, D>,
 }
 
 impl<D: RenderDimension> DepthSegmentDataBuilder<D> {
@@ -214,12 +120,11 @@ impl<D: RenderDimension> DepthSegmentDataBuilder<D> {
         );
     }
 
-    pub fn finish(self) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
-        let (segments, bounds_min, bounds_max, max_topological_depth) = self.collector.finish();
+    pub fn finish(self) -> CollectedDepthSegmentData<D::DepthRecord, D::Bounds> {
+        let (segments, bounds, max_topological_depth) = self.collector.finish();
         CollectedDepthSegmentData {
             segments,
-            bounds_min,
-            bounds_max,
+            bounds,
             max_topological_depth,
         }
     }
@@ -286,30 +191,32 @@ pub fn rgb_to_wgpu_color(color: Rgb) -> wgpu::Color {
     }
 }
 
-pub fn fitted_pixels_per_unit(bounds_min: Vec2, bounds_max: Vec2, width: u32, height: u32) -> f32 {
-    let geom = (bounds_max - bounds_min).max(Vec2::ONE);
-    (width as f32 / geom.x).min(height as f32 / geom.y) * 0.9
+pub fn fitted_pixels_per_unit(bounds: Bounds2D, width: u32, height: u32) -> f32 {
+    let geom_w = (bounds.max.x - bounds.min.x).max(1.0);
+    let geom_h = (bounds.max.y - bounds.min.y).max(1.0);
+    (width as f32 / geom_w).min(height as f32 / geom_h) * 0.9
 }
 
 pub fn viewport_transform(
-    bounds_min: Vec2,
-    bounds_max: Vec2,
+    bounds: Bounds2D,
     width: u32,
     height: u32,
     pan: Vec2,
     zoom: f32,
 ) -> Transform {
-    let center = (bounds_min + bounds_max) * 0.5;
-    let ppu = fitted_pixels_per_unit(bounds_min, bounds_max, width, height) * zoom;
-    let scale = Vec2::new(ppu * 2.0 / width as f32, ppu * 2.0 / height as f32);
+    let center = (bounds.min + bounds.max) * 0.5;
+    let ppu = fitted_pixels_per_unit(bounds, width, height) * zoom;
+    let sx = ppu * 2.0 / width as f32;
+    let sy = ppu * 2.0 / height as f32;
     Transform {
-        scale,
-        offset: (pan - center) * scale,
+        scale: Vec2::new(sx, sy),
+        offset: Vec2::new((-center.x + pan[0]) * sx, (-center.y + pan[1]) * sy),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use glam::Vec3;
     use lsystem_core::{
         AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, D2,
         D3, Dimensions, GenerationConfig, GenerationDimension, Rgb, Segment2DWithTopologicalDepth,
@@ -324,7 +231,7 @@ mod tests {
 
     fn collect_plain_segments<D: RenderDimension>(
         segments: impl Iterator<Item = [D::Point; 2]>,
-    ) -> CollectedSegmentData<D::PlainRecord, D::Point> {
+    ) -> CollectedSegmentData<D::PlainRecord, D::Bounds> {
         let mut builder = PlainSegmentDataBuilder::<D>::new();
         segments.for_each(|segment| builder.push_segment(segment));
         builder.finish()
@@ -332,7 +239,7 @@ mod tests {
 
     fn collect_depth_segments<D: RenderDimension>(
         segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
-    ) -> CollectedDepthSegmentData<D::DepthRecord, D::Point> {
+    ) -> CollectedDepthSegmentData<D::DepthRecord, D::Bounds> {
         let mut builder = DepthSegmentDataBuilder::<D>::new();
         segments.for_each(|segment| builder.push_segment(segment));
         builder.finish()
@@ -384,10 +291,23 @@ mod tests {
         (a - b).abs() < EPS
     }
 
-    /// Per-axis approximate equality over the first `axis_count` components,
-    /// mirroring [`close`] for generic `D::Point` values.
-    fn axis_close<P: Index<usize, Output = f32>>(a: P, b: P, axis_count: usize, eps: f32) -> bool {
-        (0..axis_count).all(|axis| (a[axis] - b[axis]).abs() < eps)
+    trait TestBounds {
+        fn close_to(self, other: Self, eps: f32) -> bool;
+    }
+
+    impl TestBounds for Bounds2D {
+        fn close_to(self, other: Self, eps: f32) -> bool {
+            self.min.abs_diff_eq(other.min, eps) && self.max.abs_diff_eq(other.max, eps)
+        }
+    }
+
+    impl TestBounds for BoundingCylinder3D {
+        fn close_to(self, other: Self, eps: f32) -> bool {
+            self.center_xz.abs_diff_eq(other.center_xz, eps)
+                && (self.radius - other.radius).abs() < eps
+                && (self.min_y - other.min_y).abs() < eps
+                && (self.max_y - other.max_y).abs() < eps
+        }
     }
 
     /// Euclidean distance over the first `axis_count` components of a
@@ -422,10 +342,7 @@ mod tests {
         let interpreted = collect_plain_segments::<D2>(compile_2d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
-        for axis in 0..2 {
-            assert!((stamped.bounds_min[axis] - interpreted.bounds_min[axis]).abs() < 1e-3);
-            assert!((stamped.bounds_max[axis] - interpreted.bounds_max[axis]).abs() < 1e-3);
-        }
+        assert!(stamped.bounds.close_to(interpreted.bounds, 1e-3));
         for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
             assert!(s.start.distance(i.start) < 1e-3);
             assert!(s.end.distance(i.end) < 1e-3);
@@ -447,10 +364,7 @@ mod tests {
         let interpreted = collect_plain_segments::<D3>(compile_3d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
-        for axis in 0..3 {
-            assert!((stamped.bounds_min[axis] - interpreted.bounds_min[axis]).abs() < 1e-3);
-            assert!((stamped.bounds_max[axis] - interpreted.bounds_max[axis]).abs() < 1e-3);
-        }
+        assert!(stamped.bounds.close_to(interpreted.bounds, 1e-3));
         for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
             assert!(s.start.distance(i.start) < 1e-3);
             assert!(s.end.distance(i.end) < 1e-3);
@@ -478,14 +392,12 @@ mod tests {
 
         let data = collect_plain_segments::<D2>(set.segments());
         assert!(data.segments.is_empty());
-        assert_eq!(data.bounds_min, Vec2::splat(-1.0));
-        assert_eq!(data.bounds_max, Vec2::splat(1.0));
+        assert_eq!(data.bounds, D2::empty_scene_bounds());
 
         let depth_data = collect_depth_segments::<D2>(set.depth_segments());
         assert!(depth_data.segments.is_empty());
         assert_eq!(depth_data.max_topological_depth(), 0);
-        assert_eq!(depth_data.bounds_min, Vec2::splat(-1.0));
-        assert_eq!(depth_data.bounds_max, Vec2::splat(1.0));
+        assert_eq!(depth_data.bounds, D2::empty_scene_bounds());
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -499,6 +411,7 @@ mod tests {
     ) where
         D: RenderDimension + TemplateDimension + GenerationDimension,
         D::Point: Index<usize, Output = f32>,
+        D::Bounds: TestBounds,
     {
         let stamped = collect_depth_segments::<D>(set.depth_segments());
         let interpreted = collect_depth_segments::<D>(generation.depth_segments());
@@ -508,18 +421,7 @@ mod tests {
             stamped.max_topological_depth(),
             interpreted.max_topological_depth()
         );
-        assert!(axis_close(
-            stamped.bounds_min,
-            interpreted.bounds_min,
-            axis_count,
-            1e-3
-        ));
-        assert!(axis_close(
-            stamped.bounds_max,
-            interpreted.bounds_max,
-            axis_count,
-            1e-3
-        ));
+        assert!(stamped.bounds.close_to(interpreted.bounds, 1e-3));
         for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
             assert_eq!(depth_of(s), depth_of(i));
             assert!(axis_distance(start_of(s), start_of(i), axis_count) < 1e-3);
@@ -734,32 +636,28 @@ mod tests {
     #[test]
     fn empty_geometry_uses_fallback_bounds() {
         let config = cfg("A");
-        let SegmentData2D {
-            segments,
-            bounds_min,
-            bounds_max,
-        } = collect_plain_segments::<D2>(compile_2d(&config).segments());
+        let SegmentData2D { segments, bounds } =
+            collect_plain_segments::<D2>(compile_2d(&config).segments());
         assert!(segments.is_empty());
-        assert!(close(bounds_min[0], -1.0) && close(bounds_min[1], -1.0));
-        assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 1.0));
+        assert_eq!(bounds, D2::empty_scene_bounds());
     }
 
     fn check_empty_depth_fallback<D: RenderDimension>(
-        data: CollectedDepthSegmentData<D::DepthRecord, D::Point>,
-        expected_min: D::Point,
-        expected_max: D::Point,
-    ) {
+        data: CollectedDepthSegmentData<D::DepthRecord, D::Bounds>,
+        expected: D::Bounds,
+    ) where
+        D::Bounds: PartialEq + std::fmt::Debug,
+    {
         assert!(data.segments.is_empty());
         assert_eq!(data.max_topological_depth(), 0);
-        assert_eq!(data.bounds_min, expected_min);
-        assert_eq!(data.bounds_max, expected_max);
+        assert_eq!(data.bounds, expected);
     }
 
     #[test]
     fn empty_depth_geometry_uses_fallback_bounds_and_zero_max_depth() {
         let config = cfg("A");
         let data = collect_depth_segments::<D2>(compile_2d(&config).depth_segments());
-        check_empty_depth_fallback::<D2>(data, Vec2::splat(-1.0), Vec2::splat(1.0));
+        check_empty_depth_fallback::<D2>(data, D2::empty_scene_bounds());
     }
 
     #[test]
@@ -775,47 +673,39 @@ mod tests {
         )
         .expect("balanced config");
         let data = collect_depth_segments::<D3>(compile_3d(&config).depth_segments());
-        check_empty_depth_fallback::<D3>(data, Vec3::splat(-1.0), Vec3::splat(1.0));
+        check_empty_depth_fallback::<D3>(data, D3::empty_scene_bounds());
     }
 
     #[test]
     fn single_segment_produces_one_segment_record_and_tight_bounds() {
         let config = cfg("F");
-        let SegmentData2D {
-            segments,
-            bounds_min,
-            bounds_max,
-        } = collect_plain_segments::<D2>(compile_2d(&config).segments());
+        let SegmentData2D { segments, bounds } =
+            collect_plain_segments::<D2>(compile_2d(&config).segments());
         assert_eq!(segments.len(), 1);
         assert!(close(segments[0].start[0], 0.0) && close(segments[0].start[1], 0.0));
         assert!(close(segments[0].end[0], 1.0) && close(segments[0].end[1], 0.0));
-        assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
-        assert!(close(bounds_max[0], 1.0) && close(bounds_max[1], 0.0));
+        assert_eq!(bounds.min, Vec2::ZERO);
+        assert_eq!(bounds.max, Vec2::X);
     }
 
     #[test]
     fn bounds_are_tight_over_all_segments() {
         let config = cfg("F+F-F");
-        let SegmentData2D {
-            segments,
-            bounds_min,
-            bounds_max,
-        } = collect_plain_segments::<D2>(compile_2d(&config).segments());
+        let SegmentData2D { segments, bounds } =
+            collect_plain_segments::<D2>(compile_2d(&config).segments());
         assert_eq!(segments.len(), 3);
-        assert!(close(bounds_min[0], 0.0) && close(bounds_min[1], 0.0));
-        assert!(close(bounds_max[0], 2.0) && close(bounds_max[1], 1.0));
+        assert_eq!(bounds.min, Vec2::ZERO);
+        assert_eq!(bounds.max, Vec2::new(2.0, 1.0));
     }
 
     fn check_topological_depth_segments<D>(
-        data: CollectedDepthSegmentData<D::DepthRecord, D::Point>,
-        axis_count: usize,
+        data: CollectedDepthSegmentData<D::DepthRecord, D::Bounds>,
         depth_of: impl Fn(&D::DepthRecord) -> u32,
         expected_depths: [u32; 3],
-        expected_min: D::Point,
-        expected_max: D::Point,
+        expected_bounds: D::Bounds,
     ) where
         D: RenderDimension,
-        D::Point: Index<usize, Output = f32>,
+        D::Bounds: TestBounds,
     {
         assert_eq!(data.segments.len(), 3);
         for (segment, expected) in data.segments.iter().zip(expected_depths) {
@@ -825,8 +715,7 @@ mod tests {
             data.max_topological_depth(),
             expected_depths.into_iter().max().unwrap()
         );
-        assert!(axis_close(data.bounds_min, expected_min, axis_count, EPS));
-        assert!(axis_close(data.bounds_max, expected_max, axis_count, EPS));
+        assert!(data.bounds.close_to(expected_bounds, EPS));
     }
 
     #[test]
@@ -835,11 +724,12 @@ mod tests {
         let data = collect_depth_segments::<D2>(compile_2d(&config).depth_segments());
         check_topological_depth_segments::<D2>(
             data,
-            2,
             |s| s.topological_depth,
             [0, 1, 1],
-            Vec2::new(0.0, 0.0),
-            Vec2::new(2.0, 1.0),
+            Bounds2D {
+                min: Vec2::ZERO,
+                max: Vec2::new(2.0, 1.0),
+            },
         );
     }
 
@@ -858,19 +748,24 @@ mod tests {
         let data = collect_depth_segments::<D3>(compile_3d(&config).depth_segments());
         check_topological_depth_segments::<D3>(
             data,
-            3,
             |s| s.topological_depth,
             [0, 1, 1],
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(2.0, 1.0, 0.0),
+            BoundingCylinder3D {
+                center_xz: Vec2::new(1.0, 0.0),
+                radius: 1.0,
+                min_y: 0.0,
+                max_y: 1.0,
+            },
         );
     }
 
     #[test]
     fn viewport_transform_fits_and_centers_bounds() {
         let t = viewport_transform(
-            Vec2::new(1.0, 0.0),
-            Vec2::new(5.0, 4.0),
+            Bounds2D {
+                min: Vec2::new(1.0, 0.0),
+                max: Vec2::new(5.0, 4.0),
+            },
             200,
             200,
             Vec2::ZERO,
@@ -885,8 +780,10 @@ mod tests {
     #[test]
     fn viewport_transform_keeps_degenerate_bounds_finite() {
         let t = viewport_transform(
-            Vec2::new(5.0, 3.0),
-            Vec2::new(5.0, 3.0),
+            Bounds2D {
+                min: Vec2::new(5.0, 3.0),
+                max: Vec2::new(5.0, 3.0),
+            },
             100,
             100,
             Vec2::ZERO,

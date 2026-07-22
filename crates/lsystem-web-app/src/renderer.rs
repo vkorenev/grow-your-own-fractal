@@ -248,13 +248,8 @@ impl CanvasRenderer {
                 let (_, _, dpr) = sync_canvas_size(canvas);
                 let width = canvas.width().max(1);
                 let height = canvas.height().max(1);
-                self.camera.pan_by_pixels(
-                    css_delta * dpr,
-                    scene.bounds_min(),
-                    scene.bounds_max(),
-                    width,
-                    height,
-                );
+                self.camera
+                    .pan_by_pixels(css_delta * dpr, scene.bounds(), width, height);
             }
             ActiveScene::ThreeD(_) => {
                 self.camera.orbit_by_pixels(css_delta);
@@ -294,8 +289,7 @@ impl CanvasRenderer {
                 self.camera.zoom_toward_cursor(
                     factor,
                     cursor,
-                    scene.bounds_min(),
-                    scene.bounds_max(),
+                    scene.bounds(),
                     canvas.width().max(1),
                     canvas.height().max(1),
                 );
@@ -389,23 +383,15 @@ impl CanvasRenderer {
             ActiveScene::TwoD(scene) => {
                 self.pipeline_2d.write_transform(
                     &self.gpu.queue,
-                    self.camera.compute_transform(
-                        scene.bounds_min(),
-                        scene.bounds_max(),
-                        width.max(1),
-                        height.max(1),
-                    ),
+                    self.camera
+                        .compute_transform(scene.bounds(), width.max(1), height.max(1)),
                 );
             }
             ActiveScene::ThreeD(scene) => {
                 self.pipeline_3d.write_mvp(
                     &self.gpu.queue,
-                    self.camera.compute_mvp_3d(
-                        scene.bounds_min(),
-                        scene.bounds_max(),
-                        width.max(1),
-                        height.max(1),
-                    ),
+                    self.camera
+                        .compute_mvp_3d(scene.bounds(), width.max(1), height.max(1)),
                 );
             }
         }

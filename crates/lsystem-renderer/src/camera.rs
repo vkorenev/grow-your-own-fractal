@@ -1,4 +1,5 @@
 use glam::{Quat, Vec2, Vec3};
+use lsystem_core::{BoundingCylinder3D, Bounds2D};
 
 use crate::line_renderer::{Mvp, Transform};
 use crate::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
@@ -15,8 +16,8 @@ pub struct Camera {
     pub elevation: f32,
     pub roll: f32,
     /// Elevation at the time of the last `reset_position` call; determines the
-    /// framing distance for the bounding square prism.  Azimuth is not needed
-    /// because the prism is azimuth-symmetric.
+    /// framing distance for the bounding cylinder. Azimuth is not needed
+    /// because the cylinder is azimuth-symmetric.
     framing_elevation: f32,
 }
 
@@ -50,29 +51,16 @@ impl Camera {
         self.framing_elevation = self.elevation;
     }
 
-    fn px_per_unit(&self, bounds_min: Vec2, bounds_max: Vec2, width: u32, height: u32) -> f32 {
-        fitted_pixels_per_unit(bounds_min, bounds_max, width, height) * self.zoom
+    fn px_per_unit(&self, bounds: Bounds2D, width: u32, height: u32) -> f32 {
+        fitted_pixels_per_unit(bounds, width, height) * self.zoom
     }
 
-    pub fn compute_transform(
-        &self,
-        bounds_min: Vec2,
-        bounds_max: Vec2,
-        width: u32,
-        height: u32,
-    ) -> Transform {
-        viewport_transform(bounds_min, bounds_max, width, height, self.pan, self.zoom)
+    pub fn compute_transform(&self, bounds: Bounds2D, width: u32, height: u32) -> Transform {
+        viewport_transform(bounds, width, height, self.pan, self.zoom)
     }
 
-    pub fn pan_by_pixels(
-        &mut self,
-        screen_delta: Vec2,
-        bounds_min: Vec2,
-        bounds_max: Vec2,
-        width: u32,
-        height: u32,
-    ) {
-        let ppu = self.px_per_unit(bounds_min, bounds_max, width, height);
+    pub fn pan_by_pixels(&mut self, screen_delta: Vec2, bounds: Bounds2D, width: u32, height: u32) {
+        let ppu = self.px_per_unit(bounds, width, height);
         // screen Y increases downward, world Y increases upward
         self.pan += screen_delta * Vec2::new(1.0, -1.0) / ppu;
     }
@@ -82,25 +70,26 @@ impl Camera {
         &mut self,
         factor: f32,
         cursor_px: Vec2,
-        bounds_min: Vec2,
-        bounds_max: Vec2,
+        bounds: Bounds2D,
         width: u32,
         height: u32,
     ) {
         if factor <= 0.0 {
             return;
         }
-        let ppu = self.px_per_unit(bounds_min, bounds_max, width, height);
-        let s = Vec2::new(ppu * 2.0 / width as f32, ppu * 2.0 / height as f32);
+        let ppu = self.px_per_unit(bounds, width, height);
+        let sx = ppu * 2.0 / width as f32;
+        let sy = ppu * 2.0 / height as f32;
         let ndc = Vec2::new(
             cursor_px.x / width as f32 * 2.0 - 1.0,
             1.0 - cursor_px.y / height as f32 * 2.0,
         );
+        let scale = Vec2::new(sx, sy);
         // Derived from: world_under_cursor = ndc / scale_old + center - pan.
         // After zoom: ndc = (world_under_cursor - center + pan_new) * scale_new.
         let clamped = (self.zoom * factor).clamp(1e-4, 1e4);
         let actual = clamped / self.zoom;
-        self.pan -= ndc / s * (1.0 - 1.0 / actual);
+        self.pan -= ndc / scale * (1.0 - 1.0 / actual);
         self.zoom = clamped;
     }
 
@@ -133,46 +122,43 @@ impl Camera {
         }
     }
 
-    pub fn compute_mvp_3d(&self, min: Vec3, max: Vec3, width: u32, height: u32) -> Mvp {
-        let center = (min + max) * 0.5;
-        let half_y = (max.y - min.y) * 0.5;
-
-        // Bounding cylinder centred on the AABB XZ centre.  The radius is the
-        // XZ diagonal of the half-extents, which is the farthest any AABB corner
-        // can be from the centre along any horizontal direction.  Framing is done
-        // against the circumscribed square prism (cyl_half below) rather than the
-        // cylinder surface itself, which is conservative but keeps framing
-        // distance independent of azimuth so the scene never clips during
-        // auto-rotation regardless of shape.
-        let hx = (max.x - min.x) * 0.5;
-        let hz = (max.z - min.z) * 0.5;
-        let r_cyl = hx.hypot(hz);
+    pub fn compute_mvp_3d(&self, bounds: BoundingCylinder3D, width: u32, height: u32) -> Mvp {
+        // `center_xz.y` is world Z, not world Y.
+        let center = Vec3::new(
+            bounds.center_xz.x,
+            (bounds.min_y + bounds.max_y) * 0.5,
+            bounds.center_xz.y,
+        );
+        let half_y = (bounds.max_y - bounds.min_y) * 0.5;
 
         // A cylinder is azimuth-symmetric, so evaluate at faz=0 (right = X,
         // eye toward +Z) using only the captured elevation.
         let fel = self.framing_elevation.to_radians();
         let (fel_sin, fel_cos) = fel.sin_cos();
         let framing_eye_dir = Vec3::new(0.0, fel_sin, fel_cos);
-        let framing_up = Vec3::new(0.0, fel_cos, -fel_sin);
-        // Use r_cyl for both horizontal extents so any azimuth is covered.
-        let cyl_half = Vec3::new(r_cyl, half_y, r_cyl);
+        let framing_roll = Quat::from_axis_angle(framing_eye_dir, self.roll.to_radians());
+        let framing_right = framing_roll * Vec3::X;
+        let framing_up = framing_roll * Vec3::new(0.0, fel_cos, -fel_sin);
 
         let aspect = (width as f32 / height as f32).max(0.001);
         let half_fov_y_tan = (FOV_Y_RAD * 0.5).tan();
         let half_fov_x_tan = half_fov_y_tan * aspect;
 
-        // Exact frustum-fit for the square prism: d ≥ max(|(±axis/tan_fov + eye_dir)| ⊙ cyl_half).
-        // Conservative relative to the actual AABB when hx ≠ hz.
+        let support = |v: Vec3| bounds.radius * v.x.hypot(v.z) + half_y * v.y.abs();
+
+        // Exact support against both side planes for a centered world-Y
+        // cylinder. Both signs are needed because the eye and view axes are
+        // not generally symmetric, particularly for the vertical planes.
         let fit_dist = |axis: Vec3, tan_fov: f32| -> f32 {
             let vp = axis / tan_fov + framing_eye_dir;
             let vn = -axis / tan_fov + framing_eye_dir;
-            vp.abs().dot(cyl_half).max(vn.abs().dot(cyl_half))
+            support(vp).max(support(vn))
         };
 
         let base_distance =
-            fit_dist(Vec3::X, half_fov_x_tan).max(fit_dist(framing_up, half_fov_y_tan));
+            fit_dist(framing_right, half_fov_x_tan).max(fit_dist(framing_up, half_fov_y_tan));
         let distance = (base_distance / self.zoom)
-            .max(r_cyl.max(half_y) * NEAR_CLIP_RATIO)
+            .max(bounds.radius.max(half_y) * NEAR_CLIP_RATIO)
             .max(1e-4);
 
         let az = self.azimuth.to_radians();
@@ -210,6 +196,7 @@ impl Default for Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Vec2;
 
     const EPS: f32 = 1e-5;
     // Tall plant-like bounds used across several framing tests.
@@ -220,10 +207,22 @@ mod tests {
         (a - b).abs() < EPS
     }
 
+    fn bounds_2d(min: Vec2, max: Vec2) -> Bounds2D {
+        Bounds2D { min, max }
+    }
+
+    fn cylinder_from_aabb(min: Vec3, max: Vec3) -> BoundingCylinder3D {
+        BoundingCylinder3D {
+            center_xz: Vec2::new((min.x + max.x) * 0.5, (min.z + max.z) * 0.5),
+            radius: ((max.x - min.x) * 0.5).hypot((max.z - min.z) * 0.5),
+            min_y: min.y,
+            max_y: max.y,
+        }
+    }
+
     #[test]
     fn transform_square_geo_square_viewport() {
-        let t =
-            Camera::new().compute_transform(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0), 100, 100);
+        let t = Camera::new().compute_transform(bounds_2d(Vec2::splat(-1.0), Vec2::ONE), 100, 100);
         assert!(close(t.scale[0], 0.9), "scale x = {}", t.scale[0]);
         assert!(close(t.scale[1], 0.9), "scale y = {}", t.scale[1]);
         assert!(close(t.offset[0], 0.0));
@@ -232,29 +231,34 @@ mod tests {
 
     #[test]
     fn transform_center_maps_to_ndc_origin() {
-        let t = Camera::new().compute_transform(Vec2::new(1.0, 0.0), Vec2::new(5.0, 4.0), 200, 200);
+        let t = Camera::new().compute_transform(
+            bounds_2d(Vec2::new(1.0, 0.0), Vec2::new(5.0, 4.0)),
+            200,
+            200,
+        );
         assert!(close(3.0 * t.scale[0] + t.offset[0], 0.0));
         assert!(close(2.0 * t.scale[1] + t.offset[1], 0.0));
     }
 
     #[test]
     fn transform_width_constrained_fills_horizontal() {
-        let t = Camera::new().compute_transform(Vec2::new(0.0, 0.0), Vec2::new(4.0, 1.0), 100, 100);
+        let t =
+            Camera::new().compute_transform(bounds_2d(Vec2::ZERO, Vec2::new(4.0, 1.0)), 100, 100);
         assert!(close(4.0 * t.scale[0], 1.8));
         assert!(1.0 * t.scale[1] < 0.9);
     }
 
     #[test]
     fn transform_height_constrained_fills_vertical() {
-        let t = Camera::new().compute_transform(Vec2::new(0.0, 0.0), Vec2::new(1.0, 4.0), 100, 100);
+        let t =
+            Camera::new().compute_transform(bounds_2d(Vec2::ZERO, Vec2::new(1.0, 4.0)), 100, 100);
         assert!(close(4.0 * t.scale[1], 1.8));
         assert!(1.0 * t.scale[0] < 0.9);
     }
 
     #[test]
     fn transform_preserves_aspect_ratio_in_landscape_viewport() {
-        let t =
-            Camera::new().compute_transform(Vec2::new(-1.0, -1.0), Vec2::new(1.0, 1.0), 200, 100);
+        let t = Camera::new().compute_transform(bounds_2d(Vec2::splat(-1.0), Vec2::ONE), 200, 100);
         let px_per_unit_x = t.scale[0] * 100.0;
         let px_per_unit_y = t.scale[1] * 50.0;
         assert!(close(px_per_unit_x, px_per_unit_y));
@@ -262,7 +266,11 @@ mod tests {
 
     #[test]
     fn transform_degenerate_point_geometry_stays_finite() {
-        let t = Camera::new().compute_transform(Vec2::new(5.0, 3.0), Vec2::new(5.0, 3.0), 100, 100);
+        let t = Camera::new().compute_transform(
+            bounds_2d(Vec2::new(5.0, 3.0), Vec2::new(5.0, 3.0)),
+            100,
+            100,
+        );
         assert!(t.scale[0].is_finite() && t.scale[0] > 0.0);
         assert!(t.scale[1].is_finite() && t.scale[1] > 0.0);
         assert!(close(5.0 * t.scale[0] + t.offset[0], 0.0));
@@ -271,21 +279,19 @@ mod tests {
 
     #[test]
     fn zoom_doubles_scale() {
-        let bounds_min = Vec2::new(-1.0, -1.0);
-        let bounds_max = Vec2::new(1.0, 1.0);
+        let bounds = bounds_2d(Vec2::splat(-1.0), Vec2::ONE);
         let (w, h) = (100u32, 100u32);
         let mut cam = Camera::new();
-        let t_before = cam.compute_transform(bounds_min, bounds_max, w, h);
-        cam.zoom_toward_cursor(2.0, Vec2::new(50.0, 50.0), bounds_min, bounds_max, w, h);
-        let t_after = cam.compute_transform(bounds_min, bounds_max, w, h);
+        let t_before = cam.compute_transform(bounds, w, h);
+        cam.zoom_toward_cursor(2.0, Vec2::splat(50.0), bounds, w, h);
+        let t_after = cam.compute_transform(bounds, w, h);
         assert!(close(t_after.scale[0], t_before.scale[0] * 2.0));
         assert!(close(t_after.scale[1], t_before.scale[1] * 2.0));
     }
 
     #[test]
     fn zoom_preserves_world_point_under_cursor() {
-        let bounds_min = Vec2::new(-1.0, -1.0);
-        let bounds_max = Vec2::new(1.0, 1.0);
+        let bounds = bounds_2d(Vec2::splat(-1.0), Vec2::ONE);
         let (w, h) = (200u32, 200u32);
         // Cursor at top-right: pixel (150, 50) -> NDC (0.5, 0.5)
         let cursor = Vec2::new(150.0, 50.0);
@@ -295,11 +301,11 @@ mod tests {
         );
 
         let mut cam = Camera::new();
-        let t_before = cam.compute_transform(bounds_min, bounds_max, w, h);
+        let t_before = cam.compute_transform(bounds, w, h);
         let wp = (ndc - t_before.offset) / t_before.scale;
 
-        cam.zoom_toward_cursor(2.0, cursor, bounds_min, bounds_max, w, h);
-        let t_after = cam.compute_transform(bounds_min, bounds_max, w, h);
+        cam.zoom_toward_cursor(2.0, cursor, bounds, w, h);
+        let t_after = cam.compute_transform(bounds, w, h);
 
         let ndc_after = wp * t_after.scale + t_after.offset;
         assert!(close(ndc_after.x, ndc.x), "x: {} != {}", ndc_after.x, ndc.x);
@@ -308,12 +314,11 @@ mod tests {
 
     #[test]
     fn pan_right_moves_geometry_right() {
-        let bounds_min = Vec2::new(-1.0, -1.0);
-        let bounds_max = Vec2::new(1.0, 1.0);
+        let bounds = bounds_2d(Vec2::splat(-1.0), Vec2::ONE);
         let (w, h) = (100u32, 100u32);
         let mut cam = Camera::new();
-        cam.pan_by_pixels(Vec2::new(10.0, 0.0), bounds_min, bounds_max, w, h);
-        let t = cam.compute_transform(bounds_min, bounds_max, w, h);
+        cam.pan_by_pixels(Vec2::new(10.0, 0.0), bounds, w, h);
+        let t = cam.compute_transform(bounds, w, h);
         let ndc_center = t.offset[0];
         assert!(ndc_center > 0.0, "ndc center x = {ndc_center}");
     }
@@ -322,8 +327,7 @@ mod tests {
     fn mvp_3d_produces_finite_matrix() {
         let cam = Camera::new();
         let mvp = cam.compute_mvp_3d(
-            Vec3::new(-5.0, -5.0, -5.0),
-            Vec3::new(5.0, 5.0, 5.0),
+            cylinder_from_aabb(Vec3::splat(-5.0), Vec3::splat(5.0)),
             800,
             600,
         );
@@ -379,6 +383,164 @@ mod tests {
         true
     }
 
+    fn cylinder_surface_fits(mvp: &Mvp, bounds: BoundingCylinder3D) -> bool {
+        let tolerance = 1.001;
+        for y in [bounds.min_y, bounds.max_y] {
+            for step in 0..64 {
+                let angle = step as f32 * std::f32::consts::TAU / 64.0;
+                let point = glam::Vec4::new(
+                    bounds.center_xz.x + bounds.radius * angle.cos(),
+                    y,
+                    bounds.center_xz.y + bounds.radius * angle.sin(),
+                    1.0,
+                );
+                let clip = mvp.matrix * point;
+                let ndc_x = clip.x / clip.w;
+                let ndc_y = clip.y / clip.w;
+                if ndc_x.abs() > tolerance || ndc_y.abs() > tolerance {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn mvp_3d_fits_off_center_cylinder_surface_and_retargets_axis_midpoint() {
+        let bounds = BoundingCylinder3D {
+            center_xz: Vec2::new(17.0, -23.0),
+            radius: 8.0,
+            min_y: -4.0,
+            max_y: 31.0,
+        };
+        let cam = Camera::new();
+        let mvp = cam.compute_mvp_3d(bounds, 700, 900);
+        assert!(cylinder_surface_fits(&mvp, bounds));
+
+        let center = glam::Vec4::new(
+            bounds.center_xz.x,
+            (bounds.min_y + bounds.max_y) * 0.5,
+            bounds.center_xz.y,
+            1.0,
+        );
+        let clip = mvp.matrix * center;
+        assert!(close(clip.x / clip.w, 0.0));
+        assert!(close(clip.y / clip.w, 0.0));
+    }
+
+    #[test]
+    fn mvp_3d_cylinder_fit_reaches_a_constraining_side_plane() {
+        let bounds = BoundingCylinder3D {
+            center_xz: Vec2::ZERO,
+            radius: 12.0,
+            min_y: -2.0,
+            max_y: 2.0,
+        };
+        let mvp = Camera::new().compute_mvp_3d(bounds, 500, 900);
+        let max_abs_ndc = [bounds.min_y, bounds.max_y]
+            .into_iter()
+            .flat_map(|y| {
+                (0..256).map(move |step| {
+                    let angle = step as f32 * std::f32::consts::TAU / 256.0;
+                    let clip = mvp.matrix
+                        * glam::Vec4::new(
+                            bounds.radius * angle.cos(),
+                            y,
+                            bounds.radius * angle.sin(),
+                            1.0,
+                        );
+                    (clip.x / clip.w).abs().max((clip.y / clip.w).abs())
+                })
+            })
+            .fold(0.0_f32, f32::max);
+
+        assert!(
+            (0.98..=1.001).contains(&max_abs_ndc),
+            "cylinder reaches only {max_abs_ndc:.3} NDC"
+        );
+    }
+
+    #[test]
+    fn mvp_3d_roll_uses_rolled_side_planes_for_fit() {
+        let bounds = BoundingCylinder3D {
+            center_xz: Vec2::ZERO,
+            radius: 2.0,
+            min_y: -30.0,
+            max_y: 30.0,
+        };
+        let mut cam = Camera::new();
+        cam.roll_by(73.0);
+        let mvp = cam.compute_mvp_3d(bounds, 1000, 400);
+        assert!(cylinder_surface_fits(&mvp, bounds));
+    }
+
+    #[test]
+    fn mvp_3d_rolled_fit_is_stable_and_contains_across_azimuth() {
+        let bounds = BoundingCylinder3D {
+            center_xz: Vec2::new(7.0, -11.0),
+            radius: 4.0,
+            min_y: -25.0,
+            max_y: 35.0,
+        };
+        let center = glam::Vec4::new(
+            bounds.center_xz.x,
+            (bounds.min_y + bounds.max_y) * 0.5,
+            bounds.center_xz.y,
+            1.0,
+        );
+        let mut cam = Camera::new();
+        cam.roll_by(73.0);
+        let mut reference_distance: Option<f32> = None;
+
+        for az_step in 0..16 {
+            cam.azimuth = az_step as f32 * 22.5;
+            let mvp = cam.compute_mvp_3d(bounds, 1000, 400);
+            assert!(
+                cylinder_surface_fits(&mvp, bounds),
+                "rolled cylinder outside frustum at azimuth={} deg",
+                cam.azimuth
+            );
+
+            let distance = (mvp.matrix * center).w;
+            if let Some(reference) = reference_distance {
+                assert!(
+                    (distance - reference).abs() < 0.01,
+                    "rolled framing distance changed at azimuth={} deg: {reference:.3} vs {distance:.3}",
+                    cam.azimuth
+                );
+            } else {
+                reference_distance = Some(distance);
+            }
+        }
+    }
+
+    #[test]
+    fn mvp_3d_degenerate_cylinders_stay_finite() {
+        for bounds in [
+            BoundingCylinder3D {
+                center_xz: Vec2::new(2.0, -3.0),
+                radius: 0.0,
+                min_y: 5.0,
+                max_y: 5.0,
+            },
+            BoundingCylinder3D {
+                center_xz: Vec2::ZERO,
+                radius: 7.0,
+                min_y: 1.0,
+                max_y: 1.0,
+            },
+            BoundingCylinder3D {
+                center_xz: Vec2::ZERO,
+                radius: 0.0,
+                min_y: -9.0,
+                max_y: 9.0,
+            },
+        ] {
+            let mvp = Camera::new().compute_mvp_3d(bounds, 800, 600);
+            assert!(mvp.matrix.is_finite());
+        }
+    }
+
     #[test]
     fn mvp_3d_portrait_viewport_fits_wide_geometry() {
         // Wide box on a portrait (aspect=0.5) screen: horizontal FOV is narrower,
@@ -386,7 +548,7 @@ mod tests {
         let cam = Camera::new();
         let min = Vec3::new(-10.0, -3.0, -3.0);
         let max = Vec3::new(10.0, 3.0, 3.0);
-        let mvp = cam.compute_mvp_3d(min, max, 400, 800);
+        let mvp = cam.compute_mvp_3d(cylinder_from_aabb(min, max), 400, 800);
         assert!(
             all_corners_fit_in_frustum(&mvp, min, max),
             "portrait viewport: corners outside frustum"
@@ -396,9 +558,9 @@ mod tests {
     #[test]
     fn mvp_3d_landscape_viewport_fits_geometry() {
         let cam = Camera::new();
-        let min = Vec3::new(-5.0, -5.0, -5.0);
-        let max = Vec3::new(5.0, 5.0, 5.0);
-        let mvp = cam.compute_mvp_3d(min, max, 800, 600);
+        let min = Vec3::splat(-5.0);
+        let max = Vec3::splat(5.0);
+        let mvp = cam.compute_mvp_3d(cylinder_from_aabb(min, max), 800, 600);
         assert!(
             all_corners_fit_in_frustum(&mvp, min, max),
             "landscape viewport: corners outside frustum"
@@ -411,7 +573,7 @@ mod tests {
         // The cylinder framing uses r_cyl ≥ half.x so the scene is slightly farther
         // than the exact AABB fit, but non-cubic geometry must not be over-scaled.
         let cam = Camera::new();
-        let mvp = cam.compute_mvp_3d(TALL_MIN, TALL_MAX, 800, 600);
+        let mvp = cam.compute_mvp_3d(cylinder_from_aabb(TALL_MIN, TALL_MAX), 800, 600);
 
         let max_ndc_y = bounding_box_corners(TALL_MIN, TALL_MAX)
             .iter()
@@ -444,7 +606,10 @@ mod tests {
 
     fn center_clip_w(cam: &Camera, min: Vec3, max: Vec3) -> f32 {
         let center = (min + max) * 0.5;
-        (cam.compute_mvp_3d(min, max, 800, 600).matrix * center.extend(1.0)).w
+        (cam.compute_mvp_3d(cylinder_from_aabb(min, max), 800, 600)
+            .matrix
+            * center.extend(1.0))
+        .w
     }
 
     #[test]
@@ -514,7 +679,7 @@ mod tests {
         let mut cam = Camera::new();
         for az_step in 0..8 {
             cam.azimuth = az_step as f32 * 45.0;
-            let mvp = cam.compute_mvp_3d(min, max, 800, 600);
+            let mvp = cam.compute_mvp_3d(cylinder_from_aabb(min, max), 800, 600);
             assert!(
                 all_corners_fit_in_frustum(&mvp, min, max),
                 "corners outside frustum at azimuth={}°",

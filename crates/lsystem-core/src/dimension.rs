@@ -2,6 +2,10 @@ use std::fmt::Debug;
 
 use glam::{Quat, Vec2, Vec3};
 
+use crate::bounds::{
+    BoundingCylinder3D, Bounds2D, BoundsAccumulator as BoundsAccumulatorTrait, BoundsAccumulator2D,
+    BoundsAccumulator3D,
+};
 use crate::config::Dimensions;
 
 mod sealed {
@@ -23,6 +27,10 @@ impl sealed::Sealed for D3 {}
 pub trait Dimension: sealed::Sealed + Copy + Debug + 'static {
     type Point: Copy + PartialEq + Debug;
     type Rotation: Copy + PartialEq + Debug;
+    /// Finished bounds representation paired with this dimension.
+    type Bounds: Copy + Debug;
+    /// Incremental bounds accumulator paired with this dimension.
+    type BoundsAccumulator: BoundsAccumulatorTrait<Point = Self::Point, Bounds = Self::Bounds>;
 
     const RUNTIME: Dimensions;
 
@@ -57,6 +65,8 @@ fn transform_point_3d(position: Vec3, rotation: Quat, point: Vec3) -> Vec3 {
 impl Dimension for D2 {
     type Point = Vec2;
     type Rotation = Vec2;
+    type Bounds = Bounds2D;
+    type BoundsAccumulator = BoundsAccumulator2D;
 
     const RUNTIME: Dimensions = Dimensions::TwoD;
 
@@ -77,6 +87,8 @@ impl Dimension for D2 {
 impl Dimension for D3 {
     type Point = Vec3;
     type Rotation = Quat;
+    type Bounds = BoundingCylinder3D;
+    type BoundsAccumulator = BoundsAccumulator3D;
 
     const RUNTIME: Dimensions = Dimensions::ThreeD;
 

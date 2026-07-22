@@ -1,11 +1,11 @@
-use glam::{Vec2, Vec3};
+use glam::Vec2;
 use iced::mouse;
 use iced::widget::{container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme, window};
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
-    AnyCompiledGeneration, ColorConfig, CompiledGeneration, Config, D2, D3,
-    DEFAULT_TEMPLATE_SEGMENT_BUDGET, PreparedGeneration, TemplateDimension,
+    AnyCompiledGeneration, BoundingCylinder3D, Bounds2D, ColorConfig, CompiledGeneration, Config,
+    D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, PreparedGeneration, TemplateDimension,
 };
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
@@ -32,24 +32,20 @@ const CANCELLATION_CHECK_INTERVAL: usize = 4096;
 enum SceneGeometry {
     TwoD {
         segments: Arc<Vec<Segment2D>>,
-        bounds_min: Vec2,
-        bounds_max: Vec2,
+        bounds: Bounds2D,
     },
     TwoDWithTopologicalDepth {
         segments: Arc<Vec<TopologicalDepthSegment2D>>,
-        bounds_min: Vec2,
-        bounds_max: Vec2,
+        bounds: Bounds2D,
         max_topological_depth: u32,
     },
     ThreeD {
         segments: Arc<Vec<Segment3D>>,
-        bounds_min: Vec3,
-        bounds_max: Vec3,
+        bounds: BoundingCylinder3D,
     },
     ThreeDWithTopologicalDepth {
         segments: Arc<Vec<TopologicalDepthSegment3D>>,
-        bounds_min: Vec3,
-        bounds_max: Vec3,
+        bounds: BoundingCylinder3D,
         max_topological_depth: u32,
     },
 }
@@ -83,9 +79,10 @@ impl SceneGeometry {
 /// Maps a dimension marker to its [`SceneGeometry`] variants. App-local so
 /// the renderer stays ignorant of Iced scene types.
 trait SceneDimension: RenderDimension + TemplateDimension {
-    fn plain_geometry(data: CollectedSegmentData<Self::PlainRecord, Self::Point>) -> SceneGeometry;
+    fn plain_geometry(data: CollectedSegmentData<Self::PlainRecord, Self::Bounds>)
+    -> SceneGeometry;
     fn depth_geometry(
-        data: CollectedDepthSegmentData<Self::DepthRecord, Self::Point>,
+        data: CollectedDepthSegmentData<Self::DepthRecord, Self::Bounds>,
     ) -> SceneGeometry;
 }
 
@@ -93,8 +90,7 @@ impl SceneDimension for D2 {
     fn plain_geometry(data: SegmentData2D) -> SceneGeometry {
         SceneGeometry::TwoD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds: data.bounds,
         }
     }
 
@@ -102,8 +98,7 @@ impl SceneDimension for D2 {
         let max_topological_depth = data.max_topological_depth();
         SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds: data.bounds,
             max_topological_depth,
         }
     }
@@ -113,8 +108,7 @@ impl SceneDimension for D3 {
     fn plain_geometry(data: SegmentData3D) -> SceneGeometry {
         SceneGeometry::ThreeD {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds: data.bounds,
         }
     }
 
@@ -122,8 +116,7 @@ impl SceneDimension for D3 {
         let max_topological_depth = data.max_topological_depth();
         SceneGeometry::ThreeDWithTopologicalDepth {
             segments: Arc::new(data.segments),
-            bounds_min: data.bounds_min,
-            bounds_max: data.bounds_max,
+            bounds: data.bounds,
             max_topological_depth,
         }
     }
@@ -174,21 +167,12 @@ impl Scene {
     }
 
     pub(super) fn pan_by_pixels(&mut self, delta: Vec2, size: Size) {
-        if let SceneGeometry::TwoD {
-            bounds_min,
-            bounds_max,
-            ..
-        }
-        | SceneGeometry::TwoDWithTopologicalDepth {
-            bounds_min,
-            bounds_max,
-            ..
-        } = &self.geometry
+        if let SceneGeometry::TwoD { bounds, .. }
+        | SceneGeometry::TwoDWithTopologicalDepth { bounds, .. } = &self.geometry
         {
             self.camera.pan_by_pixels(
                 delta,
-                *bounds_min,
-                *bounds_max,
+                *bounds,
                 size.width.max(1.0) as u32,
                 size.height.max(1.0) as u32,
             );
@@ -214,21 +198,12 @@ impl Scene {
     pub(super) fn zoom_toward_cursor(&mut self, delta_y: f32, cursor: Point, size: Size) {
         let factor = 1.1_f32.powf(-delta_y / 100.0);
         match &self.geometry {
-            SceneGeometry::TwoD {
-                bounds_min,
-                bounds_max,
-                ..
-            }
-            | SceneGeometry::TwoDWithTopologicalDepth {
-                bounds_min,
-                bounds_max,
-                ..
-            } => {
+            SceneGeometry::TwoD { bounds, .. }
+            | SceneGeometry::TwoDWithTopologicalDepth { bounds, .. } => {
                 self.camera.zoom_toward_cursor(
                     factor,
                     Vec2::new(cursor.x, cursor.y),
-                    *bounds_min,
-                    *bounds_max,
+                    *bounds,
                     size.width.max(1.0) as u32,
                     size.height.max(1.0) as u32,
                 );
@@ -473,8 +448,7 @@ impl Default for Scene {
         Self {
             geometry: SceneGeometry::TwoD {
                 segments: Arc::new(Vec::new()),
-                bounds_min: Vec2::new(-1.0, -1.0),
-                bounds_max: Vec2::new(1.0, 1.0),
+                bounds: D2::empty_scene_bounds(),
             },
             color_params: ColorParams::default(),
             hue_offset_degrees: 0.0,
@@ -685,15 +659,8 @@ impl shader::Primitive for FractalPrimitive {
         let geometry_rev = self.scene.geometry_revision;
         let color_rev = self.scene.color_revision;
         match &self.scene.geometry {
-            SceneGeometry::TwoD {
-                segments,
-                bounds_min,
-                bounds_max,
-            } => {
-                let transform =
-                    self.scene
-                        .camera
-                        .compute_transform(*bounds_min, *bounds_max, width, height);
+            SceneGeometry::TwoD { segments, bounds } => {
+                let transform = self.scene.camera.compute_transform(*bounds, width, height);
                 pipeline.sync_uploads(
                     geometry_rev,
                     color_rev,
@@ -703,15 +670,9 @@ impl shader::Primitive for FractalPrimitive {
                 pipeline.pipeline_2d.write_transform(queue, transform);
             }
             SceneGeometry::TwoDWithTopologicalDepth {
-                segments,
-                bounds_min,
-                bounds_max,
-                ..
+                segments, bounds, ..
             } => {
-                let transform =
-                    self.scene
-                        .camera
-                        .compute_transform(*bounds_min, *bounds_max, width, height);
+                let transform = self.scene.camera.compute_transform(*bounds, width, height);
                 pipeline.sync_uploads(
                     geometry_rev,
                     color_rev,
@@ -727,15 +688,8 @@ impl shader::Primitive for FractalPrimitive {
                 );
                 pipeline.pipeline_2d.write_transform(queue, transform);
             }
-            SceneGeometry::ThreeD {
-                segments,
-                bounds_min,
-                bounds_max,
-            } => {
-                let mvp = self
-                    .scene
-                    .camera
-                    .compute_mvp_3d(*bounds_min, *bounds_max, width, height);
+            SceneGeometry::ThreeD { segments, bounds } => {
+                let mvp = self.scene.camera.compute_mvp_3d(*bounds, width, height);
                 pipeline.sync_uploads(
                     geometry_rev,
                     color_rev,
@@ -745,15 +699,9 @@ impl shader::Primitive for FractalPrimitive {
                 pipeline.pipeline_3d.write_mvp(queue, mvp);
             }
             SceneGeometry::ThreeDWithTopologicalDepth {
-                segments,
-                bounds_min,
-                bounds_max,
-                ..
+                segments, bounds, ..
             } => {
-                let mvp = self
-                    .scene
-                    .camera
-                    .compute_mvp_3d(*bounds_min, *bounds_max, width, height);
+                let mvp = self.scene.camera.compute_mvp_3d(*bounds, width, height);
                 pipeline.sync_uploads(
                     geometry_rev,
                     color_rev,

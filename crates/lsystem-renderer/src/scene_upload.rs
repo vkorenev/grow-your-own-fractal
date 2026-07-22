@@ -2,12 +2,12 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
-    CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, LineColorConfig,
-    PreparedGeneration, SegmentWithTopologicalDepth, TemplateDimension,
+    BoundsAccumulator, CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET,
+    LineColorConfig, PreparedGeneration, SegmentWithTopologicalDepth, TemplateDimension,
 };
 
 use crate::line_renderer::{LinePipeline, RenderDimension, StagingUnavailable, record_limit};
-use crate::lsystem_bridge::{Bounds, color_params_from_config};
+use crate::lsystem_bridge::color_params_from_config;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SegmentLayout {
@@ -72,8 +72,7 @@ pub struct UploadedScene<D: RenderDimension> {
     method: GenerationMethod,
     layout: UploadedLayout,
     total_segments: u32,
-    bounds_min: D::Point,
-    bounds_max: D::Point,
+    bounds: D::Bounds,
 }
 
 pub type UploadedScene2D = UploadedScene<D2>;
@@ -92,12 +91,8 @@ impl<D: RenderDimension> UploadedScene<D> {
         self.total_segments
     }
 
-    pub fn bounds_min(&self) -> D::Point {
-        self.bounds_min
-    }
-
-    pub fn bounds_max(&self) -> D::Point {
-        self.bounds_max
+    pub fn bounds(&self) -> D::Bounds {
+        self.bounds
     }
 }
 
@@ -135,27 +130,27 @@ fn upload_plain<D: RenderDimension>(
     method: GenerationMethod,
     total_segments: u32,
 ) -> Result<UploadedScene<D>, SceneUploadError> {
-    let mut bounds = Bounds::new();
+    let mut bounds = D::BoundsAccumulator::default();
     pipeline
         .upload_from_iter(
             device,
             queue,
             total_segments,
             segments.map(|[start, end]| {
-                bounds.update(start, end);
+                bounds.include(start);
+                bounds.include(end);
                 D::plain_record(start, end)
             }),
         )
         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
 
-    let (bounds_min, bounds_max) = bounds.finish();
+    let bounds = bounds.finish().unwrap_or_else(D::empty_scene_bounds);
     pipeline.write_color_params(queue, color_params_from_config(line, total_segments, None));
     Ok(UploadedScene {
         method,
         layout: UploadedLayout::Plain,
         total_segments,
-        bounds_min,
-        bounds_max,
+        bounds,
     })
 }
 
@@ -168,7 +163,7 @@ fn upload_with_topological_depth<D: RenderDimension>(
     method: GenerationMethod,
     total_segments: u32,
 ) -> Result<UploadedScene<D>, SceneUploadError> {
-    let mut bounds = Bounds::new();
+    let mut bounds = D::BoundsAccumulator::default();
     let mut max_topological_depth = 0;
     pipeline
         .upload_depth_from_iter(
@@ -177,14 +172,15 @@ fn upload_with_topological_depth<D: RenderDimension>(
             total_segments,
             segments.map(|segment| {
                 let [start, end] = segment.points;
-                bounds.update(start, end);
+                bounds.include(start);
+                bounds.include(end);
                 max_topological_depth = max_topological_depth.max(segment.topological_depth);
                 D::depth_record(start, end, segment.topological_depth)
             }),
         )
         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
 
-    let (bounds_min, bounds_max) = bounds.finish();
+    let bounds = bounds.finish().unwrap_or_else(D::empty_scene_bounds);
     pipeline.write_color_params(
         queue,
         color_params_from_config(line, total_segments, Some(max_topological_depth)),
@@ -195,8 +191,7 @@ fn upload_with_topological_depth<D: RenderDimension>(
             max_topological_depth,
         },
         total_segments,
-        bounds_min,
-        bounds_max,
+        bounds,
     })
 }
 
@@ -529,8 +524,8 @@ mod gpu_tests {
             assert_eq!(scene.layout(), UploadedLayout::Plain);
             assert_eq!(scene.total_segments(), 1);
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
-            assert_eq!(scene.bounds_min(), Vec2::new(0.0, 0.0));
-            assert_eq!(scene.bounds_max(), Vec2::new(1.0, 0.0));
+            assert_eq!(scene.bounds().min, glam::Vec2::ZERO);
+            assert_eq!(scene.bounds().max, glam::Vec2::X);
 
             let depth = generation(
                 Dimensions::TwoD,
@@ -565,8 +560,7 @@ mod gpu_tests {
             )
             .expect("empty upload");
             assert_eq!(scene.total_segments(), 0);
-            assert_eq!(scene.bounds_min(), Vec2::new(-1.0, -1.0));
-            assert_eq!(scene.bounds_max(), Vec2::new(1.0, 1.0));
+            assert_eq!(scene.bounds(), D2::empty_scene_bounds());
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
 
             let interpreter = generation(
@@ -630,6 +624,10 @@ mod gpu_tests {
             assert_eq!(scene.layout(), UploadedLayout::Plain);
             assert_eq!(scene.total_segments(), 1);
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
+            assert_eq!(scene.bounds().center_xz, glam::Vec2::new(0.5, 0.0));
+            assert_eq!(scene.bounds().radius, 0.5);
+            assert_eq!(scene.bounds().min_y, 0.0);
+            assert_eq!(scene.bounds().max_y, 0.0);
 
             let depth_3d = generation(
                 Dimensions::ThreeD,
@@ -654,6 +652,19 @@ mod gpu_tests {
                 }
             );
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
+
+            let empty_3d = generation(Dimensions::ThreeD, "", 1, BTreeMap::new());
+            let scene = upload_scene(
+                &mut pipeline_3d,
+                &device,
+                &queue,
+                compile_3d(&empty_3d),
+                &line_color(),
+                SegmentLayout::Plain,
+            )
+            .expect("empty 3D upload");
+            assert_eq!(scene.total_segments(), 0);
+            assert_eq!(scene.bounds(), D3::empty_scene_bounds());
         });
     }
 
@@ -731,8 +742,7 @@ mod gpu_tests {
             pipeline.write_transform(
                 &queue,
                 crate::lsystem_bridge::viewport_transform(
-                    scene.bounds_min(),
-                    scene.bounds_max(),
+                    scene.bounds(),
                     WIDTH,
                     HEIGHT,
                     Vec2::ZERO,

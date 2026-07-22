@@ -81,8 +81,11 @@ mutation.
 
 - `alphabet.rs` validates reserved symbols for 2D and 3D.
 - `dimension.rs` defines the sealed `D2`/`D3` markers and maps each marker to
-  its point and rotation representations and local-to-world point and segment
-  transforms through the `Dimension` trait.
+  its point, rotation, bounds result, and mergeable bounds accumulator through
+  the `Dimension` trait, alongside local-to-world point and segment transforms.
+  Two-dimensional bounds are exact endpoint min/max; three-dimensional bounds
+  are a conservative world-Y cylinder. Empty accumulation remains `None` in
+  core and is mapped to renderer-owned unit bounds at scene collection.
 - `compiled_generation.rs` is the runtime compilation boundary. It compiles
   grammar, scalar parameters, and stack metadata together, then exposes an
   opaque `CompiledGeneration<D2>` or `CompiledGeneration<D3>` payload inside
@@ -203,10 +206,15 @@ offscreen exports.
   vertex buffer layouts, and shader entry states are built from generated
   helpers, and each pipeline layout wraps that one generated bind group
   layout.
-- `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom. Pointer
-  orbiting uses direct-manipulation semantics, so the model follows the drag.
-  The browser passes CSS-pixel deltas without device-pixel-ratio scaling, which
-  keeps orbit sensitivity consistent across display densities.
+- `camera.rs` supports 2D pan/zoom and 3D orbit/elevation/roll/zoom using typed
+  core bounds. The 3D camera targets the midpoint of the world-Y bounding
+  cylinder and fits its exact support against all four perspective side
+  planes. Its horizontal circular section keeps distance stable under azimuth
+  orbit, while the elevation captured by the last position reset and the live
+  roll determine the framing axes. Pointer orbiting uses direct-manipulation
+  semantics, so the model follows the drag. The browser passes CSS-pixel
+  deltas without device-pixel-ratio scaling, which keeps orbit sensitivity
+  consistent across display densities.
 - `line_renderer.rs` defines GPU instance records, growable vertex buffers,
   the marker-keyed `LinePipeline<D>`, color uniforms, and surface frame
   handling. `RenderDimension` maps `D2`/`D3` to their plain and depth record
@@ -219,9 +227,10 @@ offscreen exports.
   stamped iterators use `Queue::write_buffer_with` to fill mapped staging memory
   directly.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters. Consumers accumulate
-  bounds from core's world-space points before constructing
-  dimension-specific GPU records through `RenderDimension`.
+  maps `LineColorConfig` into shader color parameters. Consumers feed core's
+  dimension-specific bounds accumulator from world-space endpoints before
+  constructing GPU records through `RenderDimension`; native collected scene
+  data carries the resulting typed bounds alongside its one segment vector.
 - `scene_upload.rs` owns the single generic `upload_scene<D>` (composing
   `RenderDimension + TemplateDimension`, whose core bound includes interpreted
   generation), the public renderer operation for web and offscreen scene
@@ -230,10 +239,10 @@ offscreen exports.
   before preparation, then streams the selected stamped or interpreted
   iterator directly into wgpu staging while accumulating bounds and maximum
   topological depth. Color parameters are written only after the geometry
-  drain succeeds. It returns `UploadedScene<D>` metadata with point-typed
-  bounds, exposed via per-dimension `Vec2`/`Vec3` getters. A cap error
-  preserves the previous pipeline scene; a staging error clears the attempted
-  target layout.
+  drain succeeds. It returns `UploadedScene<D>` metadata with `D::Bounds`, so
+  2D and 3D consumers cannot accidentally exchange rectangle and cylinder
+  bounds. A cap error preserves the previous
+  pipeline scene; a staging error clears the attempted target layout.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature. Segment-limit and
   staging failures surface as typed export errors instead of empty images.
