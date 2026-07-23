@@ -58,8 +58,7 @@ impl<R, D: RenderDimension> SegmentCollector<R, D> {
     }
 
     fn push(&mut self, [a, b]: [D::Point; 2], topological_depth: u32, record: R) {
-        self.bounds.include(a);
-        self.bounds.include(b);
+        self.bounds.include_segment(a, b);
         self.max_topological_depth = self.max_topological_depth.max(topological_depth);
         self.segments.push(record);
     }

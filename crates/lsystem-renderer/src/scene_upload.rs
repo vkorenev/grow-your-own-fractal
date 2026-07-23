@@ -137,8 +137,7 @@ fn upload_plain<D: RenderDimension>(
             queue,
             total_segments,
             segments.map(|[start, end]| {
-                bounds.include(start);
-                bounds.include(end);
+                bounds.include_segment(start, end);
                 D::plain_record(start, end)
             }),
         )
@@ -172,8 +171,7 @@ fn upload_with_topological_depth<D: RenderDimension>(
             total_segments,
             segments.map(|segment| {
                 let [start, end] = segment.points;
-                bounds.include(start);
-                bounds.include(end);
+                bounds.include_segment(start, end);
                 max_topological_depth = max_topological_depth.max(segment.topological_depth);
                 D::depth_record(start, end, segment.topological_depth)
             }),

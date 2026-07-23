@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use glam::{Vec2, Vec3};
+use glam::{Vec2, Vec3, Vec4};
 
 /// Axis-aligned bounds containing a set of two-dimensional points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,6 +63,16 @@ pub trait BoundsAccumulator: Default {
     /// non-panicking.
     fn include(&mut self, point: Self::Point);
 
+    /// Includes both finite endpoints of a line segment.
+    ///
+    /// The default keeps custom accumulators source-compatible. Dimension
+    /// implementations can override it to combine the two endpoints in one
+    /// vector operation.
+    fn include_segment(&mut self, start: Self::Point, end: Self::Point) {
+        self.include(start);
+        self.include(end);
+    }
+
     /// Merges all points represented by `other` into this accumulator.
     fn merge(&mut self, other: &Self);
 
@@ -75,7 +85,10 @@ pub trait BoundsAccumulator: Default {
 /// This accumulator computes exact component-wise endpoint minima and maxima.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BoundsAccumulator2D {
-    bounds: Option<Bounds2D>,
+    // `[max_x, max_y, -min_x, -min_y]`. Updating this single vector lets the
+    // hot upload loop use one packed max operation per endpoint instead of
+    // separate Vec2 min and max operations.
+    bounds: Option<Vec4>,
 }
 
 impl BoundsAccumulator for BoundsAccumulator2D {
@@ -84,15 +97,18 @@ impl BoundsAccumulator for BoundsAccumulator2D {
 
     fn include(&mut self, point: Vec2) {
         debug_assert!(point.is_finite(), "bounds point must be finite");
+        let point = Vec4::new(point.x, point.y, -point.x, -point.y);
+        self.bounds = Some(self.bounds.map_or(point, |bounds| bounds.max(point)));
+    }
+
+    fn include_segment(&mut self, start: Vec2, end: Vec2) {
+        debug_assert!(start.is_finite(), "bounds point must be finite");
+        debug_assert!(end.is_finite(), "bounds point must be finite");
+        let start = Vec4::new(start.x, start.y, -start.x, -start.y);
+        let end = Vec4::new(end.x, end.y, -end.x, -end.y);
         self.bounds = Some(match self.bounds {
-            Some(bounds) => Bounds2D {
-                min: bounds.min.min(point),
-                max: bounds.max.max(point),
-            },
-            None => Bounds2D {
-                min: point,
-                max: point,
-            },
+            Some(bounds) => bounds.max(start).max(end),
+            None => start.max(end),
         });
     }
 
@@ -101,16 +117,16 @@ impl BoundsAccumulator for BoundsAccumulator2D {
             return;
         };
         self.bounds = Some(match self.bounds {
-            Some(bounds) => Bounds2D {
-                min: bounds.min.min(other.min),
-                max: bounds.max.max(other.max),
-            },
+            Some(bounds) => bounds.max(other),
             None => other,
         });
     }
 
     fn finish(self) -> Option<Bounds2D> {
-        self.bounds
+        self.bounds.map(|bounds| Bounds2D {
+            min: Vec2::new(-bounds.z, -bounds.w),
+            max: Vec2::new(bounds.x, bounds.y),
+        })
     }
 }
 
@@ -224,6 +240,35 @@ mod tests {
                 .into_iter()
                 .all(|point| point.cmpge(bounds.min).all() && point.cmple(bounds.max).all())
         );
+    }
+
+    #[test]
+    fn segment_inclusion_matches_individual_points() {
+        let segments_2d = [
+            [Vec2::new(3.0, -4.0), Vec2::new(-2.0, 5.0)],
+            [Vec2::new(1.0, 2.0), Vec2::new(-6.0, -1.0)],
+        ];
+        let mut by_points_2d = BoundsAccumulator2D::default();
+        let mut by_segments_2d = BoundsAccumulator2D::default();
+        for [start, end] in segments_2d {
+            by_points_2d.include(start);
+            by_points_2d.include(end);
+            by_segments_2d.include_segment(start, end);
+        }
+        assert_eq!(by_segments_2d.finish(), by_points_2d.finish());
+
+        let segments_3d = [
+            [Vec3::new(3.0, -4.0, 5.0), Vec3::new(-2.0, 5.0, 1.0)],
+            [Vec3::new(1.0, 2.0, -6.0), Vec3::new(-6.0, -1.0, 4.0)],
+        ];
+        let mut by_points_3d = BoundsAccumulator3D::default();
+        let mut by_segments_3d = BoundsAccumulator3D::default();
+        for [start, end] in segments_3d {
+            by_points_3d.include(start);
+            by_points_3d.include(end);
+            by_segments_3d.include_segment(start, end);
+        }
+        assert_eq!(by_segments_3d.finish(), by_points_3d.finish());
     }
 
     #[test]
