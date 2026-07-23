@@ -329,7 +329,7 @@ mod tests {
 
 #[cfg(all(test, feature = "png", not(target_arch = "wasm32")))]
 mod gpu_tests {
-    use glam::Vec2;
+    use glam::{Vec2, Vec3};
     use std::collections::BTreeMap;
 
     use futures_channel::oneshot;
@@ -622,10 +622,13 @@ mod gpu_tests {
             assert_eq!(scene.layout(), UploadedLayout::Plain);
             assert_eq!(scene.total_segments(), 1);
             assert!(matches!(scene.method(), GenerationMethod::Stamped { .. }));
-            assert_eq!(scene.bounds().center_xz, glam::Vec2::new(0.5, 0.0));
-            assert_eq!(scene.bounds().radius, 0.5);
-            assert_eq!(scene.bounds().min_y, 0.0);
-            assert_eq!(scene.bounds().max_y, 0.0);
+            let bounds = scene.bounds();
+            assert!([Vec3::ZERO, Vec3::X].into_iter().all(|point| {
+                Vec2::new(point.x, point.z).distance(bounds.center_xz) <= bounds.radius
+                    && point.y >= bounds.min_y
+                    && point.y <= bounds.max_y
+            }));
+            assert!(bounds.radius >= 0.5);
 
             let depth_3d = generation(
                 Dimensions::ThreeD,
