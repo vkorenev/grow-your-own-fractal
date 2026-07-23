@@ -309,6 +309,30 @@ mod tests {
         }
     }
 
+    fn cylinder_contains(bounds: BoundingCylinder3D, point: Vec3) -> bool {
+        Vec2::new(point.x, point.z).distance(bounds.center_xz) <= bounds.radius
+            && point.y >= bounds.min_y
+            && point.y <= bounds.max_y
+    }
+
+    fn assert_plain_3d_endpoints_are_contained(data: &SegmentData3D) {
+        assert!(
+            data.segments
+                .iter()
+                .flat_map(|segment| [segment.start, segment.end])
+                .all(|point| cylinder_contains(data.bounds, point))
+        );
+    }
+
+    fn assert_depth_3d_endpoints_are_contained(data: &TopologicalDepthSegmentData3D) {
+        assert!(
+            data.segments
+                .iter()
+                .flat_map(|segment| [segment.start, segment.end])
+                .all(|point| cylinder_contains(data.bounds, point))
+        );
+    }
+
     /// Euclidean distance over the first `axis_count` components of a
     /// generic `D::Point` value.
     fn axis_distance<P: Index<usize, Output = f32>>(a: P, b: P, axis_count: usize) -> f32 {
@@ -362,6 +386,8 @@ mod tests {
         let stamped = collect_plain_segments::<D3>(set.segments());
         let interpreted = collect_plain_segments::<D3>(compile_3d(&config).segments());
 
+        assert_plain_3d_endpoints_are_contained(&stamped);
+        assert_plain_3d_endpoints_are_contained(&interpreted);
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
         assert!(stamped.bounds.close_to(interpreted.bounds, 1e-3));
         for (s, i) in stamped.segments.iter().zip(&interpreted.segments) {
@@ -482,6 +508,11 @@ mod tests {
             |s| s.start,
             |s| s.end,
         );
+
+        let stamped = collect_depth_segments::<D3>(set.depth_segments());
+        let interpreted = collect_depth_segments::<D3>(generation.depth_segments());
+        assert_depth_3d_endpoints_are_contained(&stamped);
+        assert_depth_3d_endpoints_are_contained(&interpreted);
     }
 
     #[test]
@@ -745,17 +776,16 @@ mod tests {
         )
         .expect("balanced config");
         let data = collect_depth_segments::<D3>(compile_3d(&config).depth_segments());
-        check_topological_depth_segments::<D3>(
-            data,
-            |s| s.topological_depth,
-            [0, 1, 1],
-            BoundingCylinder3D {
-                center_xz: Vec2::new(1.0, 0.0),
-                radius: 1.0,
-                min_y: 0.0,
-                max_y: 1.0,
-            },
+        assert_eq!(data.segments.len(), 3);
+        assert_eq!(
+            data.segments
+                .iter()
+                .map(|segment| segment.topological_depth)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 1]
         );
+        assert_eq!(data.max_topological_depth(), 1);
+        assert_depth_3d_endpoints_are_contained(&data);
     }
 
     #[test]
