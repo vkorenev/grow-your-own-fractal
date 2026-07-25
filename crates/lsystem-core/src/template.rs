@@ -20,12 +20,15 @@
 //! designs. The public marker trait retains a doc-hidden placement hook for
 //! generic implementation dispatch.
 
+use std::sync::LazyLock;
+
+use crate::bounds::{NUMERICAL_MARGIN_ULPS, generate_directions, round_down_f32, round_up_f32};
 use crate::compiled_generation::{
     CompiledGeneration, GenerationDimension, GenerationPlan, PreparedGeneration, TemplateBuildError,
 };
 use crate::grammar::ExpandIter;
 use crate::turtle::{Turtle, TurtleDimension};
-use crate::{BoundsAccumulator, D2, D3, Dimension};
+use crate::{BoundsAccumulator, BoundsAccumulator2D, D2, D3, Dimension};
 use glam::{Vec2, Vec3};
 
 /// One template segment in the local frame.
@@ -45,9 +48,10 @@ pub type TemplateSegment3D = TemplateSegment<D3>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template<D: Dimension> {
     pub segments: Vec<TemplateSegment<D>>,
-    // Conservative local-frame bounds summary. Large templates store local
-    // AABB corners; small templates retain their endpoints, which avoids
-    // adding candidates relative to direct endpoint accumulation.
+    // Conservative local-frame bounds summary. Small templates retain their
+    // endpoints, which avoids adding candidates relative to direct endpoint
+    // accumulation; larger templates store a dimension-specific conservative
+    // shape (see [`Summary2D`] for 2D, local AABB corners for 3D).
     summary: D::Summary,
     pub exit_pos: D::Point,
     /// Net rotation from template entry to exit.
@@ -73,30 +77,227 @@ trait TemplateSummaryDimension: Dimension {
     );
 }
 
+/// Number of evenly spaced local directions sampled by a 2D template's
+/// support polygon.
+///
+/// Divisible by four, so the four world-axis directions pulled back through
+/// any stamp rotation land exactly a quarter of the table apart and one sector
+/// search serves all four.
+pub const SUPPORT_DIRECTION_COUNT_2D: usize = 32;
+
+/// The `SUPPORT_DIRECTION_COUNT_2D` evenly spaced sampling directions, shared
+/// by every 2D template.
+static SUPPORT_DIRECTIONS_2D: LazyLock<[Vec2; SUPPORT_DIRECTION_COUNT_2D]> =
+    LazyLock::new(generate_directions::<SUPPORT_DIRECTION_COUNT_2D>);
+
+/// Conservative local-frame bounds summary stored with a 2D template.
+///
+/// Templates with fewer than four segments keep their (at most six) exact
+/// endpoints, which is both tighter and cheaper than a 32-entry table. Larger
+/// templates store a direction-sampled support polygon.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Summary2D {
+    /// Exact local endpoints of a template with fewer than four segments.
+    Points(Vec<Vec2>),
+    /// Sector vertices of the template's `SUPPORT_DIRECTION_COUNT_2D`
+    /// direction support polygon.
+    ///
+    /// Let `h_i = max over local endpoints p of dot(p, d_i)` be the template's
+    /// true local support along sampling direction `d_i`. Entry `i` is the
+    /// intersection of the support lines of `d_i` and `d_{i + 1 mod M}`,
+    /// rounded outward so that the **stored** value satisfies the containment
+    /// invariant
+    ///
+    /// ```text
+    /// dot(v_i, d_i) >= h_i   and   dot(v_i, d_{i + 1 mod M}) >= h_{i + 1 mod M}
+    /// ```
+    ///
+    /// Every direction `u` inside sector `i` is a non-negative combination
+    /// `u = a * d_i + b * d_{i+1}`, so for any local endpoint `p`
+    /// `dot(p, u) = a * dot(p, d_i) + b * dot(p, d_{i+1}) <= a * h_i + b * h_{i+1}
+    /// <= dot(v_i, u)`. Vertex `i` alone therefore bounds the template's
+    /// support in *every* direction of sector `i`, with no search over the
+    /// other vertices — unlike the free-form 3D active-set solve, the active
+    /// constraint pair is fixed by construction here.
+    ///
+    /// Boxed because the array is an order of magnitude larger than the
+    /// `Points` variant and only large templates need it.
+    Table(Box<[Vec2; SUPPORT_DIRECTION_COUNT_2D]>),
+}
+
+/// True local support of a template along every sampling direction.
+fn local_supports(
+    segments: &[TemplateSegment<D2>],
+    directions: &[Vec2; SUPPORT_DIRECTION_COUNT_2D],
+) -> [f64; SUPPORT_DIRECTION_COUNT_2D] {
+    let mut supports = [f64::NEG_INFINITY; SUPPORT_DIRECTION_COUNT_2D];
+    for point in segments
+        .iter()
+        .flat_map(|segment| [segment.start, segment.end])
+    {
+        let (px, py) = (f64::from(point.x), f64::from(point.y));
+        for (support, direction) in supports.iter_mut().zip(directions.iter().copied()) {
+            *support = support.max(px * f64::from(direction.x) + py * f64::from(direction.y));
+        }
+    }
+    supports
+}
+
+/// Solves the sector vertex bracketed by `first`/`second` and rounds the
+/// stored `f32` outward until it satisfies the containment invariant
+/// documented on [`Summary2D::Table`].
+fn sector_vertex(first: Vec2, second: Vec2, first_support: f64, second_support: f64) -> Vec2 {
+    let (ax, ay) = (f64::from(first.x), f64::from(first.y));
+    let (bx, by) = (f64::from(second.x), f64::from(second.y));
+    // Adjacent generated directions are 11.25 degrees apart, so they are never
+    // coincident or anti-parallel and the determinant stays bounded away from
+    // zero: no near-singular branch is needed here.
+    let determinant = ax * by - ay * bx;
+    let x = (first_support * by - ay * second_support) / determinant;
+    let y = (ax * second_support - first_support * bx) / determinant;
+
+    let magnitude = [first_support, second_support, x, y]
+        .into_iter()
+        .map(f64::abs)
+        .fold(1.0_f64, f64::max);
+    let margin = NUMERICAL_MARGIN_ULPS * f64::from(f32::EPSILON) * magnitude;
+
+    // Push the f32-rounded vertex outward along the bisector `first + second`,
+    // which has a strictly positive dot product with both bracketing
+    // directions, so a single push moves both supports the same way. Rounding
+    // the components independently (the way `finish_cylinder` rounds a scalar
+    // radius) would instead *reduce* the support of a direction with a
+    // negative component and silently break containment.
+    let stored = Vec2::new(x as f32, y as f32);
+    let (mx, my) = (ax + bx, ay + by);
+    let (px, py) = (f64::from(stored.x), f64::from(stored.y));
+    let push = ((first_support + margin - (px * ax + py * ay)) / (mx * ax + my * ay))
+        .max((second_support + margin - (px * bx + py * by)) / (mx * bx + my * by))
+        .max(0.0);
+    let vertex = Vec2::new((px + push * mx) as f32, (py + push * my) as f32);
+
+    debug_assert!(
+        {
+            let (vx, vy) = (f64::from(vertex.x), f64::from(vertex.y));
+            vx * ax + vy * ay >= first_support && vx * bx + vy * by >= second_support
+        },
+        "stored sector vertex must support both bracketing directions"
+    );
+    vertex
+}
+
+/// Index `i` of the sector whose bracketing directions `d_i` and
+/// `d_{i + 1 mod M}` span `direction`.
+///
+/// Trigonometry-free: the component signs select the quadrant, and within one
+/// quadrant the perp-dot sign against each generator is monotone, so counting
+/// the generators `direction` has already passed locates the sector. A
+/// finite-precision misclassification can only pick an adjacent sector, which
+/// [`sector_support`] absorbs by evaluating both neighbours.
+fn sector_index(directions: &[Vec2; SUPPORT_DIRECTION_COUNT_2D], direction: Vec2) -> usize {
+    let quadrant = match (direction.x >= 0.0, direction.y >= 0.0) {
+        (true, true) => 0,
+        (false, true) => 1,
+        (false, false) => 2,
+        (true, false) => 3,
+    };
+    let quarter = SUPPORT_DIRECTION_COUNT_2D / 4;
+    let base = quadrant * quarter;
+    base + (1..quarter)
+        .take_while(|&step| directions[base + step].perp_dot(direction) >= 0.0)
+        .count()
+}
+
+/// Support of the stored polygon along `direction`, whose bracketing sector is
+/// `sector` (modulo the table size).
+///
+/// Both neighbouring sectors are evaluated as well, so a finite-precision
+/// misclassification at a sector boundary cannot under-bound.
+fn sector_support(
+    vertices: &[Vec2; SUPPORT_DIRECTION_COUNT_2D],
+    sector: usize,
+    direction: Vec2,
+) -> f64 {
+    let (dx, dy) = (f64::from(direction.x), f64::from(direction.y));
+    [sector + SUPPORT_DIRECTION_COUNT_2D - 1, sector, sector + 1]
+        .into_iter()
+        .map(|index| vertices[index % SUPPORT_DIRECTION_COUNT_2D])
+        .map(|vertex| f64::from(vertex.x) * dx + f64::from(vertex.y) * dy)
+        .fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// Folds a table-backed summary into the accumulator for one placement.
+fn fold_support_table(
+    vertices: &[Vec2; SUPPORT_DIRECTION_COUNT_2D],
+    stamp: Stamp<D2>,
+    accumulator: &mut BoundsAccumulator2D,
+) {
+    // World `+X` pulled back through the stamp rotation is the rotor
+    // conjugate: `rotation.rotate(p).x == dot(p, (rot.x, -rot.y))`. The other
+    // three world axes are quarter turns of it, so no per-stamp trigonometry
+    // is needed. A rotor that is not exactly unit length stays correct: that
+    // identity holds for any length, and only perp-dot *signs* drive the
+    // sector search.
+    let max_x_direction = Vec2::new(stamp.rot.x, -stamp.rot.y);
+    let max_y_direction = max_x_direction.perp();
+    let directions = LazyLock::force(&SUPPORT_DIRECTIONS_2D);
+    let quarter = SUPPORT_DIRECTION_COUNT_2D / 4;
+    // One search; the table is angle-sorted and its size is divisible by four,
+    // so the other three axes sit exactly a quarter table apart.
+    let sector = sector_index(directions, max_x_direction);
+    let max_x = sector_support(vertices, sector, max_x_direction);
+    let max_y = sector_support(vertices, sector + quarter, max_y_direction);
+    let min_x = sector_support(vertices, sector + 2 * quarter, -max_x_direction);
+    let min_y = sector_support(vertices, sector + 3 * quarter, -max_y_direction);
+
+    let (x, y) = (f64::from(stamp.pos.x), f64::from(stamp.pos.y));
+    let magnitude = [x, y, max_x, max_y, min_x, min_y]
+        .into_iter()
+        .map(f64::abs)
+        .fold(1.0_f64, f64::max);
+    // The world endpoints this bound must contain are themselves `f32`
+    // roundings of `pos + rot.rotate(point)`, whose error scales with the
+    // world position rather than with the template's local extent. Rounding
+    // the fold outward by a world-scale margin keeps placements far from the
+    // origin conservative.
+    let margin = NUMERICAL_MARGIN_ULPS * f64::from(f32::EPSILON) * magnitude;
+    // `BoundsAccumulator2D::include` packs `[x, y, -x, -y]` and takes a
+    // component-wise max, so including exactly these two corners reproduces
+    // the packed state of folding the four support values directly.
+    accumulator.include(Vec2::new(
+        round_up_f32(x + max_x + margin),
+        round_up_f32(y + max_y + margin),
+    ));
+    accumulator.include(Vec2::new(
+        round_down_f32(x - min_x - margin),
+        round_down_f32(y - min_y - margin),
+    ));
+}
+
 impl TemplateSummaryDimension for D2 {
-    fn build_summary(segments: &[TemplateSegment<Self>]) -> Vec<Vec2> {
-        // Three segments have six endpoints, which remains tighter than the
-        // four AABB corners used by larger templates in both dimensions.
+    fn build_summary(segments: &[TemplateSegment<Self>]) -> Summary2D {
+        // Three segments have six endpoints, which stays exact and remains
+        // cheaper than a 32-entry support table.
         if segments.len() < 4 {
-            return segments
-                .iter()
-                .flat_map(|segment| [segment.start, segment.end])
-                .collect();
+            return Summary2D::Points(
+                segments
+                    .iter()
+                    .flat_map(|segment| [segment.start, segment.end])
+                    .collect(),
+            );
         }
 
-        let (min, max) = segments
-            .iter()
-            .flat_map(|segment| [segment.start, segment.end])
-            .fold(
-                (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
-                |(min, max), point| (min.min(point), max.max(point)),
-            );
-        vec![
-            Vec2::new(min.x, min.y),
-            Vec2::new(min.x, max.y),
-            Vec2::new(max.x, min.y),
-            Vec2::new(max.x, max.y),
-        ]
+        let directions = LazyLock::force(&SUPPORT_DIRECTIONS_2D);
+        let supports = local_supports(segments, directions);
+        Summary2D::Table(Box::new(std::array::from_fn(|index| {
+            let next = (index + 1) % SUPPORT_DIRECTION_COUNT_2D;
+            sector_vertex(
+                directions[index],
+                directions[next],
+                supports[index],
+                supports[next],
+            )
+        })))
     }
 
     fn fold_summary(
@@ -104,8 +305,13 @@ impl TemplateSummaryDimension for D2 {
         stamp: Stamp<Self>,
         accumulator: &mut Self::BoundsAccumulator,
     ) {
-        for candidate in summary.iter().copied() {
-            accumulator.include(Self::transform_point(stamp.pos, stamp.rot, candidate));
+        match summary {
+            Summary2D::Points(points) => {
+                for candidate in points.iter().copied() {
+                    accumulator.include(Self::transform_point(stamp.pos, stamp.rot, candidate));
+                }
+            }
+            Summary2D::Table(vertices) => fold_support_table(vertices, stamp, accumulator),
         }
     }
 }
@@ -548,7 +754,7 @@ mod tests {
 
     use super::*;
     use crate::test_util::{compile_2d, compile_3d};
-    use crate::{BoundsAccumulator, Dimensions, GenerationConfig};
+    use crate::{Bounds2D, BoundsAccumulator, Dimensions, GenerationConfig};
 
     // Composed rigid transforms round differently from the per-symbol
     // recurrence; real placement bugs produce errors of order one step.
@@ -879,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn template_summaries_use_2d_endpoints_for_small_templates_and_aabb_corners_otherwise() {
+    fn template_summaries_use_2d_endpoints_for_small_templates_and_a_support_table_otherwise() {
         let config = GenerationConfig::new(
             Dimensions::TwoD,
             "A".to_string(),
@@ -892,26 +1098,197 @@ mod tests {
         .expect("balanced config");
         let set = build_2d(&config, 1).expect("set builds");
 
-        assert_eq!(set.templates()[0].summary.len(), 2);
+        // The built-in one-segment unit template keeps its exact endpoints.
+        let Summary2D::Points(points) = &set.templates()[0].summary else {
+            panic!("a one-segment template keeps its endpoints")
+        };
+        assert_eq!(points.len(), 2);
+
         let template = &set.templates()[1];
         assert_eq!(template.segments.len(), 4);
-        assert_eq!(template.summary.len(), 4);
-        let min = template
-            .summary
-            .iter()
-            .copied()
-            .reduce(Vec2::min)
-            .expect("AABB has corners");
-        let max = template
-            .summary
-            .iter()
-            .copied()
-            .reduce(Vec2::max)
-            .expect("AABB has corners");
-        for segment in &template.segments {
-            for point in [segment.start, segment.end] {
-                assert!(point.cmpge(min).all() && point.cmple(max).all());
+        let Summary2D::Table(vertices) = &template.summary else {
+            panic!("a four-segment template builds a support table")
+        };
+        assert_support_table_contains_endpoints(vertices, &template.segments);
+    }
+
+    /// Local-frame directions to probe a support table with. Deliberately
+    /// misaligned with the 32 generators so most probes land strictly inside a
+    /// sector rather than on a generator, where the table is exact anyway.
+    fn probe_directions() -> impl Iterator<Item = Vec2> {
+        (0..512).map(|index| Vec2::from_angle(std::f32::consts::TAU * index as f32 / 512.0 + 0.017))
+    }
+
+    /// Asserts the guarantee the per-stamp query relies on: for every probe
+    /// direction, the bracketing sector's support (with neighbours, exactly as
+    /// [`fold_support_table`] evaluates it) is at least the true support of
+    /// every local endpoint.
+    fn assert_support_table_contains_endpoints(
+        vertices: &[Vec2; SUPPORT_DIRECTION_COUNT_2D],
+        segments: &[TemplateSegment2D],
+    ) {
+        let directions = LazyLock::force(&SUPPORT_DIRECTIONS_2D);
+        for probe in probe_directions() {
+            let support = sector_support(vertices, sector_index(directions, probe), probe);
+            for point in segments
+                .iter()
+                .flat_map(|segment| [segment.start, segment.end])
+            {
+                let exact = f64::from(point.x) * f64::from(probe.x)
+                    + f64::from(point.y) * f64::from(probe.y);
+                assert!(
+                    support >= exact,
+                    "support {support} under-bounds endpoint projection {exact} \
+                     along {probe:?}"
+                );
             }
+        }
+    }
+
+    fn local_segments(points: &[[f32; 4]]) -> Vec<TemplateSegment2D> {
+        points
+            .iter()
+            .map(|&[sx, sy, ex, ey]| TemplateSegment {
+                start: Vec2::new(sx, sy),
+                end: Vec2::new(ex, ey),
+                depth_offset: 0,
+            })
+            .collect()
+    }
+
+    fn build_2d_summary(segments: &[TemplateSegment2D]) -> Summary2D {
+        <D2 as TemplateSummaryDimension>::build_summary(segments)
+    }
+
+    /// Segment clouds chosen to stress the build: singleton and repeated
+    /// points, collinear geometry (whose polygon is degenerate in one
+    /// direction), a thin diagonal, and a generic scatter.
+    fn adversarial_clouds() -> Vec<(&'static str, Vec<TemplateSegment2D>)> {
+        vec![
+            ("singleton", local_segments(&[[2.0, -3.0, 2.0, -3.0]])),
+            ("repeated", local_segments(&[[1.0, 1.0, 1.0, 1.0]; 5])),
+            (
+                "collinear",
+                local_segments(&[
+                    [-4.0, -4.0, -1.0, -1.0],
+                    [-1.0, -1.0, 2.0, 2.0],
+                    [2.0, 2.0, 5.0, 5.0],
+                    [5.0, 5.0, 8.0, 8.0],
+                ]),
+            ),
+            (
+                "thin-diagonal",
+                local_segments(&[
+                    [0.0, 0.0, 1.0, 1.0],
+                    [1.0, 1.0, 2.0, 2.0],
+                    [2.0, 2.0, 3.0, 3.001],
+                    [3.0, 3.001, 4.0, 4.0],
+                ]),
+            ),
+            (
+                "scatter",
+                local_segments(&[
+                    [-9.0, 4.0, 11.0, -6.0],
+                    [2.0, 8.0, -1.0, -4.0],
+                    [6.0, 1.0, -3.0, 7.0],
+                    [0.0, -11.0, 4.0, 3.0],
+                    [-7.0, -2.0, 9.0, 5.0],
+                ]),
+            ),
+        ]
+    }
+
+    #[test]
+    fn support_tables_contain_their_own_local_endpoints() {
+        for (label, segments) in adversarial_clouds() {
+            match build_2d_summary(&segments) {
+                // Fewer than four segments keeps the exact endpoints, so the
+                // containment check is the identity.
+                Summary2D::Points(points) => {
+                    assert!(segments.len() < 4, "{label}: unexpected fallback");
+                    let expected: Vec<_> = segments
+                        .iter()
+                        .flat_map(|segment| [segment.start, segment.end])
+                        .collect();
+                    assert_eq!(points, expected, "{label}");
+                }
+                Summary2D::Table(vertices) => {
+                    assert!(segments.len() >= 4, "{label}: unexpected table");
+                    assert_support_table_contains_endpoints(&vertices, &segments);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn support_tables_stay_conservative_across_scales_and_translation() {
+        for (label, segments) in adversarial_clouds() {
+            for scale in [1.0e-3_f32, 1.0, 1.0e3, 1.0e6] {
+                for offset in [Vec2::ZERO, Vec2::new(1.0e3, -1.0e3)] {
+                    let scaled: Vec<_> = segments
+                        .iter()
+                        .map(|segment| TemplateSegment {
+                            start: segment.start * scale + offset,
+                            end: segment.end * scale + offset,
+                            depth_offset: segment.depth_offset,
+                        })
+                        .collect();
+                    if let Summary2D::Table(vertices) = build_2d_summary(&scaled) {
+                        assert_support_table_contains_endpoints(&vertices, &scaled);
+                    } else {
+                        assert!(scaled.len() < 4, "{label}: unexpected fallback");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn support_table_build_is_order_independent() {
+        for (label, segments) in adversarial_clouds() {
+            let forward = build_2d_summary(&segments);
+            let mut reversed = segments.clone();
+            reversed.reverse();
+            let rotated: Vec<_> = segments[1..]
+                .iter()
+                .chain(&segments[..1])
+                .copied()
+                .collect();
+            if segments.len() >= 4 {
+                assert_eq!(forward, build_2d_summary(&reversed), "{label}: reversed");
+                assert_eq!(forward, build_2d_summary(&rotated), "{label}: rotated");
+            }
+        }
+    }
+
+    #[test]
+    fn generated_2d_support_directions_are_unit_length_and_antipodal() {
+        let directions = LazyLock::force(&SUPPORT_DIRECTIONS_2D);
+        let half = SUPPORT_DIRECTION_COUNT_2D / 2;
+        for index in 0..half {
+            let direction = directions[index];
+            assert!((direction.length_squared() - 1.0).abs() <= 2.0e-7);
+            assert_eq!(directions[index + half], -direction);
+        }
+        assert_eq!(directions[0], Vec2::X);
+        // Angle-sorted: every step turns the same way by less than a half turn.
+        for index in 0..SUPPORT_DIRECTION_COUNT_2D {
+            let next = (index + 1) % SUPPORT_DIRECTION_COUNT_2D;
+            assert!(directions[index].perp_dot(directions[next]) > 0.0);
+        }
+    }
+
+    #[test]
+    fn sector_lookup_brackets_every_probe_direction() {
+        let directions = LazyLock::force(&SUPPORT_DIRECTIONS_2D);
+        for probe in probe_directions() {
+            let sector = sector_index(directions, probe);
+            let next = (sector + 1) % SUPPORT_DIRECTION_COUNT_2D;
+            assert!(
+                directions[sector].perp_dot(probe) >= 0.0
+                    && probe.perp_dot(directions[next]) >= 0.0,
+                "{probe:?} is not bracketed by sector {sector}"
+            );
         }
     }
 
@@ -940,6 +1317,162 @@ mod tests {
                 assert!(point.y >= bounds.min.y && point.y <= bounds.max.y);
             }
         }
+    }
+
+    /// Absolute outward slack of `candidate` relative to `exact`, summed over
+    /// all four sides.
+    ///
+    /// Absolute rather than relative on purpose: a thin diagonal rotated to be
+    /// nearly axis-aligned has a near-degenerate exact extent on one axis, so
+    /// any relative or area measure explodes even for a correct fit.
+    fn bounds_slack(candidate: Bounds2D, exact: Bounds2D) -> f64 {
+        f64::from(candidate.max.x - exact.max.x)
+            + f64::from(candidate.max.y - exact.max.y)
+            + f64::from(exact.min.x - candidate.min.x)
+            + f64::from(exact.min.y - candidate.min.y)
+    }
+
+    #[test]
+    fn transformed_2d_support_table_bounds_beat_aabb_corners_on_a_thin_diagonal() {
+        // Four collinear segments at 45 degrees: the local AABB is a square
+        // whose two off-diagonal corners are pure phantoms.
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "A".to_string(),
+            1,
+            45.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('A', "+FFFF".to_string())]),
+        )
+        .expect("balanced config");
+        let set = build_2d(&config, 1).expect("set builds");
+        let template = &set.templates()[1];
+        assert_eq!(template.segments.len(), 4);
+        assert!(matches!(template.summary, Summary2D::Table(_)));
+
+        // Rotate the local diagonal to just off world +Y. The deliberate 0.03
+        // rad offset keeps the pulled-back query axes strictly inside their
+        // sectors instead of landing on a generator, where the table is exact.
+        let stamp = Stamp {
+            template: 1,
+            pos: Vec2::new(7.0, -3.0),
+            rot: Vec2::from_angle(std::f32::consts::FRAC_PI_4 + 0.03),
+            depth_base: 0,
+            order_base: 0,
+        };
+
+        let mut exact = <D2 as Dimension>::BoundsAccumulator::default();
+        for segment in &template.segments {
+            for point in stamp.transform_segment(segment) {
+                exact.include(point);
+            }
+        }
+        let exact = exact.finish().expect("template has geometry");
+
+        let mut table = <D2 as Dimension>::BoundsAccumulator::default();
+        template.include_world_bounds(stamp, &mut table);
+        let table = table.finish().expect("template has geometry");
+
+        // The representation this stage replaces: the four local AABB corners,
+        // transformed and accumulated. Inlined rather than resurrected.
+        let (local_min, local_max) = template
+            .segments
+            .iter()
+            .flat_map(|segment| [segment.start, segment.end])
+            .fold(
+                (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+                |(min, max), point| (min.min(point), max.max(point)),
+            );
+        let mut aabb = <D2 as Dimension>::BoundsAccumulator::default();
+        for corner in [
+            Vec2::new(local_min.x, local_min.y),
+            Vec2::new(local_min.x, local_max.y),
+            Vec2::new(local_max.x, local_min.y),
+            Vec2::new(local_max.x, local_max.y),
+        ] {
+            aabb.include(D2::transform_point(stamp.pos, stamp.rot, corner));
+        }
+        let aabb = aabb.finish().expect("template has geometry");
+
+        for segment in &template.segments {
+            for point in stamp.transform_segment(segment) {
+                assert!(point.x >= table.min.x && point.x <= table.max.x);
+                assert!(point.y >= table.min.y && point.y <= table.max.y);
+            }
+        }
+
+        let table_slack = bounds_slack(table, exact);
+        let aabb_slack = bounds_slack(aabb, exact);
+        println!(
+            "exact {exact:?}\ntable {table:?} slack {table_slack}\naabb {aabb:?} slack {aabb_slack}"
+        );
+        assert!(table_slack >= 0.0, "table bounds must contain exact bounds");
+        // Measured on this fixture: table slack 7.1e-5 (dominated by the
+        // outward numerical margin, not by sector sampling) against 3.88 for
+        // the AABB corners, a factor of ~54_000. The threshold keeps ~50x
+        // headroom so it tracks a real regression rather than platform noise.
+        assert!(
+            table_slack * 1000.0 <= aabb_slack,
+            "support table slack {table_slack} must be far below AABB-corner slack {aabb_slack}"
+        );
+    }
+
+    #[test]
+    fn stamped_2d_placements_exercise_many_support_table_sectors() {
+        // The support table only earns its keep for arbitrary pulled-back
+        // directions; an axis-aligned stamp exercises none of the sector
+        // lookup. 29.5 degrees is not a divisor of 90, so accumulated headings
+        // sweep the circle.
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "A".to_string(),
+            8,
+            29.5,
+            1.0,
+            0.0,
+            BTreeMap::from([('A', "F+[A]--AF+++A".to_string())]),
+        )
+        .expect("balanced config");
+        let set = build_2d(&config, 2).expect("set builds");
+        let directions = LazyLock::force(&SUPPORT_DIRECTIONS_2D);
+
+        let mut sectors = std::collections::BTreeSet::new();
+        let mut table_stamps = 0_u32;
+        for (stamp, template) in set.stamps() {
+            if matches!(template.summary, Summary2D::Table(_)) {
+                table_stamps += 1;
+                sectors.insert(sector_index(
+                    directions,
+                    Vec2::new(stamp.rot.x, -stamp.rot.y),
+                ));
+            }
+
+            let mut candidate = <D2 as Dimension>::BoundsAccumulator::default();
+            template.include_world_bounds(stamp, &mut candidate);
+            let candidate = candidate.finish().expect("stamped template has geometry");
+            for segment in &template.segments {
+                for point in stamp.transform_segment(segment) {
+                    assert!(
+                        point.x >= candidate.min.x
+                            && point.x <= candidate.max.x
+                            && point.y >= candidate.min.y
+                            && point.y <= candidate.max.y,
+                        "stamp {stamp:?} bound {candidate:?} misses {point:?}"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            table_stamps > 0,
+            "fixture must stamp table-backed templates"
+        );
+        assert_eq!(
+            sectors.len(),
+            SUPPORT_DIRECTION_COUNT_2D,
+            "table-backed stamps must reach every sector, saw {sectors:?}"
+        );
     }
 
     #[test]

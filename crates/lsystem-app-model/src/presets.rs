@@ -140,6 +140,27 @@ mod tests {
         .expect("thin diagonal grammar is balanced");
         assert_stamped_bounds("thin-diagonal-3d", &thin_diagonal_3d);
 
+        // The 2D analog, awkward for the 2D directional support table in the
+        // same way: four collinear segments at 45 degrees, so the local AABB
+        // is a square whose off-diagonal corners are phantoms.
+        let thin_diagonal_2d = GenerationConfig::new(
+            Dimensions::TwoD,
+            "A".to_string(),
+            2,
+            45.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('A', "+FFFF".to_string())]),
+        )
+        .expect("thin diagonal grammar is balanced");
+        assert_stamped_bounds("thin-diagonal-2d", &thin_diagonal_2d);
+
+        // The seeded 2D grammars below turn by `22.5 + n` degrees for integer
+        // `n`, which is never a multiple of 90, so their stamps are placed at
+        // non-axis-aligned rotations and exercise the support table's sector
+        // lookup rather than its exact generator directions. Sector coverage
+        // itself is asserted in `lsystem-core`'s template tests, where stamp
+        // rotations are reachable.
         let mut seed = 0x5EED_CAFE_u64;
         for index in 0..16 {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);

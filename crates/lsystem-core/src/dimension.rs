@@ -7,6 +7,7 @@ use crate::bounds::{
     BoundsAccumulator3D,
 };
 use crate::config::Dimensions;
+use crate::template::Summary2D;
 
 mod sealed {
     pub trait Sealed {}
@@ -69,7 +70,7 @@ impl Dimension for D2 {
     type Rotation = Vec2;
     type Bounds = Bounds2D;
     type BoundsAccumulator = BoundsAccumulator2D;
-    type Summary = Vec<Vec2>;
+    type Summary = Summary2D;
 
     const RUNTIME: Dimensions = Dimensions::TwoD;
 

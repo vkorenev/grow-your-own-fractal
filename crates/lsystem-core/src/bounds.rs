@@ -3,23 +3,32 @@ use std::{fmt::Debug, sync::LazyLock};
 use glam::{Vec2, Vec3, Vec3Swizzles, Vec4};
 
 const DIRECTION_COUNT: usize = 16;
-const HALF_DIRECTION_COUNT: usize = DIRECTION_COUNT / 2;
-const NUMERICAL_MARGIN_ULPS: f64 = 16.0;
+pub(crate) const NUMERICAL_MARGIN_ULPS: f64 = 16.0;
 
-// Generate one half-turn trigonometrically, then negate it so antipodal pairs
-// remain exact even when native and WebAssembly libm implementations round the
-// trigonometric results differently.
-static SUPPORT_DIRECTIONS: LazyLock<[Vec2; DIRECTION_COUNT]> = LazyLock::new(|| {
-    let mut directions = [Vec2::ZERO; DIRECTION_COUNT];
-    for index in 0..HALF_DIRECTION_COUNT {
-        let angle = std::f64::consts::TAU * index as f64 / DIRECTION_COUNT as f64;
+/// Returns `N` evenly spaced unit directions starting at `+X`, in increasing
+/// angle order.
+///
+/// Generates one half-turn trigonometrically, then negates it so antipodal
+/// pairs remain exact even when native and WebAssembly libm implementations
+/// round the trigonometric results differently. `N` must be even.
+///
+/// Shared by the 3D world accumulator's `k = 16` table below and the 2D
+/// per-template support table in [`crate::template`], so the two cannot drift
+/// apart.
+pub(crate) fn generate_directions<const N: usize>() -> [Vec2; N] {
+    let mut directions = [Vec2::ZERO; N];
+    for index in 0..N / 2 {
+        let angle = std::f64::consts::TAU * index as f64 / N as f64;
         let (sin, cos) = angle.sin_cos();
         let direction = Vec2::new(cos as f32, sin as f32);
         directions[index] = direction;
-        directions[index + HALF_DIRECTION_COUNT] = -direction;
+        directions[index + N / 2] = -direction;
     }
     directions
-});
+}
+
+static SUPPORT_DIRECTIONS: LazyLock<[Vec2; DIRECTION_COUNT]> =
+    LazyLock::new(generate_directions::<DIRECTION_COUNT>);
 
 /// Axis-aligned bounds containing a set of two-dimensional points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -349,7 +358,7 @@ fn maximum_support_distance(
         .fold(f64::NEG_INFINITY, f64::max)
 }
 
-fn round_up_f32(value: f64) -> f32 {
+pub(crate) fn round_up_f32(value: f64) -> f32 {
     let rounded = value as f32;
     if f64::from(rounded) < value {
         if rounded.is_sign_negative() {
@@ -362,7 +371,7 @@ fn round_up_f32(value: f64) -> f32 {
     }
 }
 
-fn round_down_f32(value: f64) -> f32 {
+pub(crate) fn round_down_f32(value: f64) -> f32 {
     let rounded = value as f32;
     if f64::from(rounded) > value {
         if rounded.is_sign_negative() {
@@ -573,9 +582,10 @@ mod tests {
     #[test]
     fn generated_directions_are_unit_length_and_antipodal() {
         let directions = BoundsAccumulator3D::default().directions;
-        for index in 0..HALF_DIRECTION_COUNT {
+        let half = DIRECTION_COUNT / 2;
+        for index in 0..half {
             let direction = directions[index];
-            let opposite = directions[index + HALF_DIRECTION_COUNT];
+            let opposite = directions[index + half];
             assert!((direction.length_squared() - 1.0).abs() <= 2.0e-7);
             assert_eq!(opposite, -direction);
         }

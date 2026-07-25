@@ -150,8 +150,11 @@ mutation.
   Fixed-depth tests and benchmarks use `CompiledGeneration::build_templates`,
   whose structured error returns the generation when the requested depth is
   invalid. Each non-empty template also retains a compact local bounds
-  summary: small templates use their endpoints and larger templates use local
-  AABB corners. Stamped consumers fold that summary once per placement before
+  summary: small templates use their endpoints, while larger templates use a
+  conservative local shape — a 32-direction support polygon in 2D
+  (`Summary2D::Table`, queried per stamp without trigonometry by pulling the
+  four world axes back through the stamp rotation) and local AABB corners in
+  3D. Stamped consumers fold that summary once per placement before
   streaming its segment records; interpreter consumers continue to accumulate
   emitted endpoints. The interpreter remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
