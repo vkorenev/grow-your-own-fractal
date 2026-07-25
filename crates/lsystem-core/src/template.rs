@@ -45,10 +45,10 @@ pub type TemplateSegment3D = TemplateSegment<D3>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template<D: Dimension> {
     pub segments: Vec<TemplateSegment<D>>,
-    // Conservatively contains every local segment endpoint. Large templates
-    // store local AABB corners; small templates retain their endpoints, which
-    // avoids adding candidates relative to direct endpoint accumulation.
-    bounds_candidates: Vec<D::Point>,
+    // Conservative local-frame bounds summary. Large templates store local
+    // AABB corners; small templates retain their endpoints, which avoids
+    // adding candidates relative to direct endpoint accumulation.
+    summary: D::Summary,
     pub exit_pos: D::Point,
     /// Net rotation from template entry to exit.
     pub exit_rot: D::Rotation,
@@ -60,16 +60,21 @@ pub struct Template<D: Dimension> {
 pub type Template2D = Template<D2>;
 pub type Template3D = Template<D3>;
 
-/// Builds the local bounds summary stored with a template.
+/// Builds and folds the local bounds summary stored with a template.
 ///
 /// This stays with template construction rather than turtle semantics: it is
 /// a storage tradeoff for stamped bounds, not a geometric transition.
 trait TemplateSummaryDimension: Dimension {
-    fn bounds_candidates(segments: &[TemplateSegment<Self>]) -> Vec<Self::Point>;
+    fn build_summary(segments: &[TemplateSegment<Self>]) -> Self::Summary;
+    fn fold_summary(
+        summary: &Self::Summary,
+        stamp: Stamp<Self>,
+        accumulator: &mut Self::BoundsAccumulator,
+    );
 }
 
 impl TemplateSummaryDimension for D2 {
-    fn bounds_candidates(segments: &[TemplateSegment<Self>]) -> Vec<Vec2> {
+    fn build_summary(segments: &[TemplateSegment<Self>]) -> Vec<Vec2> {
         // Three segments have six endpoints, which remains tighter than the
         // four AABB corners used by larger templates in both dimensions.
         if segments.len() < 4 {
@@ -93,10 +98,20 @@ impl TemplateSummaryDimension for D2 {
             Vec2::new(max.x, max.y),
         ]
     }
+
+    fn fold_summary(
+        summary: &Self::Summary,
+        stamp: Stamp<Self>,
+        accumulator: &mut Self::BoundsAccumulator,
+    ) {
+        for candidate in summary.iter().copied() {
+            accumulator.include(Self::transform_point(stamp.pos, stamp.rot, candidate));
+        }
+    }
 }
 
 impl TemplateSummaryDimension for D3 {
-    fn bounds_candidates(segments: &[TemplateSegment<Self>]) -> Vec<Vec3> {
+    fn build_summary(segments: &[TemplateSegment<Self>]) -> Vec<Vec3> {
         // Three segments have six endpoints, which remains tighter than the
         // eight AABB corners used by larger templates in three dimensions.
         if segments.len() < 4 {
@@ -124,9 +139,19 @@ impl TemplateSummaryDimension for D3 {
             Vec3::new(max.x, max.y, max.z),
         ]
     }
+
+    fn fold_summary(
+        summary: &Self::Summary,
+        stamp: Stamp<Self>,
+        accumulator: &mut Self::BoundsAccumulator,
+    ) {
+        for candidate in summary.iter().copied() {
+            accumulator.include(Self::transform_point(stamp.pos, stamp.rot, candidate));
+        }
+    }
 }
 
-impl<D: Dimension> Template<D> {
+impl<D: TemplateDimension> Template<D> {
     /// Includes this template's conservative world-space summary for one
     /// placement. Stamped consumers call this once before emitting the
     /// placement's individual records.
@@ -135,9 +160,7 @@ impl<D: Dimension> Template<D> {
         stamp: Stamp<D>,
         accumulator: &mut D::BoundsAccumulator,
     ) {
-        for candidate in self.bounds_candidates.iter().copied() {
-            accumulator.include(D::transform_point(stamp.pos, stamp.rot, candidate));
-        }
+        D::fold_summary(&self.summary, stamp, accumulator);
     }
 }
 
@@ -271,6 +294,16 @@ pub trait TemplateDimension: GenerationDimension {
 
     #[doc(hidden)]
     fn stamp_placements(set: &TemplateSet<Self>) -> Self::StampPlacements<'_>;
+
+    /// Forwards to [`TemplateSummaryDimension::fold_summary`] so callers
+    /// generic over [`TemplateDimension`] (a public, sealed trait) can fold a
+    /// template's summary without naming the private trait themselves.
+    #[doc(hidden)]
+    fn fold_summary(
+        summary: &Self::Summary,
+        stamp: Stamp<Self>,
+        accumulator: &mut Self::BoundsAccumulator,
+    );
 }
 
 /// Builds templates for every ruled symbol by expanding it
@@ -298,7 +331,7 @@ fn build_generic<D: TurtleDimension + TemplateSummaryDimension>(
             end: unit_end,
             depth_offset: 0,
         }],
-        bounds_candidates: D::bounds_candidates(&[TemplateSegment {
+        summary: D::build_summary(&[TemplateSegment {
             start: D::POINT_ZERO,
             end: unit_end,
             depth_offset: 0,
@@ -331,7 +364,7 @@ fn build_generic<D: TurtleDimension + TemplateSummaryDimension>(
 
         symbol_to_template[symbol as usize] = Some(templates.len() as u16);
         templates.push(Template {
-            bounds_candidates: D::bounds_candidates(&segments),
+            summary: D::build_summary(&segments),
             segments,
             exit_pos: state.position(),
             exit_rot: state.normalized_heading(),
@@ -469,6 +502,14 @@ impl<D: TurtleDimension + TemplateSummaryDimension> TemplateDimension for D {
 
     fn stamp_placements(set: &TemplateSet<Self>) -> Self::StampPlacements<'_> {
         StampPlacements::new(set)
+    }
+
+    fn fold_summary(
+        summary: &Self::Summary,
+        stamp: Stamp<Self>,
+        accumulator: &mut Self::BoundsAccumulator,
+    ) {
+        <D as TemplateSummaryDimension>::fold_summary(summary, stamp, accumulator);
     }
 }
 
@@ -851,18 +892,18 @@ mod tests {
         .expect("balanced config");
         let set = build_2d(&config, 1).expect("set builds");
 
-        assert_eq!(set.templates()[0].bounds_candidates.len(), 2);
+        assert_eq!(set.templates()[0].summary.len(), 2);
         let template = &set.templates()[1];
         assert_eq!(template.segments.len(), 4);
-        assert_eq!(template.bounds_candidates.len(), 4);
+        assert_eq!(template.summary.len(), 4);
         let min = template
-            .bounds_candidates
+            .summary
             .iter()
             .copied()
             .reduce(Vec2::min)
             .expect("AABB has corners");
         let max = template
-            .bounds_candidates
+            .summary
             .iter()
             .copied()
             .reduce(Vec2::max)
@@ -970,7 +1011,7 @@ mod tests {
         let set = build_3d(&config, 1).expect("set builds");
         let template = &set.templates()[1];
         assert_eq!(template.segments.len(), 4);
-        assert_eq!(template.bounds_candidates.len(), 8);
+        assert_eq!(template.summary.len(), 8);
 
         let local_direction = (template.segments[0].end - template.segments[0].start).normalize();
 
