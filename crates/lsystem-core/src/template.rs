@@ -179,9 +179,10 @@ fn sector_vertex(first: Vec2, second: Vec2, first_support: f64, second_support: 
     debug_assert!(
         {
             let (vx, vy) = (f64::from(vertex.x), f64::from(vertex.y));
-            vx * ax + vy * ay >= first_support && vx * bx + vy * by >= second_support
+            vx * ax + vy * ay >= first_support + 0.5 * margin
+                && vx * bx + vy * by >= second_support + 0.5 * margin
         },
-        "stored sector vertex must support both bracketing directions"
+        "stored sector vertex must clear both bracketing supports by most of the outward margin"
     );
     vertex
 }
@@ -1351,9 +1352,9 @@ mod tests {
         assert_eq!(template.segments.len(), 4);
         assert!(matches!(template.summary, Summary2D::Table(_)));
 
-        // Rotate the local diagonal to just off world +Y. The deliberate 0.03
-        // rad offset keeps the pulled-back query axes strictly inside their
-        // sectors instead of landing on a generator, where the table is exact.
+        // Rotate the local diagonal to just off world +Y; the 0.03 rad offset
+        // only keeps the stamp off exact axis alignment and is not
+        // load-bearing for the comparison below.
         let stamp = Stamp {
             template: 1,
             pos: Vec2::new(7.0, -3.0),
