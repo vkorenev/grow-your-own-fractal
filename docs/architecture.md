@@ -153,9 +153,13 @@ mutation.
   summary: small templates use their endpoints, while larger templates use a
   conservative local shape — a 32-direction support polygon in 2D
   (`Summary2D::Table`, queried per stamp without trigonometry by pulling the
-  four world axes back through the stamp rotation) and local AABB corners in
-  3D. Stamped consumers fold that summary once per placement before
-  streaming its segment records; interpreter consumers continue to accumulate
+  four world axes back through the stamp rotation) and a 102-direction
+  spherical support table in 3D (`Summary3D::Table`, backed by a
+  crate-internal geodesic-octahedron direction/triangle table with O(1)
+  point location; queried per stamp via three rotation-matrix-row pullbacks
+  plus cheap linear combinations, no per-direction trigonometry). Stamped
+  consumers fold that summary once per placement before streaming its
+  segment records; interpreter consumers continue to accumulate
   emitted endpoints. The interpreter remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
   `GenerationConfig::new` is the only way to build a generation config; it

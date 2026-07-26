@@ -2,7 +2,11 @@ use std::{fmt::Debug, sync::LazyLock};
 
 use glam::{Vec2, Vec3, Vec3Swizzles, Vec4};
 
-const DIRECTION_COUNT: usize = 16;
+/// Number of fixed horizontal support directions the 3D world accumulator
+/// samples. `pub(crate)` so `template.rs`'s stamped summary fold can size
+/// its own per-stamp query to match and reuse [`SUPPORT_DIRECTIONS`]
+/// exactly (see [`BoundsAccumulator3D::include_horizontal_and_y_supports`]).
+pub(crate) const DIRECTION_COUNT: usize = 16;
 pub(crate) const NUMERICAL_MARGIN_ULPS: f64 = 16.0;
 
 /// Returns `N` evenly spaced unit directions starting at `+X`, in increasing
@@ -27,7 +31,11 @@ pub(crate) fn generate_directions<const N: usize>() -> [Vec2; N] {
     directions
 }
 
-static SUPPORT_DIRECTIONS: LazyLock<[Vec2; DIRECTION_COUNT]> =
+/// The fixed horizontal directions the 3D world accumulator samples.
+/// `pub(crate)` so a per-stamp summary fold (`template.rs`) can pull back
+/// the *exact* directions the accumulator itself uses, rather than building
+/// a second, independently generated copy.
+pub(crate) static SUPPORT_DIRECTIONS: LazyLock<[Vec2; DIRECTION_COUNT]> =
     LazyLock::new(generate_directions::<DIRECTION_COUNT>);
 
 /// Axis-aligned bounds containing a set of two-dimensional points.
@@ -176,6 +184,44 @@ impl Default for BoundsAccumulator3D {
             supports: None,
             directions: LazyLock::force(&SUPPORT_DIRECTIONS),
         }
+    }
+}
+
+impl BoundsAccumulator3D {
+    /// Folds precomputed per-direction support values directly, bypassing
+    /// [`BoundsAccumulator::include`]'s single-point input.
+    ///
+    /// `include(point)` cannot express this: it derives all 16 horizontal
+    /// supports plus `min_y`/`max_y` from one `Vec3`, but a per-stamp
+    /// template summary fold (`template.rs`) computes 16 *independent*
+    /// horizontal support estimates plus separate `min_y`/`max_y` estimates
+    /// that do not correspond to any single point. `horizontal` must be in
+    /// the same order as [`SUPPORT_DIRECTIONS`] (reuse that exact static,
+    /// do not regenerate a second copy).
+    pub(crate) fn include_horizontal_and_y_supports(
+        &mut self,
+        horizontal: [f32; DIRECTION_COUNT],
+        min_y: f32,
+        max_y: f32,
+    ) {
+        debug_assert!(
+            horizontal.iter().all(|value| value.is_finite())
+                && min_y.is_finite()
+                && max_y.is_finite(),
+            "bounds supports must be finite"
+        );
+        let incoming = Supports3D {
+            horizontal,
+            min_y,
+            max_y,
+        };
+        self.supports = Some(match self.supports {
+            Some(mut supports) => {
+                supports.merge(incoming);
+                supports
+            }
+            None => incoming,
+        });
     }
 }
 
@@ -754,6 +800,74 @@ mod tests {
         left_3d.merge(&right_3d);
         left_3d.merge(&BoundsAccumulator3D::default());
         assert_eq!(left_3d.finish(), complete_3d.finish());
+    }
+
+    #[test]
+    fn horizontal_and_y_supports_match_the_equivalent_point_cloud() {
+        // Build one accumulator the ordinary way (per-point `include`), and
+        // a second by manually replicating the same per-direction max/min
+        // fold `include` performs internally and feeding the result through
+        // `include_horizontal_and_y_supports`. The two must finish
+        // identically: the new method's fold logic must not diverge from
+        // `include`'s, even though its input shape is different.
+        let points = [
+            Vec3::new(-9.0, 4.0, 2.0),
+            Vec3::new(11.0, -6.0, -3.0),
+            Vec3::new(2.0, 8.0, 12.0),
+            Vec3::new(-1.0, -4.0, 7.0),
+            Vec3::new(6.0, 1.0, -11.0),
+        ];
+        let directions = BoundsAccumulator3D::default().directions;
+
+        let mut by_points = BoundsAccumulator3D::default();
+        for point in points {
+            by_points.include(point);
+        }
+
+        let mut horizontal = [f32::NEG_INFINITY; DIRECTION_COUNT];
+        for point in points {
+            for (support, direction) in horizontal.iter_mut().zip(directions.iter().copied()) {
+                *support = support.max(direction.dot(point.xz()));
+            }
+        }
+        let min_y = points
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        let max_y = points
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        let mut by_supports = BoundsAccumulator3D::default();
+        by_supports.include_horizontal_and_y_supports(horizontal, min_y, max_y);
+
+        assert_eq!(by_supports.finish(), by_points.finish());
+    }
+
+    #[test]
+    fn horizontal_and_y_supports_construct_from_an_empty_accumulator() {
+        let accumulator = BoundsAccumulator3D::default();
+        assert_eq!(accumulator.finish(), None);
+
+        let mut accumulator = BoundsAccumulator3D::default();
+        accumulator.include_horizontal_and_y_supports([3.0; DIRECTION_COUNT], -1.0, 1.0);
+        let bounds = accumulator.finish().expect("supports produce bounds");
+        assert!(bounds.radius > 0.0);
+        assert!(bounds.min_y <= -1.0);
+        assert!(bounds.max_y >= 1.0);
+    }
+
+    #[test]
+    fn horizontal_and_y_supports_merge_into_existing_state() {
+        let mut folded_twice = BoundsAccumulator3D::default();
+        folded_twice.include_horizontal_and_y_supports([1.0; DIRECTION_COUNT], -1.0, 1.0);
+        folded_twice.include_horizontal_and_y_supports([2.0; DIRECTION_COUNT], -2.0, 2.0);
+
+        let mut folded_once = BoundsAccumulator3D::default();
+        folded_once.include_horizontal_and_y_supports([2.0; DIRECTION_COUNT], -2.0, 2.0);
+
+        assert_eq!(folded_twice.finish(), folded_once.finish());
     }
 
     #[cfg(debug_assertions)]

@@ -125,9 +125,13 @@ mod tests {
             assert_stamped_bounds(&label, &config.generation);
         }
 
-        // A single diagonal local template is deliberately awkward for AABB
-        // corners after a rigid placement: phantom corners can add horizontal
-        // radius even when the true geometry is nearly axis-aligned.
+        // A single diagonal local template is deliberately awkward: it
+        // stresses the 3D spherical support table's thin-geometry handling
+        // (a near-degenerate direction cloud, the adversarial case for
+        // interpolating between only a few sampled support directions —
+        // see `docs/plans/3d-spherical-support-table.md`), the way it
+        // previously stressed the AABB-corner representation this stage
+        // replaced.
         let thin_diagonal_3d = GenerationConfig::new(
             Dimensions::ThreeD,
             "A".to_string(),
