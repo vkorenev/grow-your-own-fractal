@@ -190,10 +190,15 @@ pub fn rgb_to_wgpu_color(color: Rgb) -> wgpu::Color {
     }
 }
 
+/// Fraction of the viewport the fitted geometry fills along its
+/// tightest-constrained axis, leaving the rest as a visual margin so the
+/// fractal doesn't touch the canvas edge. Shared by the 2D and 3D fits.
+pub(crate) const VIEWPORT_FILL_FRACTION: f32 = 0.9;
+
 pub fn fitted_pixels_per_unit(bounds: Bounds2D, width: u32, height: u32) -> f32 {
     let geom_w = (bounds.max.x - bounds.min.x).max(1.0);
     let geom_h = (bounds.max.y - bounds.min.y).max(1.0);
-    (width as f32 / geom_w).min(height as f32 / geom_h) * 0.9
+    (width as f32 / geom_w).min(height as f32 / geom_h) * VIEWPORT_FILL_FRACTION
 }
 
 pub fn viewport_transform(
