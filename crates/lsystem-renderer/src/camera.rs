@@ -2,7 +2,7 @@ use glam::{Quat, Vec2, Vec3};
 use lsystem_core::{BoundingCylinder3D, Bounds2D};
 
 use crate::line_renderer::{Mvp, Transform};
-use crate::lsystem_bridge::{fitted_pixels_per_unit, viewport_transform};
+use crate::lsystem_bridge::{VIEWPORT_FILL_FRACTION, fitted_pixels_per_unit, viewport_transform};
 
 const ORBIT_DEG_PER_PIXEL: f32 = 0.3;
 const FOV_Y_RAD: f32 = std::f32::consts::FRAC_PI_4; // 45°
@@ -155,8 +155,19 @@ impl Camera {
             support(vp).max(support(vn))
         };
 
-        let base_distance =
-            fit_dist(framing_right, half_fov_x_tan).max(fit_dist(framing_up, half_fov_y_tan));
+        // Fit against a virtually narrower FOV (real FOV scaled by
+        // `VIEWPORT_FILL_FRACTION`) rather than scaling the resulting
+        // distance: since NDC = camera_x / (-camera_z * tan_fov) is a ratio
+        // independent of which tan_fov it's evaluated against, solving the
+        // exact-tangency condition for `tan_fov * VIEWPORT_FILL_FRACTION`
+        // guarantees the constraining point lands at exactly
+        // `VIEWPORT_FILL_FRACTION` NDC under the real (wider) projection —
+        // for every point, not just ones on the plane through the center
+        // perpendicular to the view axis. Scaling `base_distance` directly
+        // would only be exact for those latter points.
+        let base_distance = fit_dist(framing_right, half_fov_x_tan * VIEWPORT_FILL_FRACTION).max(
+            fit_dist(framing_up, half_fov_y_tan * VIEWPORT_FILL_FRACTION),
+        );
         let distance = (base_distance / self.zoom)
             .max(bounds.radius.max(half_y) * NEAR_CLIP_RATIO)
             .max(1e-4);
@@ -454,9 +465,15 @@ mod tests {
             })
             .fold(0.0_f32, f32::max);
 
+        // The constraining point lands at exactly `VIEWPORT_FILL_FRACTION`
+        // NDC (not 1.0): the fit solves tangency against a virtually
+        // narrower FOV so the fractal doesn't touch the canvas edge. The
+        // lower bound of the range accounts for the 256-step angular
+        // sampling not landing exactly on the true tangent point.
+        let expected = VIEWPORT_FILL_FRACTION;
         assert!(
-            (0.98..=1.001).contains(&max_abs_ndc),
-            "cylinder reaches only {max_abs_ndc:.3} NDC"
+            (expected * 0.98..=expected * 1.001).contains(&max_abs_ndc),
+            "cylinder reaches only {max_abs_ndc:.3} NDC, expected close to {expected:.3}"
         );
     }
 
