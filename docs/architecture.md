@@ -225,7 +225,14 @@ offscreen exports.
   group to its dimension marker, so pairing a pipeline with the other shader's
   bind group fails to compile. Existing segment slices use `Queue::write_buffer`;
   stamped iterators use `Queue::write_buffer_with` to fill mapped staging memory
-  directly.
+  directly. `LinePipeline<D3>::new` optionally builds both its pipeline
+  variants with a `wgpu::DepthStencilState` (`LINE_DEPTH_FORMAT`) when given a
+  depth format, so segments can be GPU depth-tested by camera distance instead
+  of only by traversal order; `LinePipeline<D2>` never does, since 2D scenes
+  have no meaningful camera-space depth. Any render pass drawing a
+  depth-enabled `LinePipeline<D3>` must attach a matching depth view — wgpu
+  requires the pipeline's depth-stencil state and the pass's depth attachment
+  to agree.
 - `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
   maps `LineColorConfig` into shader color parameters. Consumers feed core's
   dimension-specific bounds accumulator from world-space endpoints before
@@ -295,7 +302,13 @@ count, with zero denoting interpreted generation.
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/
 roll/auto-rotate/reset operations, and rebuilds GPU state after surface loss
-while preserving camera and color state. Scene rebuild uploads immediately and
+while preserving camera and color state. Its `GpuContext` owns a
+`LINE_DEPTH_FORMAT` depth attachment sized to the canvas, recreated in
+lockstep with the swapchain on every resize; the 3D render pass attaches it
+(2D and no-upload passes don't), so 3D geometry is GPU depth-tested by true
+camera distance rather than drawn purely in traversal order. `lsystem-app`'s
+native/retained-Iced render pass is owned by Iced's compositor, which never
+attaches a depth buffer, so it keeps the original traversal-order behavior. Scene rebuild uploads immediately and
 retains only opaque bounds/count/layout/method metadata, not segment vectors.
 Before any successful upload and after either upload error, the renderer uses a
 dimensionless no-upload state. That state selects and mutates neither line
@@ -320,7 +333,9 @@ apps hide SVG export when `dimensions = "3D"`.
 PNG and APNG export live in `lsystem-renderer` behind the `png` feature. APNG
 uploads geometry once and changes uniforms per frame. Browser and native UI
 layers use app-specific download/file plumbing around the shared renderer export
-APIs.
+APIs. Like the web canvas, `offscreen.rs`'s `RenderTarget` owns a
+`LINE_DEPTH_FORMAT` depth attachment and attaches it for 3D scenes, so
+exported 3D images are depth-tested the same way the live web canvas is.
 
 ## Dependency Coupling
 

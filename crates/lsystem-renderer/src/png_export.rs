@@ -148,7 +148,7 @@ pub async fn render_rgba(
     let scene = ExportScene::new(device, queue, config)?;
     scene.write_camera(queue, camera, width, height);
 
-    let target = RenderTarget::new(device, width, height);
+    let target = RenderTarget::new(device, width, height, scene.is_three_d());
     let rgba = target
         .render_frame(device, queue, config.colors.background, &scene)
         .await?;

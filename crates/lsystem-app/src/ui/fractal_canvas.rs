@@ -748,7 +748,7 @@ impl shader::Pipeline for FractalPipeline {
     fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         Self {
             pipeline_2d: LinePipeline2D::new(device, format),
-            pipeline_3d: LinePipeline3D::new(device, format),
+            pipeline_3d: LinePipeline3D::new(device, format, None),
             uploaded: None,
         }
     }

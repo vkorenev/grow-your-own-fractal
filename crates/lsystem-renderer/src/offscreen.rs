@@ -7,7 +7,9 @@ use glam::Vec2;
 use lsystem_core::{AnyCompiledGeneration, BoundingCylinder3D, Bounds2D, Config, Rgb};
 
 use crate::camera::Camera;
-use crate::line_renderer::{ColorParams, LinePipeline2D, LinePipeline3D};
+use crate::line_renderer::{
+    ColorParams, LINE_DEPTH_FORMAT, LinePipeline2D, LinePipeline3D, create_depth_texture,
+};
 use crate::lsystem_bridge::{color_params_from_config, rgb_to_wgpu_color, viewport_transform};
 use crate::png_export::{ExportError, MAX_DIMENSION, MIN_DIMENSION};
 use crate::scene_upload::{SegmentLayout, upload_scene};
@@ -110,7 +112,7 @@ impl ExportScene {
                 })
             }
             AnyCompiledGeneration::ThreeD(generation) => {
-                let mut pipeline = LinePipeline3D::new(device, FORMAT);
+                let mut pipeline = LinePipeline3D::new(device, FORMAT, Some(LINE_DEPTH_FORMAT));
                 let scene = upload_scene(
                     &mut pipeline,
                     device,
@@ -136,6 +138,11 @@ impl ExportScene {
     /// Color params resolved from the config at upload time.
     pub(crate) fn color_params(&self) -> ColorParams {
         self.color_params
+    }
+
+    /// Whether this scene's geometry is 3D — 3D exports depth-test; 2D ones don't.
+    pub(crate) fn is_three_d(&self) -> bool {
+        matches!(self.geometry, SceneGeometry::ThreeD { .. })
     }
 
     /// Writes the view uniform. 2D export always fits the geometry bounds
@@ -181,12 +188,17 @@ impl ExportScene {
 pub(crate) struct RenderTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    // `Some` only for 3D exports; 2D scenes never attach a depth buffer, so
+    // there's no reason to allocate one. The `Texture` half is unread — it's
+    // kept only to own the underlying GPU resource the view was made from.
+    depth: Option<(wgpu::Texture, wgpu::TextureView)>,
     readback: wgpu::Buffer,
     layout: ReadbackLayout,
 }
 
 impl RenderTarget {
-    pub(crate) fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    /// `needs_depth` should be the exported scene's [`ExportScene::is_three_d`].
+    pub(crate) fn new(device: &wgpu::Device, width: u32, height: u32, needs_depth: bool) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("export_texture"),
             size: wgpu::Extent3d {
@@ -205,6 +217,7 @@ impl RenderTarget {
             label: Some("export_texture_view"),
             ..Default::default()
         });
+        let depth = needs_depth.then(|| create_depth_texture(device, width, height));
         let layout = ReadbackLayout::new(width, height);
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("export_readback"),
@@ -215,6 +228,7 @@ impl RenderTarget {
         Self {
             texture,
             view,
+            depth,
             readback,
             layout,
         }
@@ -233,6 +247,10 @@ impl RenderTarget {
             label: Some("export_encoder"),
         });
         {
+            // 3D pipelines are built with a matching DepthStencilState, 2D pipelines
+            // are not — `self.depth` is `Some` only when `RenderTarget::new` was told
+            // (via `ExportScene::is_three_d`) that this same `scene` is 3D, so this
+            // attachment always agrees with the draw dispatch below.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("export_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -244,7 +262,16 @@ impl RenderTarget {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: self.depth.as_ref().map(|(_, view)| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Discard,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
                 multiview_mask: None,
