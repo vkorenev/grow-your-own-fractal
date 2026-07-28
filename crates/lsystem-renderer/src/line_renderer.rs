@@ -824,7 +824,7 @@ pub struct GpuContext {
 
 /// Builds a `LINE_DEPTH_FORMAT` render-attachment texture sized to match a
 /// color target, for 3D depth testing.
-pub(crate) fn create_depth_texture(
+pub fn create_depth_texture(
     device: &wgpu::Device,
     width: u32,
     height: u32,

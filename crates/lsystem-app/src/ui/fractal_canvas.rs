@@ -9,8 +9,8 @@ use lsystem_core::{
 };
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
-    ColorParams, LinePipeline2D, LinePipeline3D, RenderDimension, Segment2D, Segment3D,
-    TopologicalDepthSegment2D, TopologicalDepthSegment3D,
+    ColorParams, LINE_DEPTH_FORMAT, LinePipeline2D, LinePipeline3D, RenderDimension, Segment2D,
+    Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D, create_depth_texture,
 };
 use lsystem_renderer::lsystem_bridge::{
     CollectedDepthSegmentData, CollectedSegmentData, DepthSegmentDataBuilder,
@@ -655,6 +655,18 @@ impl shader::Primitive for FractalPrimitive {
         let width = (bounds.width * scale_factor).round().max(1.0) as u32;
         let height = (bounds.height * scale_factor).round().max(1.0) as u32;
 
+        pipeline.viewport_rect = Rectangle {
+            x: bounds.x * scale_factor,
+            y: bounds.y * scale_factor,
+            width: bounds.width * scale_factor,
+            height: bounds.height * scale_factor,
+        };
+        if self.scene.is_3d() {
+            pipeline.ensure_depth_texture(device, viewport.physical_size());
+        } else {
+            pipeline.release_depth_texture();
+        }
+
         let color_params = self.scene.color_params;
         let geometry_rev = self.scene.geometry_revision;
         let color_rev = self.scene.color_revision;
@@ -721,15 +733,71 @@ impl shader::Primitive for FractalPrimitive {
     }
 
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
-        match &self.scene.geometry {
-            SceneGeometry::TwoD { .. } | SceneGeometry::TwoDWithTopologicalDepth { .. } => {
-                pipeline.pipeline_2d.draw(render_pass)
-            }
-            SceneGeometry::ThreeD { .. } | SceneGeometry::ThreeDWithTopologicalDepth { .. } => {
-                pipeline.pipeline_3d.draw(render_pass)
-            }
+        if self.scene.is_3d() {
+            // Handled by `render`, which opens its own depth-tested pass — iced's
+            // shared pass here has no depth attachment.
+            return false;
         }
+        pipeline.pipeline_2d.draw(render_pass);
         true
+    }
+
+    fn render(
+        &self,
+        pipeline: &Self::Pipeline,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        clip_bounds: &Rectangle<u32>,
+    ) {
+        // `prepare()` always runs before `draw()`/`render()` for the same primitive
+        // instance in a frame, and always calls `ensure_depth_texture` first when
+        // `self.scene.is_3d()` (the only case `draw()` defers to here) — so `depth`
+        // is `Some` and already sized to match `target`. A let-else keeps a future
+        // violation of that invariant a silent no-op frame rather than a wgpu panic.
+        let Some((_, depth_view, _)) = &pipeline.depth else {
+            return;
+        };
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("fractal_3d_depth_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    // Preserve whatever iced already painted onto `target` — this
+                    // is the composite step, no separate blit pipeline is needed.
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        // iced sets viewport/scissor for us before `draw`, but not before `render`.
+        // Use the widget's own bounds (stashed in `prepare`) for the viewport so the
+        // MVP's aspect ratio still matches, and `clip_bounds` for the scissor so 3D
+        // content doesn't bleed into surrounding UI when the canvas is edge-clipped.
+        let r = pipeline.viewport_rect;
+        pass.set_viewport(r.x, r.y, r.width, r.height, 0.0, 1.0);
+        pass.set_scissor_rect(
+            clip_bounds.x,
+            clip_bounds.y,
+            clip_bounds.width,
+            clip_bounds.height,
+        );
+
+        pipeline.pipeline_3d.draw(&mut pass);
     }
 }
 
@@ -742,19 +810,50 @@ struct FractalPipeline {
     pipeline_2d: LinePipeline2D,
     pipeline_3d: LinePipeline3D,
     uploaded: Option<UploadedRevisions>,
+    // Lazily (re)allocated on the first 3D frame; stays `None` for a 2D-only session.
+    depth: Option<(wgpu::Texture, wgpu::TextureView, Size<u32>)>,
+    // Widget's physical bounds as of the last `prepare()`. `render()` only receives
+    // `clip_bounds` (bounds intersected with the viewport and snapped to whole
+    // pixels), which is not interchangeable with these unclipped, unsnapped bounds
+    // — using clip_bounds for the viewport would stretch/shift 3D content whenever
+    // the canvas is edge-clipped by surrounding UI.
+    viewport_rect: Rectangle<f32>,
 }
 
 impl shader::Pipeline for FractalPipeline {
     fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         Self {
             pipeline_2d: LinePipeline2D::new(device, format),
-            pipeline_3d: LinePipeline3D::new(device, format, None),
+            pipeline_3d: LinePipeline3D::new(device, format, Some(LINE_DEPTH_FORMAT)),
             uploaded: None,
+            depth: None,
+            viewport_rect: Rectangle::default(),
         }
     }
 }
 
 impl FractalPipeline {
+    /// Lazily (re)allocates the depth texture to match `size`. A no-op once
+    /// already allocated at the requested size. Only called from `prepare()`
+    /// on 3D frames, so a 2D-only session never allocates it.
+    fn ensure_depth_texture(&mut self, device: &wgpu::Device, size: Size<u32>) {
+        if self
+            .depth
+            .as_ref()
+            .is_none_or(|(_, _, tracked)| *tracked != size)
+        {
+            let (texture, view) = create_depth_texture(device, size.width, size.height);
+            self.depth = Some((texture, view, size));
+        }
+    }
+
+    /// Frees the depth texture once the scene is no longer 3D, instead of
+    /// holding a full-window depth buffer resident for the rest of the
+    /// session after a single 3D view. Cheap no-op once already `None`.
+    fn release_depth_texture(&mut self) {
+        self.depth = None;
+    }
+
     fn sync_uploads(
         &mut self,
         geometry_rev: u64,
