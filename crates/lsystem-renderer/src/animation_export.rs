@@ -115,7 +115,7 @@ pub async fn render_animation(
     validate_height(height)?;
 
     let scene = ExportScene::new(device, queue, config)?;
-    let target = RenderTarget::new(device, width, height);
+    let target = RenderTarget::new(device, width, height, scene.is_three_d());
     let background = config.colors.background;
     let base_color = scene.color_params();
 

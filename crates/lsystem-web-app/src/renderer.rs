@@ -7,8 +7,8 @@ use glam::Vec2;
 use lsystem_core::{AnyCompiledGeneration, Config};
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
-    ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LinePipeline2D,
-    LinePipeline3D, SurfaceFrame,
+    ColorParams, FrameOutcome, FrameSkipReason, GpuContext, GpuInitError, LINE_DEPTH_FORMAT,
+    LinePipeline2D, LinePipeline3D, SurfaceFrame,
 };
 use lsystem_renderer::lsystem_bridge::{color_params_from_config, rgb_to_wgpu_color};
 use lsystem_renderer::scene_upload::{
@@ -85,7 +85,8 @@ impl CanvasRenderer {
         let (width, height, _) = sync_canvas_size(&canvas);
         let gpu = GpuContext::new(wgpu::SurfaceTarget::Canvas(canvas), width, height).await?;
         let pipeline_2d = LinePipeline2D::new(&gpu.device, gpu.surface_format());
-        let pipeline_3d = LinePipeline3D::new(&gpu.device, gpu.surface_format());
+        let pipeline_3d =
+            LinePipeline3D::new(&gpu.device, gpu.surface_format(), Some(LINE_DEPTH_FORMAT));
         Ok(Self {
             gpu,
             pipeline_2d,
@@ -355,7 +356,8 @@ impl CanvasRenderer {
         let gpu =
             GpuContext::new(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height).await?;
         self.pipeline_2d = LinePipeline2D::new(&gpu.device, gpu.surface_format());
-        self.pipeline_3d = LinePipeline3D::new(&gpu.device, gpu.surface_format());
+        self.pipeline_3d =
+            LinePipeline3D::new(&gpu.device, gpu.surface_format(), Some(LINE_DEPTH_FORMAT));
         self.gpu = gpu;
         Ok(())
     }
@@ -397,6 +399,10 @@ impl CanvasRenderer {
         }
 
         {
+            // 3D pipelines are built with a matching DepthStencilState, 2D pipelines
+            // are not — this attachment must stay derived from the same `self.scene`
+            // as the draw dispatch below, so the two can never disagree.
+            let is_3d = matches!(self.scene, ActiveScene::ThreeD(_));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("web_app_fractal_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -408,7 +414,14 @@ impl CanvasRenderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: is_3d.then_some(wgpu::RenderPassDepthStencilAttachment {
+                    view: self.gpu.depth_view(),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
                 multiview_mask: None,

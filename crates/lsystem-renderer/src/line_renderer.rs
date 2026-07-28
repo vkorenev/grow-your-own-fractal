@@ -374,12 +374,19 @@ fn draw_line_list(
     render_pass.pop_debug_group();
 }
 
+/// Depth-buffer format used when a `LinePipeline<D3>` is built with depth
+/// testing enabled. A concrete, always-supported core format (unlike the
+/// opaque, implementation-defined `Depth24Plus`) so precision stays
+/// predictable across backends given the camera's large near/far ratio.
+pub const LINE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
 fn create_line_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
     label: &'static str,
     vertex: wgpu::VertexState,
     fragment: wgpu::FragmentState,
+    depth_stencil: Option<wgpu::DepthStencilState>,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -390,7 +397,7 @@ fn create_line_pipeline(
             topology: wgpu::PrimitiveTopology::LineList,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil,
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -509,6 +516,7 @@ impl LinePipeline<D2> {
             "lsystem_2d_pipeline",
             generated_shader_2d::vertex_state(&shader, &vertex_entry),
             generated_shader_2d::fragment_state(&shader, &fragment_entry),
+            None,
         );
         let depth_pipeline = create_line_pipeline(
             device,
@@ -516,6 +524,7 @@ impl LinePipeline<D2> {
             "lsystem_2d_depth_pipeline",
             generated_shader_2d::vertex_state(&shader, &depth_vertex_entry),
             generated_shader_2d::fragment_state(&shader, &fragment_entry),
+            None,
         );
 
         Self::from_parts(PipelineParts {
@@ -539,7 +548,23 @@ impl LinePipeline<D2> {
 }
 
 impl LinePipeline<D3> {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    /// `depth_format` opts this pipeline into GPU depth testing: when
+    /// `Some`, both pipeline variants below are built with a matching
+    /// `DepthStencilState`, and every render pass they're used in must
+    /// attach a depth view of that same format. `None` preserves the
+    /// original painter's-algorithm behavior (no depth attachment).
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        depth_format: Option<wgpu::TextureFormat>,
+    ) -> Self {
+        let depth_stencil = depth_format.map(|format| wgpu::DepthStencilState {
+            format,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lsystem_3d_shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -590,6 +615,7 @@ impl LinePipeline<D3> {
             "lsystem_3d_pipeline",
             generated_shader_3d::vertex_state(&shader, &vertex_entry),
             generated_shader_3d::fragment_state(&shader, &fragment_entry),
+            depth_stencil.clone(),
         );
         let depth_pipeline = create_line_pipeline(
             device,
@@ -597,6 +623,7 @@ impl LinePipeline<D3> {
             "lsystem_3d_depth_pipeline",
             generated_shader_3d::vertex_state(&shader, &depth_vertex_entry),
             generated_shader_3d::fragment_state(&shader, &fragment_entry),
+            depth_stencil,
         );
 
         Self::from_parts(PipelineParts {
@@ -791,6 +818,36 @@ pub struct GpuContext {
     #[allow(clippy::arc_with_non_send_sync)]
     pub queue: Arc<wgpu::Queue>,
     surface_config: wgpu::SurfaceConfiguration,
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+}
+
+/// Builds a `LINE_DEPTH_FORMAT` render-attachment texture sized to match a
+/// color target, for 3D depth testing.
+pub(crate) fn create_depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("lsystem_depth_texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: LINE_DEPTH_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("lsystem_depth_texture_view"),
+        ..Default::default()
+    });
+    (texture, view)
 }
 
 impl GpuContext {
@@ -852,11 +909,16 @@ impl GpuContext {
         };
         surface.configure(&device, &surface_config);
 
+        let (depth_texture, depth_view) =
+            create_depth_texture(&device, surface_config.width, surface_config.height);
+
         Ok(Self {
             surface,
             device,
             queue,
             surface_config,
+            depth_texture,
+            depth_view,
         })
     }
 
@@ -868,6 +930,12 @@ impl GpuContext {
         (self.surface_config.width, self.surface_config.height)
     }
 
+    /// View onto the depth texture sized to match the current surface, for
+    /// 3D depth testing.
+    pub fn depth_view(&self) -> &wgpu::TextureView {
+        &self.depth_view
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -875,6 +943,9 @@ impl GpuContext {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
+        let (depth_texture, depth_view) = create_depth_texture(&self.device, width, height);
+        self.depth_texture = depth_texture;
+        self.depth_view = depth_view;
     }
 
     pub fn begin_frame(&mut self) -> FrameOutcome {

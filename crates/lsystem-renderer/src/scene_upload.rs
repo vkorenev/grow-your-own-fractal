@@ -507,7 +507,7 @@ mod gpu_tests {
             .await
             .expect("headless device");
             let mut pipeline_2d = LinePipeline2D::new(&device, FORMAT);
-            let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT);
+            let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT, None);
 
             let plain = generation(Dimensions::TwoD, "F", 1, [('F', "F".to_string())].into());
             let scene = upload_scene(
@@ -679,7 +679,7 @@ mod gpu_tests {
             .await
             .expect("headless device");
             let mut pipeline_2d = LinePipeline2D::new(&device, FORMAT);
-            let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT);
+            let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT, None);
             let line = line_color();
 
             for dimensions in [Dimensions::TwoD, Dimensions::ThreeD] {
@@ -815,7 +815,7 @@ mod gpu_tests {
             )
             .await
             .expect("headless device");
-            let mut pipeline = LinePipeline3D::new(&device, FORMAT);
+            let mut pipeline = LinePipeline3D::new(&device, FORMAT, None);
 
             // `Mvp::default()` is the identity matrix: clip space equals
             // world space directly. Verified this actually places the
