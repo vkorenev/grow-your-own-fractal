@@ -310,7 +310,7 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
             </div>
 
             <div class="spinner-row" title=dirty_tooltip>
-                <span class="spinner-label">"Iterations"</span>
+                <span class="spinner-label">{move || format!("Iterations (max {})", max_iterations.get())}</span>
                 <crate::ui::Spinner
                     value=iterations
                     step=1.0
