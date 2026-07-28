@@ -57,7 +57,10 @@ impl FractalApp {
             let editor_colors = &selected_entry.editor_config().colors;
             controls = controls
                 .push(text("Overrides").size(13))
-                .push(text(format!("Iterations: {}", self.iterations)))
+                .push(text(format!(
+                    "Iterations (max {}): {}",
+                    self.max_iterations, self.iterations
+                )))
                 .push(slider(
                     0..=self.max_iterations,
                     self.iterations,
