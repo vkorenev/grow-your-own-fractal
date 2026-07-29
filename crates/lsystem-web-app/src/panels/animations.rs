@@ -26,14 +26,12 @@ pub(crate) fn AnimationsPanel() -> impl IntoView {
         <crate::ui::Disclosure title="Animations">
             <div style="display:flex;flex-direction:column;gap:6px">
                 <span class="section-label">"Auto-rotate"</span>
-                <div title=move || if !is_3d.get() { "Switch to 3D mode in Parameters to enable auto-rotate" } else { "" }>
                 <crate::ui::SegmentedToggle
                     options=vec![(false, "Off"), (true, "On")]
                     selected=Signal::derive(move || auto_rotate.get())
                     on_change=move |on| auto_rotate.set(on)
                     disabled=Signal::derive(move || !is_3d.get())
                 />
-                </div>
                 <Show when=move || auto_rotate.get() && is_3d.get()>
                     <div class="spinner-row">
                         <span class="spinner-label">"Speed (°/s)"</span>
@@ -56,7 +54,6 @@ pub(crate) fn AnimationsPanel() -> impl IntoView {
 
             <div style="display:flex;flex-direction:column;gap:6px">
                 <span class="section-label">"Hue rotation"</span>
-                <div title=move || if !matches!(control_line_color.get(), LineColorConfig::HueCycle { .. }) { "Select Hue cycle in Colors to enable hue rotation" } else { "" }>
                 <crate::ui::SegmentedToggle
                     options=vec![
                         (None, "Off"),
@@ -78,7 +75,6 @@ pub(crate) fn AnimationsPanel() -> impl IntoView {
                         }
                     })
                 />
-                </div>
                 <Show when=move || hue_rotation.with(|m| m.is_enabled())>
                     <div class="spinner-row">
                         <span class="spinner-label">"Speed (°/s)"</span>
