@@ -297,7 +297,17 @@ Scene geometry is built once generically per dimension marker
 the planned strategy and drains either stamped or interpreted lazy iterators
 through the same incremental renderer-record builders with periodic
 cancellation checks. Native telemetry reports the selected template iteration
-count, with zero denoting interpreted generation.
+count, with zero denoting interpreted generation. Iced's own shared render
+pass never attaches a depth buffer, so 2D scenes keep using the cheap
+`shader::Primitive::draw` path into that shared pass. For 3D scenes,
+`FractalPrimitive::draw` returns `false`, which makes Iced defer to
+`shader::Primitive::render` instead — an escape hatch that hands the
+primitive its own command encoder and the real frame view, letting it open a
+self-contained pass with a `LINE_DEPTH_FORMAT` depth attachment (lazily
+allocated on first use, sized to the window's physical framebuffer, and
+released again once the scene returns to 2D). 3D geometry is therefore GPU
+depth-tested the same way as `lsystem-web-app`, not drawn purely in
+traversal order.
 
 `lsystem-web-app` uses Leptos for DOM controls and renders into a dedicated
 canvas. The renderer owns both 2D and 3D pipelines, handles resize/zoom/orbit/
@@ -306,9 +316,7 @@ while preserving camera and color state. Its `GpuContext` owns a
 `LINE_DEPTH_FORMAT` depth attachment sized to the canvas, recreated in
 lockstep with the swapchain on every resize; the 3D render pass attaches it
 (2D and no-upload passes don't), so 3D geometry is GPU depth-tested by true
-camera distance rather than drawn purely in traversal order. `lsystem-app`'s
-native/retained-Iced render pass is owned by Iced's compositor, which never
-attaches a depth buffer, so it keeps the original traversal-order behavior. Scene rebuild uploads immediately and
+camera distance rather than drawn purely in traversal order. Scene rebuild uploads immediately and
 retains only opaque bounds/count/layout/method metadata, not segment vectors.
 Before any successful upload and after either upload error, the renderer uses a
 dimensionless no-upload state. That state selects and mutates neither line
