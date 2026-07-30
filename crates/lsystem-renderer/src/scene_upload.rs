@@ -236,52 +236,32 @@ where
     let counted_total = plan.total_segments();
     let total_segments = checked_total::<D>(counted_total, layout)?;
 
-    match plan.prepare() {
-        PreparedGeneration::Stamped(set) => {
-            let method = GenerationMethod::Stamped {
-                template_iterations: set.template_iterations(),
-            };
-            match layout {
-                SegmentLayout::Plain => upload_plain(
-                    pipeline,
-                    device,
-                    queue,
-                    set.segments(),
-                    line,
-                    method,
-                    total_segments,
-                ),
-                SegmentLayout::TopologicalDepth => upload_with_topological_depth(
-                    pipeline,
-                    device,
-                    queue,
-                    set.depth_segments(),
-                    line,
-                    method,
-                    total_segments,
-                ),
-            }
-        }
-        PreparedGeneration::Interpreted(generation) => match layout {
-            SegmentLayout::Plain => upload_plain(
-                pipeline,
-                device,
-                queue,
-                generation.segments(),
-                line,
-                GenerationMethod::Interpreted,
-                total_segments,
-            ),
-            SegmentLayout::TopologicalDepth => upload_with_topological_depth(
-                pipeline,
-                device,
-                queue,
-                generation.depth_segments(),
-                line,
-                GenerationMethod::Interpreted,
-                total_segments,
-            ),
+    let prepared = plan.prepare();
+    let method = match &prepared {
+        PreparedGeneration::Stamped(set) => GenerationMethod::Stamped {
+            template_iterations: set.template_iterations(),
         },
+        PreparedGeneration::Interpreted(_) => GenerationMethod::Interpreted,
+    };
+    match layout {
+        SegmentLayout::Plain => upload_plain(
+            pipeline,
+            device,
+            queue,
+            prepared.segments(),
+            line,
+            method,
+            total_segments,
+        ),
+        SegmentLayout::TopologicalDepth => upload_with_topological_depth(
+            pipeline,
+            device,
+            queue,
+            prepared.depth_segments(),
+            line,
+            method,
+            total_segments,
+        ),
     }
 }
 
