@@ -167,13 +167,13 @@ pub type Segment3DWithTopologicalDepth = SegmentWithTopologicalDepth<D3>;
 pub trait GenerationDimension: Dimension {
     fn depth_segments(
         generation: &CompiledGeneration<Self>,
-    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_;
+    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + Send + '_;
 }
 
 impl<D: TurtleDimension> GenerationDimension for D {
     fn depth_segments(
         generation: &CompiledGeneration<Self>,
-    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + '_ {
+    ) -> impl Iterator<Item = SegmentWithTopologicalDepth<Self>> + Send + '_ {
         let p = generation.params;
         DepthSegments::new(
             generation.grammar.expand_effects(p.iterations),

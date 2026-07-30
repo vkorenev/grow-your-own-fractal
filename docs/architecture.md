@@ -31,7 +31,7 @@ GenerationConfig
   -> CompiledGeneration<D2> / CompiledGeneration<D3>
   -> GenerationPlan<D> (exact count + bounded strategy selection)
   -> PreparedGeneration<D> (stamped templates or interpreter)
-  -> strategy-independent world-space geometry (segments() / depth_segments())
+  -> bounds-carrying geometry streams (segments() / depth_segments())
   -> renderer scene upload
   -> wgpu instance buffer
 ```
@@ -40,15 +40,18 @@ The expansion and turtle layers are streaming iterators. They do not build the
 full expanded string or an intermediate vertex list before yielding geometry.
 `PreparedGeneration::{segments, depth_segments}` are the production geometry
 boundary: they hide whether the plan selected stamped templates or direct
-interpretation while preserving lazy, resumable iteration. For web and
-offscreen rendering, transformed segment records stream directly into wgpu
-staging memory without a stamp or segment collection. The native Iced app
+interpretation while preserving lazy, resumable iteration, and they fold
+conservative bounds (and, for `depth_segments`, maximum topological depth) as
+they yield, so consumers get bounds without a separate endpoint pass. For web
+and offscreen rendering, transformed segment records stream directly into
+wgpu staging memory without a stamp or segment collection. The native Iced app
 generates without GPU access and intentionally collects one bounded
-segment-instance `Vec` before uploading it as a slice. Direct
-`CompiledGeneration::{segments, depth_segments}` iteration remains available
-as the interpreter semantic oracle and for benchmarks that intentionally
-measure interpretation. Do not add another collection of expanded symbols, raw
-geometry, or vertices to either path.
+segment-instance `Vec` before uploading it as a slice, then reads the stream's
+folded bounds via `finish()`. Direct `CompiledGeneration::{segments,
+depth_segments}` iteration remains available as the interpreter semantic
+oracle and for benchmarks that intentionally measure interpretation. Do not
+add another collection of expanded symbols, raw geometry, or vertices to
+either path.
 
 Config editing has a separate parse/validate/resolve pipeline.
 
@@ -121,26 +124,36 @@ mutation.
   construction and lazy placement to dimension-generic orchestration. A
   private placement iterator owns the boundary expansion, turtle state, and
   `u64` traversal order; its resumable `next` and optimized `fold` paths share
-  the same symbol transition. Crate-private template-set iterators flat-map
-  those placements over template-local geometry, keeping world-space
-  transformation in core without collecting stamps or segments;
-  `PreparedGeneration::{segments, depth_segments}` expose the resulting
-  strategy-independent production walks. Explicit template construction and
-  template-local inspection through `TemplateSet::templates` and public
+  the same symbol transition. `PreparedGeneration::segments()` and
+  `depth_segments()` (defined in `geometry_stream.rs`) are the production
+  geometry walks: bounds-carrying streams that fold each template's local
+  summary once per placement when stamped and every endpoint when
+  interpreted, then report bounds (and maximum topological depth) when
+  drained. Template summaries and stamp placement iteration are crate-internal
+  (`TemplateSet`'s own `segments`/`depth_segments`/`stamps` helpers are
+  `#[cfg(test)]`-only, kept for exercising template-level correctness
+  independent of the bounds-carrying facade). Explicit template construction
+  and template-local inspection through `TemplateSet::templates` and public
   `Template::segments` remain supported, as does transforming a `Stamp` a
   caller already has. The public `emit_stamps` convenience walk and
   `StampStats` metadata type are removed; the public marker trait's doc-hidden
   `stamp_placements` hook remains callable for generic implementation
   dispatch, but is not the supported consumer façade. A set owns its typed
-  compiled generation, so stamping needs no config re-supply. Template sets
-  are small, budget-bounded collections.
+  compiled generation, so stamping needs no config re-supply. A stamp's
+  `order_base` is the running segment count, so it doubles as the offset into
+  a flat traversal-ordered segment buffer for GPU consumers. Template sets are
+  small, budget-bounded collections.
   `CompiledGeneration::plan_templates` picks the largest template depth whose
   templates fit a caller-supplied budget while simultaneously counting exact
   output. `GenerationPlan::prepare` then builds that depth or returns
   `PreparedGeneration::Interpreted` with the owned generation when none fits.
   Fixed-depth tests and benchmarks use `CompiledGeneration::build_templates`,
   whose structured error returns the generation when the requested depth is
-  invalid. The interpreter remains the semantic oracle.
+  invalid. Each non-empty template also retains a compact local bounds
+  summary: small templates use their endpoints and larger templates use local
+  AABB corners. Stamped consumers fold that summary once per placement before
+  streaming its segment records; interpreter consumers continue to accumulate
+  emitted endpoints. The interpreter remains the semantic oracle.
 - `config.rs` defines validated runtime config and color types.
   `GenerationConfig::new` is the only way to build a generation config; it
   enforces single-letter rule keys and bracket balance on the axiom and every
@@ -244,20 +257,20 @@ offscreen exports.
   depth-enabled `LinePipeline<D3>` must attach a matching depth view — wgpu
   requires the pipeline's depth-stencil state and the pass's depth attachment
   to agree.
-- `lsystem_bridge.rs` converts core geometry iterators into GPU segment data and
-  maps `LineColorConfig` into shader color parameters. Consumers feed core's
-  dimension-specific bounds accumulator from world-space endpoints before
-  constructing GPU records through `RenderDimension`; native collected scene
-  data carries the resulting typed bounds alongside its one segment vector.
+- `lsystem_bridge.rs` holds typed native scene-data containers and maps
+  `LineColorConfig` into shader color parameters. Upload and native collection
+  consume the core geometry streams; bounds and depth metadata arrive in the
+  stream summary, and GPU staging is filled through the push-based
+  `RecordWriter`.
 - `scene_upload.rs` owns the single generic `upload_scene<D>` (composing
   `RenderDimension + TemplateDimension`, whose core bound includes interpreted
   generation), the public renderer operation for web and offscreen scene
   generation/upload. It plans the generation, clamps the requested layout for
   bracketless grammars, checks segment caps via per-record `record_limit`
-  before preparation, then streams the prepared generation's façade iterator
-  directly into wgpu staging while accumulating bounds and maximum
-  topological depth. Color parameters are written only after the geometry
-  drain succeeds. It returns `UploadedScene<D>` metadata with `D::Bounds`, so
+  before preparation, then streams the selected geometry through the core
+  bounds-carrying stream directly into wgpu staging while accumulating bounds
+  and maximum topological depth. Color parameters are written only after the
+  geometry drain succeeds. It returns `UploadedScene<D>` metadata with `D::Bounds`, so
   2D and 3D consumers cannot accidentally exchange rectangle and cylinder
   bounds. The prepared generation is inspected only to record stamped-versus-
   interpreted method metadata; geometry consumption always goes through its
@@ -307,10 +320,11 @@ changes. Geometry and color revisions let the shader upload segment data only
 when geometry changes and update only color uniforms for color-only edits.
 Scene geometry is built once generically per dimension marker
 (`build_typed_scene<D>` over an app-local `SceneDimension` trait). It prepares
-the planned strategy and drains its lazy façade iterator through the same
-incremental renderer-record builders with periodic cancellation checks. Native
-telemetry reports the selected template iteration count, with zero denoting
-interpreted generation. Iced's own shared render
+the planned strategy, then drains its lazy bounds-carrying stream into a
+renderer-record `Vec` with periodic cancellation checks, reading the stream's
+folded bounds (and depth metadata) via `finish()` once draining completes.
+Native telemetry reports the selected template iteration count, with zero
+denoting interpreted generation. Iced's own shared render
 pass never attaches a depth buffer, so 2D scenes keep using the cheap
 `shader::Primitive::draw` path into that shared pass. For 3D scenes,
 `FractalPrimitive::draw` returns `false`, which makes Iced defer to

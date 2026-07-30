@@ -8,21 +8,25 @@
 //! `template_iterations` levels are precomputed once per rule instead of being
 //! re-interpreted symbol by symbol.
 //!
-//! [`PreparedGeneration::segments`] and
-//! [`PreparedGeneration::depth_segments`] hide whether geometry comes from
-//! template placements or direct interpretation while preserving lazy,
-//! resumable iteration. Template sets continue to expose their local geometry
-//! for inspection and explicit template-aware designs. The supported
-//! consumer-facing placement convenience API is the prepared facade; the
-//! public marker trait retains a doc-hidden placement hook for generic
-//! implementation dispatch.
+//! Stamps stream in traversal order and `order_base` is the running segment
+//! count, so it doubles as the output offset into a flat traversal-ordered
+//! segment buffer.
+//!
+//! [`PreparedGeneration::segments`] and [`PreparedGeneration::depth_segments`]
+//! (defined in the `geometry_stream` module) own the placement walk, hide
+//! whether geometry comes from template placements or direct interpretation,
+//! and fold conservative bounds while yielding. Template sets continue to
+//! expose their local geometry for inspection and explicit template-aware
+//! designs. The public marker trait retains a doc-hidden placement hook for
+//! generic implementation dispatch.
 
 use crate::compiled_generation::{
     CompiledGeneration, GenerationDimension, GenerationPlan, PreparedGeneration, TemplateBuildError,
 };
 use crate::grammar::ExpandIter;
 use crate::turtle::{Turtle, TurtleDimension};
-use crate::{D2, D3, Dimension};
+use crate::{BoundsAccumulator, D2, D3, Dimension};
+use glam::{Vec2, Vec3};
 
 /// One template segment in the local frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,14 +45,101 @@ pub type TemplateSegment3D = TemplateSegment<D3>;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template<D: Dimension> {
     pub segments: Vec<TemplateSegment<D>>,
+    // Conservatively contains every local segment endpoint. Large templates
+    // store local AABB corners; small templates retain their endpoints, which
+    // avoids adding candidates relative to direct endpoint accumulation.
+    bounds_candidates: Vec<D::Point>,
     pub exit_pos: D::Point,
     /// Net rotation from template entry to exit.
     pub exit_rot: D::Rotation,
     pub exit_depth_delta: u32,
+    /// Largest `depth_offset` among `segments`; 0 when there are none.
+    pub(crate) max_depth_offset: u32,
 }
 
 pub type Template2D = Template<D2>;
 pub type Template3D = Template<D3>;
+
+/// Builds the local bounds summary stored with a template.
+///
+/// This stays with template construction rather than turtle semantics: it is
+/// a storage tradeoff for stamped bounds, not a geometric transition.
+trait TemplateSummaryDimension: Dimension {
+    fn bounds_candidates(segments: &[TemplateSegment<Self>]) -> Vec<Self::Point>;
+}
+
+impl TemplateSummaryDimension for D2 {
+    fn bounds_candidates(segments: &[TemplateSegment<Self>]) -> Vec<Vec2> {
+        // Three segments have six endpoints, which remains tighter than the
+        // four AABB corners used by larger templates in both dimensions.
+        if segments.len() < 4 {
+            return segments
+                .iter()
+                .flat_map(|segment| [segment.start, segment.end])
+                .collect();
+        }
+
+        let (min, max) = segments
+            .iter()
+            .flat_map(|segment| [segment.start, segment.end])
+            .fold(
+                (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+                |(min, max), point| (min.min(point), max.max(point)),
+            );
+        vec![
+            Vec2::new(min.x, min.y),
+            Vec2::new(min.x, max.y),
+            Vec2::new(max.x, min.y),
+            Vec2::new(max.x, max.y),
+        ]
+    }
+}
+
+impl TemplateSummaryDimension for D3 {
+    fn bounds_candidates(segments: &[TemplateSegment<Self>]) -> Vec<Vec3> {
+        // Three segments have six endpoints, which remains tighter than the
+        // eight AABB corners used by larger templates in three dimensions.
+        if segments.len() < 4 {
+            return segments
+                .iter()
+                .flat_map(|segment| [segment.start, segment.end])
+                .collect();
+        }
+
+        let (min, max) = segments
+            .iter()
+            .flat_map(|segment| [segment.start, segment.end])
+            .fold(
+                (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+                |(min, max), point| (min.min(point), max.max(point)),
+            );
+        vec![
+            Vec3::new(min.x, min.y, min.z),
+            Vec3::new(min.x, min.y, max.z),
+            Vec3::new(min.x, max.y, min.z),
+            Vec3::new(min.x, max.y, max.z),
+            Vec3::new(max.x, min.y, min.z),
+            Vec3::new(max.x, min.y, max.z),
+            Vec3::new(max.x, max.y, min.z),
+            Vec3::new(max.x, max.y, max.z),
+        ]
+    }
+}
+
+impl<D: Dimension> Template<D> {
+    /// Includes this template's conservative world-space summary for one
+    /// placement. Stamped consumers call this once before emitting the
+    /// placement's individual records.
+    pub(crate) fn include_world_bounds(
+        &self,
+        stamp: Stamp<D>,
+        accumulator: &mut D::BoundsAccumulator,
+    ) {
+        for candidate in self.bounds_candidates.iter().copied() {
+            accumulator.include(D::transform_point(stamp.pos, stamp.rot, candidate));
+        }
+    }
+}
 
 /// Templates for every ruled symbol of a compiled grammar, at a fixed count
 /// of template iterations. Index 0 is the built-in single-`F` template used
@@ -119,12 +210,22 @@ impl<D: Dimension> TemplateSet<D> {
 }
 
 impl<D: TemplateDimension> TemplateSet<D> {
+    /// Lazily yields geometry-producing template placements in traversal order.
+    ///
+    /// Each call starts a fresh boundary walk. Geometry-free templates are
+    /// omitted, while their exit transforms still affect later placements.
+    #[cfg(test)]
+    pub(crate) fn stamps(&self) -> impl Iterator<Item = (Stamp<D>, &Template<D>)> + '_ {
+        D::stamp_placements(self)
+    }
+
     /// Lazily yields world-space segment endpoints in traversal order.
     ///
     /// Each call starts a fresh boundary walk. The returned iterator is
     /// resumable, but repeated calls repeat placement expansion.
+    #[cfg(test)]
     pub(crate) fn segments(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
-        D::stamp_placements(self).flat_map(|(stamp, template)| {
+        self.stamps().flat_map(|(stamp, template)| {
             template
                 .segments
                 .iter()
@@ -137,10 +238,11 @@ impl<D: TemplateDimension> TemplateSet<D> {
     ///
     /// Each call starts a fresh boundary walk. The returned iterator is
     /// resumable, but repeated calls repeat placement expansion.
+    #[cfg(test)]
     pub(crate) fn depth_segments(
         &self,
     ) -> impl Iterator<Item = crate::SegmentWithTopologicalDepth<D>> + '_ {
-        D::stamp_placements(self).flat_map(|(stamp, template)| {
+        self.stamps().flat_map(|(stamp, template)| {
             template
                 .segments
                 .iter()
@@ -163,9 +265,12 @@ pub trait TemplateDimension: GenerationDimension {
     ) -> Result<TemplateSet<Self>, TemplateBuildError<Self>>;
 
     #[doc(hidden)]
-    fn stamp_placements<'a>(
-        set: &'a TemplateSet<Self>,
-    ) -> impl Iterator<Item = (Stamp<Self>, &'a Template<Self>)> + 'a;
+    type StampPlacements<'a>: Iterator<Item = (Stamp<Self>, &'a Template<Self>)>
+    where
+        Self: 'a;
+
+    #[doc(hidden)]
+    fn stamp_placements(set: &TemplateSet<Self>) -> Self::StampPlacements<'_>;
 }
 
 /// Builds templates for every ruled symbol by expanding it
@@ -175,7 +280,7 @@ pub trait TemplateDimension: GenerationDimension {
 /// the heading representation and `TurtleDimension` supplies the rotation
 /// application, so the logic exists once and the two instantiations cannot
 /// drift apart.
-fn build_generic<D: TurtleDimension>(
+fn build_generic<D: TurtleDimension + TemplateSummaryDimension>(
     generation: CompiledGeneration<D>,
     template_iterations: u16,
 ) -> Result<TemplateSet<D>, TemplateBuildError<D>> {
@@ -193,20 +298,28 @@ fn build_generic<D: TurtleDimension>(
             end: unit_end,
             depth_offset: 0,
         }],
+        bounds_candidates: D::bounds_candidates(&[TemplateSegment {
+            start: D::POINT_ZERO,
+            end: unit_end,
+            depth_offset: 0,
+        }]),
         exit_pos: unit_end,
         exit_rot: D::ROT_IDENTITY,
         exit_depth_delta: 1,
+        max_depth_offset: 0,
     }];
     let mut symbol_to_template = [None; 256];
 
     for symbol in grammar.ruled_symbols() {
         let mut state = <D::Turtle as Turtle>::new(params.angle, params.step, 0.0);
         let mut segments = Vec::new();
+        let mut max_depth_offset = 0;
         grammar
             .expand_rule_effects(symbol, template_iterations)
             .for_each(|byte| {
                 if let Some(segment) = state.apply(byte) {
                     let [start, end] = segment.points;
+                    max_depth_offset = max_depth_offset.max(segment.topological_depth);
                     segments.push(TemplateSegment {
                         start,
                         end,
@@ -218,10 +331,12 @@ fn build_generic<D: TurtleDimension>(
 
         symbol_to_template[symbol as usize] = Some(templates.len() as u16);
         templates.push(Template {
+            bounds_candidates: D::bounds_candidates(&segments),
             segments,
             exit_pos: state.position(),
             exit_rot: state.normalized_heading(),
             exit_depth_delta: state.topological_depth(),
+            max_depth_offset,
         });
     }
 
@@ -237,7 +352,8 @@ fn build_generic<D: TurtleDimension>(
 /// unfiltered so ruled symbols surface) and yields one stamp per template
 /// placement that contributes segments, in traversal order. Placements of
 /// geometry-free templates advance the cursor but yield nothing.
-struct StampPlacements<'a, D: TurtleDimension> {
+#[doc(hidden)]
+pub struct StampPlacements<'a, D: TurtleDimension> {
     set: &'a TemplateSet<D>,
     expansion: ExpandIter<'a>,
     state: D::Turtle,
@@ -338,7 +454,12 @@ impl<'a, D: TurtleDimension> Iterator for StampPlacements<'a, D> {
     }
 }
 
-impl<D: TurtleDimension> TemplateDimension for D {
+impl<D: TurtleDimension + TemplateSummaryDimension> TemplateDimension for D {
+    type StampPlacements<'a>
+        = StampPlacements<'a, D>
+    where
+        D: 'a;
+
     fn build_templates(
         generation: CompiledGeneration<Self>,
         template_iterations: u16,
@@ -346,9 +467,7 @@ impl<D: TurtleDimension> TemplateDimension for D {
         build_generic(generation, template_iterations)
     }
 
-    fn stamp_placements<'a>(
-        set: &'a TemplateSet<Self>,
-    ) -> impl Iterator<Item = (Stamp<Self>, &'a Template<Self>)> + 'a {
+    fn stamp_placements(set: &TemplateSet<Self>) -> Self::StampPlacements<'_> {
         StampPlacements::new(set)
     }
 }
@@ -380,83 +499,15 @@ impl<D: TemplateDimension> GenerationPlan<D> {
     }
 }
 
-/// Private two-branch adapter used by [`PreparedGeneration`] to keep strategy
-/// selection allocation-free while exposing one opaque iterator type.
-enum PreparedIterator<S, I> {
-    Stamped(S),
-    Interpreted(I),
-}
-
-impl<T, S, I> Iterator for PreparedIterator<S, I>
-where
-    S: Iterator<Item = T>,
-    I: Iterator<Item = T>,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Stamped(iter) => iter.next(),
-            Self::Interpreted(iter) => iter.next(),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Stamped(iter) => iter.size_hint(),
-            Self::Interpreted(iter) => iter.size_hint(),
-        }
-    }
-
-    fn fold<B, F>(self, init: B, f: F) -> B
-    where
-        Self: Sized,
-        F: FnMut(B, Self::Item) -> B,
-    {
-        match self {
-            Self::Stamped(iter) => iter.fold(init, f),
-            Self::Interpreted(iter) => iter.fold(init, f),
-        }
-    }
-}
-
-impl<D: TemplateDimension> PreparedGeneration<D> {
-    /// Lazily yields world-space segment endpoints using the strategy selected
-    /// by the generation plan.
-    ///
-    /// The returned iterator is allocation-free and resumable. Each call
-    /// starts a fresh generation walk.
-    pub fn segments(&self) -> impl Iterator<Item = [D::Point; 2]> + '_ {
-        match self {
-            Self::Stamped(set) => PreparedIterator::Stamped(set.segments()),
-            Self::Interpreted(generation) => PreparedIterator::Interpreted(generation.segments()),
-        }
-    }
-
-    /// Lazily yields world-space segments with topological depth using the
-    /// strategy selected by the generation plan.
-    ///
-    /// The returned iterator is allocation-free and resumable. Each call
-    /// starts a fresh generation walk.
-    pub fn depth_segments(
-        &self,
-    ) -> impl Iterator<Item = crate::SegmentWithTopologicalDepth<D>> + '_ {
-        match self {
-            Self::Stamped(set) => PreparedIterator::Stamped(set.depth_segments()),
-            Self::Interpreted(generation) => {
-                PreparedIterator::Interpreted(generation.depth_segments())
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
+    use glam::{Quat, Vec2, Vec3, Vec3Swizzles};
+
     use super::*;
-    use crate::test_util::{FoldOnly, compile_2d, compile_3d};
-    use crate::{Dimensions, GenerationConfig};
+    use crate::test_util::{compile_2d, compile_3d};
+    use crate::{BoundsAccumulator, Dimensions, GenerationConfig};
 
     // Composed rigid transforms round differently from the per-symbol
     // recurrence; real placement bugs produce errors of order one step.
@@ -482,20 +533,45 @@ mod tests {
             panic!("template set builds")
         };
         assert_eq!(set.template_iterations(), 1);
-        assert_eq!(prepared.segments().count(), 1);
-        let depths: Vec<_> = prepared.depth_segments().collect();
-        assert_eq!(depths.len(), 1);
-        assert_eq!(depths[0].topological_depth, 0);
+
+        let (total_segments, max_depth) = stamp_stats(set);
+        assert_eq!(total_segments, 1);
+        assert_eq!(set.segments().count() as u64, total_segments);
+        assert_eq!(set.depth_segments().count() as u64, total_segments);
+        assert_eq!(max_depth, 0);
+    }
+
+    fn stamp_stats<D: TemplateDimension>(set: &TemplateSet<D>) -> (u64, u32) {
+        set.stamps()
+            .fold((0, 0), |(total, max), (stamp, template)| {
+                (
+                    total + template.segments.len() as u64,
+                    max.max(stamp.depth_base.saturating_add(template.max_depth_offset)),
+                )
+            })
+    }
+
+    fn assert_lazy_segments_match_stats<D: TemplateDimension>(set: &TemplateSet<D>) {
+        let (total_segments, max_depth) = stamp_stats(set);
+
+        assert!(total_segments > 0);
+        assert_eq!(set.segments().count() as u64, total_segments);
+        assert_eq!(set.depth_segments().count() as u64, total_segments);
+        let per_segment_max = set
+            .depth_segments()
+            .map(|segment| segment.topological_depth)
+            .max()
+            .unwrap_or(0);
+        assert_eq!(max_depth, per_segment_max);
     }
 
     fn assert_matches_interpreter_2d(config: &GenerationConfig, template_iterations: u16) {
-        let stamped_generation =
-            PreparedGeneration::Stamped(build_2d(config, template_iterations).expect("set builds"));
-        let interpreted_generation = PreparedGeneration::Interpreted(compile_2d(config));
-        let plain_interpreted: Vec<_> = interpreted_generation.segments().collect();
-        let plain_stamped: Vec<_> = stamped_generation.segments().collect();
-        let interpreted: Vec<_> = interpreted_generation.depth_segments().collect();
-        let stamped: Vec<_> = stamped_generation.depth_segments().collect();
+        let set = build_2d(config, template_iterations).expect("set builds");
+        let plain_interpreted: Vec<_> = compile_2d(config).segments().collect();
+        let plain_stamped: Vec<_> = set.segments().collect();
+        let interpreted: Vec<_> = compile_2d(config).depth_segments().collect();
+        let stamped: Vec<_> = set.depth_segments().collect();
+        let (total_segments, expected_max_depth) = stamp_stats(&set);
 
         assert_eq!(plain_stamped.len(), plain_interpreted.len(), "plain count");
         for (index, (stamped, interpreted)) in
@@ -510,26 +586,29 @@ mod tests {
             }
         }
         assert_eq!(stamped.len(), interpreted.len(), "segment count");
+        assert_eq!(total_segments, interpreted.len() as u64);
+        let mut max_depth = 0;
         for (index, (s, i)) in stamped.iter().zip(&interpreted).enumerate() {
             assert_eq!(
                 s.topological_depth, i.topological_depth,
                 "depth at segment {index}"
             );
+            max_depth = max_depth.max(s.topological_depth);
             for point in 0..2 {
                 let d = s.points[point].distance(i.points[point]);
                 assert!(d < TOLERANCE, "segment {index} point {point}: off by {d}");
             }
         }
+        assert_eq!(expected_max_depth, max_depth);
     }
 
     fn assert_matches_interpreter_3d(config: &GenerationConfig, template_iterations: u16) {
-        let stamped_generation =
-            PreparedGeneration::Stamped(build_3d(config, template_iterations).expect("set builds"));
-        let interpreted_generation = PreparedGeneration::Interpreted(compile_3d(config));
-        let plain_interpreted: Vec<_> = interpreted_generation.segments().collect();
-        let plain_stamped: Vec<_> = stamped_generation.segments().collect();
-        let interpreted: Vec<_> = interpreted_generation.depth_segments().collect();
-        let stamped: Vec<_> = stamped_generation.depth_segments().collect();
+        let set = build_3d(config, template_iterations).expect("set builds");
+        let plain_interpreted: Vec<_> = compile_3d(config).segments().collect();
+        let plain_stamped: Vec<_> = set.segments().collect();
+        let interpreted: Vec<_> = compile_3d(config).depth_segments().collect();
+        let stamped: Vec<_> = set.depth_segments().collect();
+        let (total_segments, expected_max_depth) = stamp_stats(&set);
 
         assert_eq!(plain_stamped.len(), plain_interpreted.len(), "plain count");
         for (index, (stamped, interpreted)) in
@@ -544,16 +623,20 @@ mod tests {
             }
         }
         assert_eq!(stamped.len(), interpreted.len(), "segment count");
+        assert_eq!(total_segments, interpreted.len() as u64);
+        let mut max_depth = 0;
         for (index, (s, i)) in stamped.iter().zip(&interpreted).enumerate() {
             assert_eq!(
                 s.topological_depth, i.topological_depth,
                 "depth at segment {index}"
             );
+            max_depth = max_depth.max(s.topological_depth);
             for point in 0..2 {
                 let d = s.points[point].distance(i.points[point]);
                 assert!(d < TOLERANCE, "segment {index} point {point}: off by {d}");
             }
         }
+        assert_eq!(expected_max_depth, max_depth);
     }
 
     #[test]
@@ -669,6 +752,10 @@ mod tests {
         });
 
         assert_eq!(next, folded);
+        assert_eq!(
+            set.stamps().map(|(stamp, _)| stamp).collect::<Vec<_>>(),
+            folded
+        );
     }
 
     #[test]
@@ -690,33 +777,6 @@ mod tests {
         });
 
         assert_eq!(suffix, all[2..]);
-    }
-
-    #[test]
-    fn prepared_iterator_delegates_size_hint_and_specialized_fold() {
-        let stamped_hint =
-            PreparedIterator::<_, std::iter::Empty<i32>>::Stamped([1, 2, 3].into_iter());
-        assert_eq!(stamped_hint.size_hint(), (3, Some(3)));
-        let stamped = PreparedIterator::<_, std::iter::Empty<i32>>::Stamped(FoldOnly::new(
-            [1, 2, 3].into_iter(),
-        ));
-        let stamped_values = stamped.fold(Vec::new(), |mut values, value| {
-            values.push(value);
-            values
-        });
-        assert_eq!(stamped_values, [1, 2, 3]);
-
-        let interpreted_hint =
-            PreparedIterator::<std::iter::Empty<i32>, _>::Interpreted([4, 5].into_iter());
-        assert_eq!(interpreted_hint.size_hint(), (2, Some(2)));
-        let interpreted = PreparedIterator::<std::iter::Empty<i32>, _>::Interpreted(FoldOnly::new(
-            [4, 5].into_iter(),
-        ));
-        let interpreted_values = interpreted.fold(Vec::new(), |mut values, value| {
-            values.push(value);
-            values
-        });
-        assert_eq!(interpreted_values, [4, 5]);
     }
 
     #[test]
@@ -770,6 +830,78 @@ mod tests {
     }
 
     #[test]
+    fn lazy_2d_stamped_segments_match_stats() {
+        let config = plant();
+        let set = build_2d(&config, 2).expect("set builds");
+
+        assert_lazy_segments_match_stats(&set);
+    }
+
+    #[test]
+    fn template_summaries_use_2d_endpoints_for_small_templates_and_aabb_corners_otherwise() {
+        let config = GenerationConfig::new(
+            Dimensions::TwoD,
+            "A".to_string(),
+            1,
+            90.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('A', "F+F+F+F".to_string())]),
+        )
+        .expect("balanced config");
+        let set = build_2d(&config, 1).expect("set builds");
+
+        assert_eq!(set.templates()[0].bounds_candidates.len(), 2);
+        let template = &set.templates()[1];
+        assert_eq!(template.segments.len(), 4);
+        assert_eq!(template.bounds_candidates.len(), 4);
+        let min = template
+            .bounds_candidates
+            .iter()
+            .copied()
+            .reduce(Vec2::min)
+            .expect("AABB has corners");
+        let max = template
+            .bounds_candidates
+            .iter()
+            .copied()
+            .reduce(Vec2::max)
+            .expect("AABB has corners");
+        for segment in &template.segments {
+            for point in [segment.start, segment.end] {
+                assert!(point.cmpge(min).all() && point.cmple(max).all());
+            }
+        }
+    }
+
+    #[test]
+    fn transformed_summary_bounds_contain_every_2d_template_endpoint() {
+        let set = build_2d(&plant(), 2).expect("set builds");
+        let template = set
+            .templates()
+            .iter()
+            .find(|template| template.segments.len() >= 4)
+            .expect("plant has a nontrivial template");
+        let stamp = Stamp {
+            template: 1,
+            pos: Vec2::new(7.0, -3.0),
+            rot: Vec2::from_angle(0.73),
+            depth_base: 0,
+            order_base: 0,
+        };
+        let mut accumulator = <D2 as Dimension>::BoundsAccumulator::default();
+        template.include_world_bounds(stamp, &mut accumulator);
+        let bounds = accumulator.finish().expect("template has geometry");
+
+        for segment in &template.segments {
+            for point in stamp.transform_segment(segment) {
+                assert!(point.x >= bounds.min.x && point.x <= bounds.max.x);
+                assert!(point.y >= bounds.min.y && point.y <= bounds.max.y);
+            }
+        }
+    }
+
+    #[test]
     fn uturn_inside_rule_matches_interpreter() {
         let config = GenerationConfig::new(
             Dimensions::TwoD,
@@ -816,6 +948,62 @@ mod tests {
     }
 
     #[test]
+    fn lazy_3d_stamped_segments_match_stats() {
+        let config = tree_roll_3d();
+        let set = build_3d(&config, 2).expect("set builds");
+
+        assert_lazy_segments_match_stats(&set);
+    }
+
+    #[test]
+    fn transformed_3d_aabb_summary_bounds_contain_every_template_endpoint() {
+        let config = GenerationConfig::new(
+            Dimensions::ThreeD,
+            "A".to_string(),
+            1,
+            45.0,
+            1.0,
+            0.0,
+            BTreeMap::from([('A', "+&FFFF".to_string())]),
+        )
+        .expect("balanced config");
+        let set = build_3d(&config, 1).expect("set builds");
+        let template = &set.templates()[1];
+        assert_eq!(template.segments.len(), 4);
+        assert_eq!(template.bounds_candidates.len(), 8);
+
+        let local_direction = (template.segments[0].end - template.segments[0].start).normalize();
+
+        let stamp = Stamp {
+            template: 1,
+            pos: Vec3::new(7.0, -3.0, 2.0),
+            // Map the thin local diagonal to world Y so exact endpoints have
+            // negligible horizontal radius while AABB phantom corners do not.
+            rot: Quat::from_rotation_arc(local_direction, Vec3::Y),
+            depth_base: 0,
+            order_base: 0,
+        };
+        let mut accumulator = <D3 as Dimension>::BoundsAccumulator::default();
+        template.include_world_bounds(stamp, &mut accumulator);
+        let bounds = accumulator.finish().expect("template has geometry");
+
+        let mut exact = <D3 as Dimension>::BoundsAccumulator::default();
+
+        for segment in &template.segments {
+            for point in stamp.transform_segment(segment) {
+                assert!(point.xz().distance(bounds.center_xz) <= bounds.radius);
+                assert!(point.y >= bounds.min_y && point.y <= bounds.max_y);
+                exact.include(point);
+            }
+        }
+        let exact = exact.finish().expect("template has geometry");
+        assert!(
+            bounds.radius > exact.radius * 100.0,
+            "thin diagonal exposes AABB slack"
+        );
+    }
+
+    #[test]
     fn drawn_segment_counts_match_fixtures_across_iteration_depths() {
         for mut config in [koch(), dragon(), plant()] {
             let max_iterations = config.iterations;
@@ -830,15 +1018,13 @@ mod tests {
                     "2D count at iteration {iterations}"
                 );
                 if iterations > 0 {
-                    let stamped = PreparedGeneration::Stamped(
-                        compile_2d(&config)
-                            .build_templates(1)
-                            .expect("template set builds"),
-                    );
+                    let set = compile_2d(&config)
+                        .build_templates(1)
+                        .expect("template set builds");
                     assert_eq!(
                         counted,
-                        stamped.segments().count() as u64,
-                        "2D stamped count at iteration {iterations}"
+                        stamp_stats(&set).0,
+                        "2D stamp stats at iteration {iterations}"
                     );
                 }
             }
@@ -857,15 +1043,13 @@ mod tests {
                 "3D count at iteration {iterations}"
             );
             if iterations > 0 {
-                let stamped = PreparedGeneration::Stamped(
-                    compile_3d(&config)
-                        .build_templates(1)
-                        .expect("template set builds"),
-                );
+                let set = compile_3d(&config)
+                    .build_templates(1)
+                    .expect("template set builds");
                 assert_eq!(
                     counted,
-                    stamped.segments().count() as u64,
-                    "3D stamped count at iteration {iterations}"
+                    stamp_stats(&set).0,
+                    "3D stamp stats at iteration {iterations}"
                 );
             }
         }
@@ -894,7 +1078,7 @@ mod tests {
         )
         .expect("balanced config");
         let set = build_2d(&config, 1).expect("set builds");
-        D2::stamp_placements(&set).for_each(|(_, template)| {
+        set.stamps().for_each(|(_, template)| {
             assert!(
                 !template.segments.is_empty(),
                 "geometry-free templates must not be stamped"

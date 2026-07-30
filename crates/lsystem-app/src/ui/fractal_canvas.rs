@@ -13,9 +13,8 @@ use lsystem_renderer::line_renderer::{
     Segment3D, TopologicalDepthSegment2D, TopologicalDepthSegment3D, create_depth_texture,
 };
 use lsystem_renderer::lsystem_bridge::{
-    CollectedDepthSegmentData, CollectedSegmentData, DepthSegmentDataBuilder,
-    PlainSegmentDataBuilder, SegmentData2D, SegmentData3D, TopologicalDepthSegmentData2D,
-    TopologicalDepthSegmentData3D, color_params_from_config,
+    CollectedDepthSegmentData, CollectedSegmentData, SegmentData2D, SegmentData3D,
+    TopologicalDepthSegmentData2D, TopologicalDepthSegmentData3D, color_params_from_config,
 };
 use std::fmt;
 use std::sync::{
@@ -95,7 +94,7 @@ impl SceneDimension for D2 {
     }
 
     fn depth_geometry(data: TopologicalDepthSegmentData2D) -> SceneGeometry {
-        let max_topological_depth = data.max_topological_depth();
+        let max_topological_depth = data.max_topological_depth;
         SceneGeometry::TwoDWithTopologicalDepth {
             segments: Arc::new(data.segments),
             bounds: data.bounds,
@@ -113,7 +112,7 @@ impl SceneDimension for D3 {
     }
 
     fn depth_geometry(data: TopologicalDepthSegmentData3D) -> SceneGeometry {
-        let max_topological_depth = data.max_topological_depth();
+        let max_topological_depth = data.max_topological_depth;
         SceneGeometry::ThreeDWithTopologicalDepth {
             segments: Arc::new(data.segments),
             bounds: data.bounds,
@@ -331,10 +330,14 @@ async fn build_typed_scene<D: SceneDimension>(
     let prepared = plan.prepare();
 
     let (segment_count, geometry) = if use_topological_depth {
-        let mut builder = DepthSegmentDataBuilder::<D>::new();
+        let mut segments = Vec::new();
+        let mut stream = prepared.depth_segments();
         let cancelled = drain_cancellable(
-            prepared.depth_segments(),
-            |segment| builder.push_segment(segment),
+            &mut stream,
+            |segment| {
+                let [start, end] = segment.points;
+                segments.push(D::depth_record(start, end, segment.topological_depth));
+            },
             generation_revision,
             current_generation,
         )
@@ -342,13 +345,19 @@ async fn build_typed_scene<D: SceneDimension>(
         if cancelled {
             return SceneBuildResult::Cancelled;
         }
-        let data = builder.finish();
+        let summary = stream.finish();
+        let data = CollectedDepthSegmentData {
+            segments,
+            bounds: summary.bounds.unwrap_or_else(D::empty_scene_bounds),
+            max_topological_depth: summary.max_topological_depth,
+        };
         (data.segments.len(), D::depth_geometry(data))
     } else {
-        let mut builder = PlainSegmentDataBuilder::<D>::new();
+        let mut segments = Vec::new();
+        let mut stream = prepared.segments();
         let cancelled = drain_cancellable(
-            prepared.segments(),
-            |segment| builder.push_segment(segment),
+            &mut stream,
+            |[start, end]| segments.push(D::plain_record(start, end)),
             generation_revision,
             current_generation,
         )
@@ -356,7 +365,10 @@ async fn build_typed_scene<D: SceneDimension>(
         if cancelled {
             return SceneBuildResult::Cancelled;
         }
-        let data = builder.finish();
+        let data = CollectedSegmentData {
+            segments,
+            bounds: stream.finish().unwrap_or_else(D::empty_scene_bounds),
+        };
         (data.segments.len(), D::plain_geometry(data))
     };
 
@@ -388,19 +400,28 @@ async fn drain_cancellable<T>(
 ) -> bool {
     let mut segments_seen = 0usize;
     for item in iter {
-        if segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
-            if is_cancelled(generation_revision, current_generation) {
-                return true;
-            }
-            yield_generation().await;
-            if is_cancelled(generation_revision, current_generation) {
-                return true;
-            }
+        if cancellation_checkpoint(segments_seen, generation_revision, current_generation).await {
+            return true;
         }
         push(item);
         segments_seen = segments_seen.wrapping_add(1);
     }
     false
+}
+
+async fn cancellation_checkpoint(
+    segments_seen: usize,
+    generation_revision: u64,
+    current_generation: &AtomicU64,
+) -> bool {
+    if !segments_seen.is_multiple_of(CANCELLATION_CHECK_INTERVAL) {
+        return false;
+    }
+    if is_cancelled(generation_revision, current_generation) {
+        return true;
+    }
+    yield_generation().await;
+    is_cancelled(generation_revision, current_generation)
 }
 
 fn is_cancelled(generation: u64, current_generation: &AtomicU64) -> bool {
@@ -987,8 +1008,8 @@ mod tests {
 
     #[test]
     fn interpreted_generation_drain_is_cancellable() {
-        let generation = compile_2d(&cancellable_generation());
-        assert_generation_drain_is_cancellable(generation.segments());
+        let prepared = PreparedGeneration::Interpreted(compile_2d(&cancellable_generation()));
+        assert_generation_drain_is_cancellable(prepared.segments());
     }
 
     #[test]

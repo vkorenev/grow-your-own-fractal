@@ -3,7 +3,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use lsystem_core::{
-    AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
+    AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, D2, D3, Dimensions,
     GenerationConfig, PreparedGeneration,
 };
 
@@ -51,55 +51,29 @@ fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
         })
 }
 
-/// Stamped counterparts include template building and the placement walk, so
-/// they measure the full alternative pipeline, matching the interpreter
-/// checksums segment for segment (modulo f32 rounding).
-fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
-    let prepared = PreparedGeneration::Stamped(
-        compile_2d(config)
-            .build_templates(template_iterations)
-            .expect("template set builds"),
-    );
+/// Stamped counterparts use the same bounds-carrying streams as production
+/// consumers, matching the interpreter checksums segment for segment (modulo
+/// f32 rounding).
+fn checksum_2d_stamped(prepared: &PreparedGeneration<D2>) -> f32 {
     prepared
         .segments()
         .fold(0.0, |acc, [a, b]| acc + a.x + a.y + b.x + b.y)
 }
 
-fn checksum_2d_stamped_with_topological_depth(
-    config: &GenerationConfig,
-    template_iterations: u16,
-) -> f32 {
-    let prepared = PreparedGeneration::Stamped(
-        compile_2d(config)
-            .build_templates(template_iterations)
-            .expect("template set builds"),
-    );
+fn checksum_2d_stamped_with_topological_depth(prepared: &PreparedGeneration<D2>) -> f32 {
     prepared.depth_segments().fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
         acc + a.x + a.y + b.x + b.y + segment.topological_depth as f32
     })
 }
 
-fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
-    let prepared = PreparedGeneration::Stamped(
-        compile_3d(config)
-            .build_templates(template_iterations)
-            .expect("template set builds"),
-    );
+fn checksum_3d_stamped(prepared: &PreparedGeneration<D3>) -> f32 {
     prepared
         .segments()
         .fold(0.0, |acc, [a, b]| acc + a.x + a.y + a.z + b.x + b.y + b.z)
 }
 
-fn checksum_3d_stamped_with_topological_depth(
-    config: &GenerationConfig,
-    template_iterations: u16,
-) -> f32 {
-    let prepared = PreparedGeneration::Stamped(
-        compile_3d(config)
-            .build_templates(template_iterations)
-            .expect("template set builds"),
-    );
+fn checksum_3d_stamped_with_topological_depth(prepared: &PreparedGeneration<D3>) -> f32 {
     prepared.depth_segments().fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
         acc + a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32
@@ -126,11 +100,16 @@ fn bench_generation(c: &mut Criterion) {
             BTreeMap::from([('X', "X+YF+".to_string()), ('Y', "-FX-Y".to_string())]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_2d(&config)
+                .build_templates(10)
+                .expect("template set builds"),
+        );
         group.bench_function("dragon", |b| {
             b.iter(|| black_box(checksum_2d(black_box(&config))));
         });
         group.bench_function("dragon_stamped", |b| {
-            b.iter(|| black_box(checksum_2d_stamped(black_box(&config), 10)));
+            b.iter(|| black_box(checksum_2d_stamped(black_box(&stamped))));
         });
 
         // Plant-style 2D branching covers non-right-angle turns, stack traffic,
@@ -148,15 +127,19 @@ fn bench_generation(c: &mut Criterion) {
             ]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_2d(&config)
+                .build_templates(4)
+                .expect("template set builds"),
+        );
         group.bench_function("plant_a", |b| {
             b.iter(|| black_box(checksum_2d_with_topological_depth(black_box(&config))));
         });
         group.bench_function("plant_a_stamped", |b| {
             b.iter(|| {
-                black_box(checksum_2d_stamped_with_topological_depth(
-                    black_box(&config),
-                    4,
-                ))
+                black_box(checksum_2d_stamped_with_topological_depth(black_box(
+                    &stamped,
+                )))
             });
         });
 
@@ -172,11 +155,16 @@ fn bench_generation(c: &mut Criterion) {
             BTreeMap::from([('F', "FFFFfF".to_string())]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_2d(&config)
+                .build_templates(4)
+                .expect("template set builds"),
+        );
         group.bench_function("synthetic_2d_forward_heavy", |b| {
             b.iter(|| black_box(checksum_2d(black_box(&config))));
         });
         group.bench_function("synthetic_2d_forward_heavy_stamped", |b| {
-            b.iter(|| black_box(checksum_2d_stamped(black_box(&config), 4)));
+            b.iter(|| black_box(checksum_2d_stamped(black_box(&stamped))));
         });
 
         group.finish();
@@ -201,11 +189,16 @@ fn bench_generation(c: &mut Criterion) {
             ]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_3d(&config)
+                .build_templates(5)
+                .expect("template set builds"),
+        );
         group.bench_function("branching_rotation_heavy", |b| {
             b.iter(|| black_box(checksum_3d(black_box(&config))));
         });
         group.bench_function("branching_rotation_heavy_stamped", |b| {
-            b.iter(|| black_box(checksum_3d_stamped(black_box(&config), 5)));
+            b.iter(|| black_box(checksum_3d_stamped(black_box(&stamped))));
         });
 
         // Bracketless 3D Hilbert covers all rotation axes at 90 degrees, so
@@ -220,11 +213,16 @@ fn bench_generation(c: &mut Criterion) {
             BTreeMap::from([('X', r"^\XF^\XFX-F^//XFX&F+//XFX-F/X-/".to_string())]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_3d(&config)
+                .build_templates(3)
+                .expect("template set builds"),
+        );
         group.bench_function("hilbert_3d", |b| {
             b.iter(|| black_box(checksum_3d(black_box(&config))));
         });
         group.bench_function("hilbert_3d_stamped", |b| {
-            b.iter(|| black_box(checksum_3d_stamped(black_box(&config), 3)));
+            b.iter(|| black_box(checksum_3d_stamped(black_box(&stamped))));
         });
 
         // Roll-heavy 3D tree exercises stack and topological depth-aware segment output;
@@ -242,15 +240,19 @@ fn bench_generation(c: &mut Criterion) {
             ]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_3d(&config)
+                .build_templates(4)
+                .expect("template set builds"),
+        );
         group.bench_function("tree_roll_heavy", |b| {
             b.iter(|| black_box(checksum_3d_with_topological_depth(black_box(&config))));
         });
         group.bench_function("tree_roll_heavy_stamped", |b| {
             b.iter(|| {
-                black_box(checksum_3d_stamped_with_topological_depth(
-                    black_box(&config),
-                    4,
-                ))
+                black_box(checksum_3d_stamped_with_topological_depth(black_box(
+                    &stamped,
+                )))
             });
         });
 
@@ -266,11 +268,16 @@ fn bench_generation(c: &mut Criterion) {
             BTreeMap::from([('F', "FFFFfF".to_string())]),
         )
         .expect("balanced config");
+        let stamped = PreparedGeneration::Stamped(
+            compile_3d(&config)
+                .build_templates(4)
+                .expect("template set builds"),
+        );
         group.bench_function("synthetic_3d_forward_heavy", |b| {
             b.iter(|| black_box(checksum_3d(black_box(&config))));
         });
         group.bench_function("synthetic_3d_forward_heavy_stamped", |b| {
-            b.iter(|| black_box(checksum_3d_stamped(black_box(&config), 4)));
+            b.iter(|| black_box(checksum_3d_stamped(black_box(&stamped))));
         });
 
         group.finish();

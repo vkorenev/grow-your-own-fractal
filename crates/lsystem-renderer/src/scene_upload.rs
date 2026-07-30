@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use lsystem_core::{
-    BoundsAccumulator, CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET,
-    LineColorConfig, PreparedGeneration, SegmentWithTopologicalDepth, TemplateDimension,
+    CompiledGeneration, D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, DepthSegmentStream,
+    LineColorConfig, PreparedGeneration, SegmentStream, TemplateDimension,
 };
 
 use crate::line_renderer::{LinePipeline, RenderDimension, StagingUnavailable, record_limit};
@@ -121,29 +121,21 @@ fn checked_total<D: RenderDimension>(
     Ok(u32::try_from(total_segments).expect("segment cap fits in u32"))
 }
 
-fn upload_plain<D: RenderDimension>(
+fn upload_plain<D: RenderDimension + TemplateDimension>(
     pipeline: &mut LinePipeline<D>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    segments: impl Iterator<Item = [D::Point; 2]>,
+    stream: SegmentStream<'_, D>,
     line: &LineColorConfig,
     method: GenerationMethod,
     total_segments: u32,
 ) -> Result<UploadedScene<D>, SceneUploadError> {
-    let mut bounds = D::BoundsAccumulator::default();
-    pipeline
-        .upload_from_iter(
-            device,
-            queue,
-            total_segments,
-            segments.map(|[start, end]| {
-                bounds.include_segment(start, end);
-                D::plain_record(start, end)
-            }),
-        )
+    let bounds = pipeline
+        .upload_with(device, queue, total_segments, |writer| {
+            stream.drain(|[start, end]| writer.push(D::plain_record(start, end)))
+        })
         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
-
-    let bounds = bounds.finish().unwrap_or_else(D::empty_scene_bounds);
+    let bounds = bounds.unwrap_or_else(D::empty_scene_bounds);
     pipeline.write_color_params(queue, color_params_from_config(line, total_segments, None));
     Ok(UploadedScene {
         method,
@@ -153,32 +145,25 @@ fn upload_plain<D: RenderDimension>(
     })
 }
 
-fn upload_with_topological_depth<D: RenderDimension>(
+fn upload_with_topological_depth<D: RenderDimension + TemplateDimension>(
     pipeline: &mut LinePipeline<D>,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    segments: impl Iterator<Item = SegmentWithTopologicalDepth<D>>,
+    stream: DepthSegmentStream<'_, D>,
     line: &LineColorConfig,
     method: GenerationMethod,
     total_segments: u32,
 ) -> Result<UploadedScene<D>, SceneUploadError> {
-    let mut bounds = D::BoundsAccumulator::default();
-    let mut max_topological_depth = 0;
-    pipeline
-        .upload_depth_from_iter(
-            device,
-            queue,
-            total_segments,
-            segments.map(|segment| {
+    let summary = pipeline
+        .upload_depth_with(device, queue, total_segments, |writer| {
+            stream.drain(|segment| {
                 let [start, end] = segment.points;
-                bounds.include_segment(start, end);
-                max_topological_depth = max_topological_depth.max(segment.topological_depth);
-                D::depth_record(start, end, segment.topological_depth)
-            }),
-        )
+                writer.push(D::depth_record(start, end, segment.topological_depth));
+            })
+        })
         .map_err(|StagingUnavailable| SceneUploadError::StagingUnavailable)?;
-
-    let bounds = bounds.finish().unwrap_or_else(D::empty_scene_bounds);
+    let bounds = summary.bounds.unwrap_or_else(D::empty_scene_bounds);
+    let max_topological_depth = summary.max_topological_depth;
     pipeline.write_color_params(
         queue,
         color_params_from_config(line, total_segments, Some(max_topological_depth)),
@@ -770,8 +755,7 @@ mod gpu_tests {
             let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let record_size = std::mem::size_of::<Segment2D>() as u64;
             let invalid_count = (device.limits().max_buffer_size / record_size + 1) as u32;
-            let result =
-                pipeline.upload_from_iter(&device, &queue, invalid_count, std::iter::empty());
+            let result = pipeline.upload_with(&device, &queue, invalid_count, |_writer| {});
             assert!(matches!(result, Err(StagingUnavailable)));
             assert!(
                 error_scope.pop().await.is_some(),

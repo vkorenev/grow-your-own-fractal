@@ -219,18 +219,41 @@ pub(crate) struct StagingUnavailable;
 /// Writes exactly one record per pre-sized staging slot. Count mismatches are
 /// internal contract violations and panic in every build so callers can never
 /// report metadata for a partial upload.
-fn write_records<V: bytemuck::Pod>(
-    view: wgpu::WriteOnly<'_, [u8]>,
-    records: impl Iterator<Item = V>,
-) {
-    let view = records.fold(view, |mut view, record| {
+pub(crate) struct RecordWriter<'a, V: bytemuck::Pod> {
+    view: Option<wgpu::WriteOnly<'a, [u8]>>,
+    _record: PhantomData<V>,
+}
+
+impl<'a, V: bytemuck::Pod> RecordWriter<'a, V> {
+    fn new(view: wgpu::WriteOnly<'a, [u8]>) -> Self {
+        Self {
+            view: Some(view),
+            _record: PhantomData,
+        }
+    }
+
+    /// A writer with zero slots, for empty scenes: any push panics, and the
+    /// fill closure still runs so stream summaries are produced.
+    fn empty() -> Self {
+        Self {
+            view: None,
+            _record: PhantomData,
+        }
+    }
+
+    pub(crate) fn push(&mut self, record: V) {
+        let view = self.view.as_mut().expect("more records than staging bytes");
         let mut chunk = view
             .split_off(..std::mem::size_of::<V>())
             .expect("more records than staging bytes");
         chunk.copy_from_slice(bytemuck::bytes_of(&record));
-        view
-    });
-    assert!(view.is_empty(), "fewer records than staging bytes");
+    }
+
+    fn finish(self) {
+        if let Some(view) = self.view {
+            assert!(view.is_empty(), "fewer records than staging bytes");
+        }
+    }
 }
 
 impl GrowableVertexBuffer {
@@ -262,19 +285,20 @@ impl GrowableVertexBuffer {
         self.count = segments.len() as u32;
     }
 
-    fn upload_from_iter<V: bytemuck::Pod>(
+    fn upload_with<V: bytemuck::Pod, R>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         count: u32,
-        records: impl Iterator<Item = V>,
         label: &str,
-    ) -> Result<(), StagingUnavailable> {
+        fill: impl FnOnce(&mut RecordWriter<'_, V>) -> R,
+    ) -> Result<R, StagingUnavailable> {
         if count == 0 {
-            let had_records = records.fold(false, |_, _| true);
-            assert!(!had_records, "more records than staging bytes");
+            let mut writer = RecordWriter::empty();
+            let result = fill(&mut writer);
+            writer.finish();
             self.count = 0;
-            return Ok(());
+            return Ok(result);
         }
 
         let required = count as u64 * std::mem::size_of::<V>() as u64;
@@ -288,10 +312,12 @@ impl GrowableVertexBuffer {
             self.count = 0;
             return Err(StagingUnavailable);
         };
-        write_records(view.slice(..), records);
+        let mut writer = RecordWriter::new(view.slice(..));
+        let result = fill(&mut writer);
+        writer.finish();
         drop(view);
         self.count = count;
-        Ok(())
+        Ok(result)
     }
 
     fn ensure_capacity(&mut self, device: &wgpu::Device, required: u64, label: &str) {
@@ -321,16 +347,16 @@ struct PipelineUploadTarget<'a> {
 }
 
 impl PipelineUploadTarget<'_> {
-    fn upload<V: bytemuck::Pod>(
+    fn upload<V: bytemuck::Pod, R>(
         self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         count: u32,
-        records: impl Iterator<Item = V>,
-    ) -> Result<(), StagingUnavailable> {
+        fill: impl FnOnce(&mut RecordWriter<'_, V>) -> R,
+    ) -> Result<R, StagingUnavailable> {
         let result = self
             .vertex_buffer
-            .upload_from_iter(device, queue, count, records, self.label);
+            .upload_with(device, queue, count, self.label, fill);
         // Switch even on failure: the target buffer now has count zero, while
         // leaving the other layout active could draw a stale incompatible scene.
         *self.active_segment_buffer = self.target;
@@ -679,20 +705,20 @@ impl<D: RenderDimension> LinePipeline<D> {
         self.write_color_params(queue, color_params);
     }
 
-    pub(crate) fn upload_from_iter(
+    pub(crate) fn upload_with<R>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         count: u32,
-        segments: impl Iterator<Item = D::PlainRecord>,
-    ) -> Result<(), StagingUnavailable> {
+        fill: impl FnOnce(&mut RecordWriter<'_, D::PlainRecord>) -> R,
+    ) -> Result<R, StagingUnavailable> {
         PipelineUploadTarget {
             vertex_buffer: &mut self.segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
             label: self.labels.segment,
             target: ActiveSegmentBuffer::Normal,
         }
-        .upload(device, queue, count, segments)
+        .upload(device, queue, count, fill)
     }
 
     pub fn upload_with_topological_depth(
@@ -708,20 +734,20 @@ impl<D: RenderDimension> LinePipeline<D> {
         self.write_color_params(queue, color_params);
     }
 
-    pub(crate) fn upload_depth_from_iter(
+    pub(crate) fn upload_depth_with<R>(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         count: u32,
-        segments: impl Iterator<Item = D::DepthRecord>,
-    ) -> Result<(), StagingUnavailable> {
+        fill: impl FnOnce(&mut RecordWriter<'_, D::DepthRecord>) -> R,
+    ) -> Result<R, StagingUnavailable> {
         PipelineUploadTarget {
             vertex_buffer: &mut self.depth_segment_buffer,
             active_segment_buffer: &mut self.active_segment_buffer,
             label: self.labels.depth_segment,
             target: ActiveSegmentBuffer::TopologicalDepth,
         }
-        .upload(device, queue, count, segments)
+        .upload(device, queue, count, fill)
     }
 
     pub fn write_color_params(&self, queue: &wgpu::Queue, color_params: ColorParams) {
@@ -1152,38 +1178,40 @@ mod tests {
     }
 
     #[test]
-    fn write_records_fills_staging_bytes_sequentially() {
+    fn record_writer_fills_staging_bytes_sequentially() {
         let segments = sample_segments();
         let expected: &[u8] = bytemuck::cast_slice(&segments);
         let mut bytes = vec![0u8; expected.len()];
 
-        write_records(
-            wgpu::WriteOnly::from_mut(&mut bytes),
-            FoldOnly::new(segments),
-        );
+        let mut writer = RecordWriter::new(wgpu::WriteOnly::from_mut(&mut bytes));
+        FoldOnly::new(segments).for_each(|record| writer.push(record));
+        writer.finish();
 
         assert_eq!(bytes, expected);
     }
 
     #[test]
     #[should_panic(expected = "more records than staging bytes")]
-    fn write_records_panics_when_there_are_too_many_records() {
+    fn record_writer_panics_when_there_are_too_many_records() {
         let segments = sample_segments();
         let mut bytes = vec![0u8; std::mem::size_of::<Segment2D>()];
 
-        write_records(wgpu::WriteOnly::from_mut(&mut bytes), segments.into_iter());
+        let mut writer = RecordWriter::new(wgpu::WriteOnly::from_mut(&mut bytes));
+        segments.into_iter().for_each(|record| writer.push(record));
     }
 
     #[test]
     #[should_panic(expected = "fewer records than staging bytes")]
-    fn write_records_panics_when_there_are_too_few_records() {
+    fn record_writer_panics_when_there_are_too_few_records() {
         let segments = sample_segments();
         let mut bytes = vec![0u8; std::mem::size_of_val(&segments)];
 
-        write_records(
-            wgpu::WriteOnly::from_mut(&mut bytes),
-            segments.into_iter().take(1),
-        );
+        let mut writer = RecordWriter::new(wgpu::WriteOnly::from_mut(&mut bytes));
+        segments
+            .into_iter()
+            .take(1)
+            .for_each(|record| writer.push(record));
+        writer.finish();
     }
 
     #[test]
