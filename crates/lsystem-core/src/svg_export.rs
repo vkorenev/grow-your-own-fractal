@@ -2,7 +2,7 @@ use glam::{Vec2, Vec3};
 
 use crate::{
     AnyCompiledGeneration, ColorConfig, Config, DEFAULT_TEMPLATE_SEGMENT_BUDGET, GenerationConfig,
-    LineColorConfig, PreparedGeneration, Rgb, Segment2DWithTopologicalDepth,
+    LineColorConfig, Rgb, Segment2DWithTopologicalDepth,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -25,16 +25,11 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
     let prepared = plan.prepare();
     if colors.line.needs_topological_depth() && has_stack_directives {
         let mut segments: Vec<Segment2DWithTopologicalDepth> = Vec::new();
-        match &prepared {
-            PreparedGeneration::Stamped(set) => set
-                .depth_segments()
-                .for_each(|segment| segments.push(segment)),
-            // for_each drives the pipeline's specialized `fold`; `collect`
-            // would pull every symbol one at a time through `next`.
-            PreparedGeneration::Interpreted(generation) => generation
-                .depth_segments()
-                .for_each(|segment| segments.push(segment)),
-        }
+        // for_each drives the pipeline's specialized `fold`; `collect`
+        // would pull every symbol one at a time through `next`.
+        prepared
+            .depth_segments()
+            .for_each(|segment| segments.push(segment));
         return Ok(export_svg_with_segments(
             &config.generation,
             &colors,
@@ -44,15 +39,10 @@ pub fn export_svg(config: &Config) -> Result<String, SvgExportError> {
     }
 
     let mut segments: Vec<[Vec2; 2]> = Vec::new();
-    match &prepared {
-        PreparedGeneration::Stamped(set) => {
-            set.segments().for_each(|segment| segments.push(segment))
-        }
-        // for_each drives the pipeline's specialized `fold` (see above).
-        PreparedGeneration::Interpreted(generation) => generation
-            .segments()
-            .for_each(|segment| segments.push(segment)),
-    }
+    // for_each drives the pipeline's specialized `fold` (see above).
+    prepared
+        .segments()
+        .for_each(|segment| segments.push(segment));
     Ok(export_svg_with_segments(
         &config.generation,
         &colors,

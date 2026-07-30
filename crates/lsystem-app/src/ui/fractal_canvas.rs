@@ -5,7 +5,7 @@ use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Th
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
     AnyCompiledGeneration, BoundingCylinder3D, Bounds2D, ColorConfig, CompiledGeneration, Config,
-    D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, PreparedGeneration, TemplateDimension,
+    D2, D3, DEFAULT_TEMPLATE_SEGMENT_BUDGET, TemplateDimension,
 };
 use lsystem_renderer::camera::Camera;
 use lsystem_renderer::line_renderer::{
@@ -332,26 +332,13 @@ async fn build_typed_scene<D: SceneDimension>(
 
     let (segment_count, geometry) = if use_topological_depth {
         let mut builder = DepthSegmentDataBuilder::<D>::new();
-        let cancelled = match &prepared {
-            PreparedGeneration::Stamped(set) => {
-                drain_cancellable(
-                    set.depth_segments(),
-                    |segment| builder.push_segment(segment),
-                    generation_revision,
-                    current_generation,
-                )
-                .await
-            }
-            PreparedGeneration::Interpreted(generation) => {
-                drain_cancellable(
-                    generation.depth_segments(),
-                    |segment| builder.push_segment(segment),
-                    generation_revision,
-                    current_generation,
-                )
-                .await
-            }
-        };
+        let cancelled = drain_cancellable(
+            prepared.depth_segments(),
+            |segment| builder.push_segment(segment),
+            generation_revision,
+            current_generation,
+        )
+        .await;
         if cancelled {
             return SceneBuildResult::Cancelled;
         }
@@ -359,26 +346,13 @@ async fn build_typed_scene<D: SceneDimension>(
         (data.segments.len(), D::depth_geometry(data))
     } else {
         let mut builder = PlainSegmentDataBuilder::<D>::new();
-        let cancelled = match &prepared {
-            PreparedGeneration::Stamped(set) => {
-                drain_cancellable(
-                    set.segments(),
-                    |segment| builder.push_segment(segment),
-                    generation_revision,
-                    current_generation,
-                )
-                .await
-            }
-            PreparedGeneration::Interpreted(generation) => {
-                drain_cancellable(
-                    generation.segments(),
-                    |segment| builder.push_segment(segment),
-                    generation_revision,
-                    current_generation,
-                )
-                .await
-            }
-        };
+        let cancelled = drain_cancellable(
+            prepared.segments(),
+            |segment| builder.push_segment(segment),
+            generation_revision,
+            current_generation,
+        )
+        .await;
         if cancelled {
             return SceneBuildResult::Cancelled;
         }
@@ -885,7 +859,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use iced::futures::executor::block_on;
-    use lsystem_core::{Dimensions, GenerationConfig, LineColorConfig, Rgb};
+    use lsystem_core::{Dimensions, GenerationConfig, LineColorConfig, PreparedGeneration, Rgb};
 
     use super::*;
 
@@ -1022,10 +996,11 @@ mod tests {
         let prepared = compile_2d(&cancellable_generation())
             .plan_templates(DEFAULT_TEMPLATE_SEGMENT_BUDGET)
             .prepare();
-        let PreparedGeneration::Stamped(set) = prepared else {
-            panic!("the fixture must select stamped generation")
-        };
-        assert_generation_drain_is_cancellable(set.segments());
+        assert!(
+            matches!(prepared, PreparedGeneration::Stamped(_)),
+            "the fixture must select stamped generation"
+        );
+        assert_generation_drain_is_cancellable(prepared.segments());
     }
 
     #[test]

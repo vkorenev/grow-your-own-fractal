@@ -223,8 +223,8 @@ mod tests {
     use glam::Vec3;
     use lsystem_core::{
         AnyCompiledGeneration, CompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, D2,
-        D3, Dimensions, GenerationConfig, GenerationDimension, Rgb, Segment2DWithTopologicalDepth,
-        Segment3DWithTopologicalDepth, TemplateDimension, TemplateSet,
+        D3, Dimensions, GenerationConfig, GenerationDimension, PreparedGeneration, Rgb,
+        Segment2DWithTopologicalDepth, Segment3DWithTopologicalDepth, TemplateDimension,
     };
     use std::collections::BTreeMap;
     use std::ops::Index;
@@ -365,8 +365,9 @@ mod tests {
         )
         .expect("balanced config");
         let set = compile_2d(&config).build_templates(2).expect("set builds");
+        let prepared = PreparedGeneration::Stamped(set);
 
-        let stamped = collect_plain_segments::<D2>(set.segments());
+        let stamped = collect_plain_segments::<D2>(prepared.segments());
         let interpreted = collect_plain_segments::<D2>(compile_2d(&config).segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
@@ -387,8 +388,9 @@ mod tests {
         )
         .expect("balanced config");
         let set = compile_3d(&config).build_templates(2).expect("set builds");
+        let prepared = PreparedGeneration::Stamped(set);
 
-        let stamped = collect_plain_segments::<D3>(set.segments());
+        let stamped = collect_plain_segments::<D3>(prepared.segments());
         let interpreted = collect_plain_segments::<D3>(compile_3d(&config).segments());
 
         assert_plain_3d_endpoints_are_contained(&stamped);
@@ -414,17 +416,15 @@ mod tests {
         )
         .expect("balanced config");
         let set = compile_2d(&config).build_templates(1).expect("set builds");
+        let prepared = PreparedGeneration::Stamped(set);
 
-        let stats = set.emit_stamps(|_, _| {});
-        assert_eq!(stats.total_segments, 0);
-        assert_eq!(stats.max_depth, 0);
-        assert_eq!(set.segments().count(), 0);
+        assert_eq!(prepared.segments().count(), 0);
 
-        let data = collect_plain_segments::<D2>(set.segments());
+        let data = collect_plain_segments::<D2>(prepared.segments());
         assert!(data.segments.is_empty());
         assert_eq!(data.bounds, D2::empty_scene_bounds());
 
-        let depth_data = collect_depth_segments::<D2>(set.depth_segments());
+        let depth_data = collect_depth_segments::<D2>(prepared.depth_segments());
         assert!(depth_data.segments.is_empty());
         assert_eq!(depth_data.max_topological_depth(), 0);
         assert_eq!(depth_data.bounds, D2::empty_scene_bounds());
@@ -432,7 +432,7 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn check_stamped_depth_matches_interpreted<D>(
-        set: &TemplateSet<D>,
+        prepared: &PreparedGeneration<D>,
         generation: &CompiledGeneration<D>,
         axis_count: usize,
         depth_of: impl Fn(&D::DepthRecord) -> u32,
@@ -443,7 +443,7 @@ mod tests {
         D::Point: Index<usize, Output = f32>,
         D::Bounds: TestBounds,
     {
-        let stamped = collect_depth_segments::<D>(set.depth_segments());
+        let stamped = collect_depth_segments::<D>(prepared.depth_segments());
         let interpreted = collect_depth_segments::<D>(generation.depth_segments());
 
         assert_eq!(stamped.segments.len(), interpreted.segments.len());
@@ -475,10 +475,11 @@ mod tests {
         )
         .expect("balanced config");
         let set = compile_2d(&config).build_templates(2).expect("set builds");
+        let prepared = PreparedGeneration::Stamped(set);
         let generation = compile_2d(&config);
 
         check_stamped_depth_matches_interpreted::<D2>(
-            &set,
+            &prepared,
             &generation,
             2,
             |s| s.topological_depth,
@@ -503,10 +504,11 @@ mod tests {
         )
         .expect("balanced config");
         let set = compile_3d(&config).build_templates(2).expect("set builds");
+        let prepared = PreparedGeneration::Stamped(set);
         let generation = compile_3d(&config);
 
         check_stamped_depth_matches_interpreted::<D3>(
-            &set,
+            &prepared,
             &generation,
             3,
             |s| s.topological_depth,
@@ -514,7 +516,7 @@ mod tests {
             |s| s.end,
         );
 
-        let stamped = collect_depth_segments::<D3>(set.depth_segments());
+        let stamped = collect_depth_segments::<D3>(prepared.depth_segments());
         let interpreted = collect_depth_segments::<D3>(generation.depth_segments());
         assert_depth_3d_endpoints_are_contained(&stamped);
         assert_depth_3d_endpoints_are_contained(&interpreted);

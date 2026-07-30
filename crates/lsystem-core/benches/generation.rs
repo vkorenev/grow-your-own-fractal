@@ -3,7 +3,8 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use lsystem_core::{
-    AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions, GenerationConfig,
+    AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, Dimensions,
+    GenerationConfig, PreparedGeneration,
 };
 
 fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
@@ -54,10 +55,13 @@ fn checksum_3d_with_topological_depth(config: &GenerationConfig) -> f32 {
 /// they measure the full alternative pipeline, matching the interpreter
 /// checksums segment for segment (modulo f32 rounding).
 fn checksum_2d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
-    let set = compile_2d(config)
-        .build_templates(template_iterations)
-        .expect("template set builds");
-    set.segments()
+    let prepared = PreparedGeneration::Stamped(
+        compile_2d(config)
+            .build_templates(template_iterations)
+            .expect("template set builds"),
+    );
+    prepared
+        .segments()
         .fold(0.0, |acc, [a, b]| acc + a.x + a.y + b.x + b.y)
 }
 
@@ -65,20 +69,25 @@ fn checksum_2d_stamped_with_topological_depth(
     config: &GenerationConfig,
     template_iterations: u16,
 ) -> f32 {
-    let set = compile_2d(config)
-        .build_templates(template_iterations)
-        .expect("template set builds");
-    set.depth_segments().fold(0.0, |acc, segment| {
+    let prepared = PreparedGeneration::Stamped(
+        compile_2d(config)
+            .build_templates(template_iterations)
+            .expect("template set builds"),
+    );
+    prepared.depth_segments().fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
         acc + a.x + a.y + b.x + b.y + segment.topological_depth as f32
     })
 }
 
 fn checksum_3d_stamped(config: &GenerationConfig, template_iterations: u16) -> f32 {
-    let set = compile_3d(config)
-        .build_templates(template_iterations)
-        .expect("template set builds");
-    set.segments()
+    let prepared = PreparedGeneration::Stamped(
+        compile_3d(config)
+            .build_templates(template_iterations)
+            .expect("template set builds"),
+    );
+    prepared
+        .segments()
         .fold(0.0, |acc, [a, b]| acc + a.x + a.y + a.z + b.x + b.y + b.z)
 }
 
@@ -86,10 +95,12 @@ fn checksum_3d_stamped_with_topological_depth(
     config: &GenerationConfig,
     template_iterations: u16,
 ) -> f32 {
-    let set = compile_3d(config)
-        .build_templates(template_iterations)
-        .expect("template set builds");
-    set.depth_segments().fold(0.0, |acc, segment| {
+    let prepared = PreparedGeneration::Stamped(
+        compile_3d(config)
+            .build_templates(template_iterations)
+            .expect("template set builds"),
+    );
+    prepared.depth_segments().fold(0.0, |acc, segment| {
         let [a, b] = segment.points;
         acc + a.x + a.y + a.z + b.x + b.y + b.z + segment.topological_depth as f32
     })
