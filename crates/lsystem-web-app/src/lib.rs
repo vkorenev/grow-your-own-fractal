@@ -5,6 +5,11 @@ mod export;
 mod panels;
 mod presets;
 mod renderer;
+// TODO(task-3): drop this `expect` once startup/autosave wiring calls into
+// `storage`; until then its `pub` functions are unreachable from outside the
+// crate and trigger `dead_code`.
+#[expect(dead_code)]
+mod storage;
 pub(crate) mod ui;
 
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
