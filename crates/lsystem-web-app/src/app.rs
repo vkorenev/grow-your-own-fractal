@@ -589,18 +589,35 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
     // under several back-to-back changes (e.g. a dragged slider) — nothing
     // is silently superseded by a stale in-flight write.
     let try_save = move |text: String| {
-        if db.with_value(Option::is_none) {
-            // Storage unavailable (IndexedDB failed to open) — degrade silently.
-            return;
-        }
+        // Check `save_in_flight` first, before ever looking at `db`. The
+        // in-flight task below takes the `Database` handle out of `db` for
+        // the entire duration of its save (see the comment at the take
+        // site), so `db` reads as empty while a save is running — that must
+        // never be confused with "storage was never available." This branch
+        // doesn't touch `db` at all: if a save is in flight, its spawned
+        // task already established availability when it started, so this
+        // call only needs to queue the latest value for it to pick up.
         if save_in_flight.get_value() {
             pending_save.set_value(Some(text));
+            return;
+        }
+        // No save in flight, so `db` (if any) is currently held by nobody —
+        // safe to check availability here.
+        if db.with_value(Option::is_none) {
+            // Storage unavailable (IndexedDB failed to open) — degrade silently.
             return;
         }
         save_in_flight.set_value(true);
         wasm_bindgen_futures::spawn_local(async move {
             let mut current = text;
             loop {
+                // Exclusively takes the handle out of `db` for the duration
+                // of this save; `db` reads as empty to any concurrent
+                // `try_save`/`pagehide` call until it's restored just below.
+                // That's fine: those callers gate on `save_in_flight` (set
+                // above, before this task ever runs), not on `db`'s
+                // Some/None state, so a momentarily-empty `db` here is never
+                // mistaken for "storage unavailable."
                 let Some(Some(handle)) = db.try_update_value(|opt| opt.take()) else {
                     break;
                 };
