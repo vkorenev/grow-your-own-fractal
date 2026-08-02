@@ -309,7 +309,9 @@ impl ConfigEntry {
         }
     }
 
-    fn applied_text(&self) -> String {
+    /// The TOML text of this entry's currently applied (committed) configuration,
+    /// as opposed to [`draft_text`] which may contain an unapplied draft.
+    pub fn applied_text(&self) -> String {
         self.last_applied.to_toml_string()
     }
 
