@@ -143,16 +143,71 @@ pub(crate) struct RenderContext {
     pub(crate) camera_ready: Memo<bool>,
 }
 
+/// Resolved startup state: the config workspace seeded from bundled presets
+/// and, if any, restored from autosaved TOML, plus the IndexedDB handle used
+/// for autosave writes (`None` if the database could not be opened).
+struct InitialState {
+    workspace: ConfigWorkspace,
+    db: Option<idb::Database>,
+}
+
+/// Mounts at the document root. Gates `App` (and all its interactive
+/// controls) behind the async IndexedDB restore attempt, so a user can never
+/// interact with a stale bundled-preset config that then gets clobbered by a
+/// later-resolving restore. Renders an empty `app-shell` placeholder until
+/// the restore has fully resolved (success, "nothing stored", or failure —
+/// `storage::open`/`storage::load` always resolve, never hang).
 #[component]
-pub(crate) fn App() -> impl IntoView {
-    let initial_workspace =
-        ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
+pub(crate) fn AppRoot() -> impl IntoView {
+    let init: RwSignal<Option<InitialState>, LocalStorage> = RwSignal::new_local(None);
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let db = crate::storage::open().await;
+        let stored_text = match &db {
+            Some(db) => crate::storage::load(db).await,
+            None => None,
+        };
+
+        let mut workspace =
+            ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
+        if let Some(text) = stored_text
+            && let Err(err) = workspace.import_toml(&text)
+        {
+            log::warn!("failed to import autosaved config, using bundled presets: {err}");
+        }
+
+        init.set(Some(InitialState { workspace, db }));
+    });
+
+    view! {
+        <Show
+            when=move || init.with(|state| state.is_some())
+            fallback=|| view! { <main class="app-shell"></main> }
+        >
+            {move || {
+                let InitialState { workspace, db } = init
+                    .try_update_untracked(|state| state.take())
+                    .flatten()
+                    .expect("Show only renders this branch once `init` is Some");
+                view! { <App initial_workspace=workspace db=db /> }
+            }}
+        </Show>
+    }
+}
+
+#[component]
+pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>) -> impl IntoView {
     let selected_entry = initial_workspace.selected();
     let color_memory = RwSignal::new(ColorControlMemory::from_editor_config(
         &selected_entry.editor_config().colors,
         &ConfigDefaults::embedded().colors,
     ));
     let config_workspace = RwSignal::new(initial_workspace);
+    // Seeded from the `db` prop; not yet read anywhere — the Task 4 autosave
+    // wiring will consume it.
+    // TODO(task-4): drop this `expect` once autosave wiring reads `db`.
+    #[expect(unused_variables)]
+    let db: StoredValue<Option<idb::Database>, LocalStorage> = StoredValue::new_local(db);
     let grammar_error = RwSignal::new(None::<String>);
     let toml_error = RwSignal::new(None::<String>);
     let workspace_error = RwSignal::new(None::<String>);

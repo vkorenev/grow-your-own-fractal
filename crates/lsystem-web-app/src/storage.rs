@@ -83,12 +83,17 @@ async fn load_value(db: &Database) -> Result<Option<JsValue>, Error> {
 ///
 /// Logs and returns on any error rather than panicking; a failed autosave
 /// write must never crash the app.
+// TODO(task-4): drop these `expect`s once autosave wiring calls `save`; until
+// then it (and the helper it calls) is unreachable from outside the crate
+// and triggers `dead_code`.
+#[expect(dead_code)]
 pub async fn save(db: &Database, text: &str) {
     if let Err(err) = save_value(db, text).await {
         log::warn!("failed to save autosaved config: {err}");
     }
 }
 
+#[expect(dead_code)]
 async fn save_value(db: &Database, text: &str) -> Result<(), Error> {
     let transaction = db.transaction(&[STORE_NAME], TransactionMode::ReadWrite)?;
     let store = transaction.object_store(STORE_NAME)?;
