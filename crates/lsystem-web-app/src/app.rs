@@ -203,11 +203,10 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
         &ConfigDefaults::embedded().colors,
     ));
     let config_workspace = RwSignal::new(initial_workspace);
-    // Seeded from the `db` prop; not yet read anywhere — the Task 4 autosave
-    // wiring will consume it.
-    // TODO(task-4): drop this `expect` once autosave wiring reads `db`.
-    #[expect(unused_variables)]
     let db: StoredValue<Option<idb::Database>, LocalStorage> = StoredValue::new_local(db);
+    // Autosave single-flight queue bookkeeping; see the `try_save` closure below.
+    let save_in_flight: StoredValue<bool, LocalStorage> = StoredValue::new_local(false);
+    let pending_save: StoredValue<Option<String>, LocalStorage> = StoredValue::new_local(None);
     let grammar_error = RwSignal::new(None::<String>);
     let toml_error = RwSignal::new(None::<String>);
     let workspace_error = RwSignal::new(None::<String>);
@@ -227,6 +226,8 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
 
     let toml_text =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().draft_text().into_owned()));
+    let applied_toml_text =
+        Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_text()));
     let selected_id = Memo::new(move |_| config_workspace.with(|ws| ws.selected_id()));
     let selected_name =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().name().to_string()));
@@ -580,6 +581,64 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
         },
         false,
     );
+
+    // Leading-edge, single-flight autosave queue: a write begins immediately
+    // on the first change (nothing lost to an artificial delay), at most one
+    // IndexedDB transaction is in flight at a time (writes can't complete
+    // out of order), and the latest text is always the last one written even
+    // under several back-to-back changes (e.g. a dragged slider) — nothing
+    // is silently superseded by a stale in-flight write.
+    let try_save = move |text: String| {
+        if db.with_value(Option::is_none) {
+            // Storage unavailable (IndexedDB failed to open) — degrade silently.
+            return;
+        }
+        if save_in_flight.get_value() {
+            pending_save.set_value(Some(text));
+            return;
+        }
+        save_in_flight.set_value(true);
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut current = text;
+            loop {
+                let Some(Some(handle)) = db.try_update_value(|opt| opt.take()) else {
+                    break;
+                };
+                crate::storage::save(&handle, &current).await;
+                db.update_value(|opt| *opt = Some(handle));
+                match pending_save.try_update_value(|opt| opt.take()) {
+                    Some(Some(next)) => current = next,
+                    _ => break,
+                }
+            }
+            save_in_flight.set_value(false);
+        });
+    };
+
+    // The handler first runs on the first genuine change after mount
+    // (immediate = false): `config_workspace` is seeded with the value
+    // already restored (or freshly bundled) by `AppRoot`, which is already
+    // correct in the DB — or doesn't need to be — so autosave must not fire
+    // on that initial value, only on subsequent edits.
+    Effect::watch(
+        move || applied_toml_text.get(),
+        move |current, _prev, _: Option<()>| try_save(current.clone()),
+        false,
+    );
+
+    // Best-effort defense against a reload/close landing exactly inside an
+    // in-flight write's brief async gap. Safe to call unconditionally, even
+    // when nothing changed since the last save: `try_save`'s own bookkeeping
+    // makes a redundant call a cheap no-op-equivalent (at worst one harmless
+    // extra write of an already-current value), not a correctness issue.
+    // This cannot guarantee completion if the browser terminates the page
+    // immediately, and is not a substitute for the immediate-write design
+    // above, which is what actually closes the race for the common
+    // reload/navigate case.
+    let pagehide_handle = window_event_listener(leptos::ev::pagehide, move |_| {
+        try_save(applied_toml_text.get_untracked());
+    });
+    on_cleanup(move || pagehide_handle.remove());
 
     let grammar_has_3d_symbols = Memo::new(move |_| {
         grammar_axiom.with(|a| contains_3d_symbols(a))
