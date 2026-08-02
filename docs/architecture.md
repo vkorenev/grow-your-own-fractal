@@ -347,6 +347,17 @@ next submitted frame's GPU completion.
 Shared and platform-specific interaction behavior is defined in the
 [rendering specification](specs/rendering-and-interaction.md).
 
+The app defers initial render until any last-saved config is restored from
+IndexedDB via `AppRoot` (loading the stored TOML text from the
+`"lsystem-autosave"` database), falling back silently to bundled presets if
+no stored config exists, the stored text fails to parse, or IndexedDB is
+unavailable. Once rendered, the app autosaves the selected entry's applied
+config on every change through an immediate, single-flight write queue (writes
+start right away, and changes arriving mid-flight coalesce into exactly one
+follow-up write), not a fixed debounce. A best-effort `pagehide` listener also
+attempts to flush pending writes when the user closes or navigates away from
+the tab.
+
 ## Export Behavior
 
 Format availability and output behavior are defined in the
