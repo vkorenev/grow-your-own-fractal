@@ -8,7 +8,9 @@ Thanks for helping improve Grow Your Own Fractal.
   layout, see [`docs/development.md`](docs/development.md).
 - For crate responsibilities, data flow, rendering design, and important
   invariants, see [`docs/architecture.md`](docs/architecture.md).
-- For user-facing L-System syntax and TOML examples, see [`README.md`](README.md).
+- For authoritative L-system, configuration, application, rendering, and
+  export behavior, see [`docs/specs/`](docs/specs/README.md).
+- For the user-facing product overview, see [`README.md`](README.md).
 
 ## Quick Setup
 
@@ -41,3 +43,5 @@ submitting code changes.
 
 When changing behavior, commands, architecture, config format, deploy workflow,
 or contributor workflow, update the relevant documentation in the same change.
+Behavior and configuration changes update the applicable project specification;
+architecture and workflow changes update their respective guides.

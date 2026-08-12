@@ -7,6 +7,11 @@ application state lives in `lsystem-app-model`, and GPU rendering/export support
 lives in `lsystem-renderer`. The native/Iced and browser-first/Leptos apps are
 thin UI layers over those shared crates.
 
+Supported behavior is defined by the
+[project specifications](specs/README.md). This document owns crate boundaries,
+data flow, and implementation design; it does not redefine the behavior and UX
+contracts in the specifications.
+
 ## Workspace Crates
 
 | Crate | Role |
@@ -67,10 +72,10 @@ rendering and export paths resolve a concrete `Config` at their boundary rather
 than caching resolved values inside the editor document.
 
 Iteration counts use `u16` throughout the authored editor model and resolved
-core model, so TOML values outside `0..=65535` are invalid. The interactive
-apps additionally clamp iterations to a smaller segment-budget-derived
-maximum. The type bound limits iteration-linear work; the segment cap remains
-necessary because expanded output can grow exponentially.
+core model. The separate authored and interactive limits are defined in the
+[configuration](specs/configuration.md#defaults-and-resolution) and
+[workspace](specs/application-workspace.md#interactive-iteration-limit)
+specifications.
 
 Compiled generations are consumed into an allocation-free `GenerationPlan`
 that fuses exact drawn-segment counting and bounded template-depth selection in
@@ -165,9 +170,8 @@ are derived from that orientation, and pitch/roll/yaw symbols compose in local
 space. This avoids the accumulation and ordering problems that come from
 tracking heading as a single scalar angle.
 
-Whitespace inside `axiom` and rule right-hand-side strings is stripped before
-validation and expansion. This keeps long TOML rules readable without changing
-the generated grammar.
+Authored grammar normalization and turtle behavior are defined in the
+[L-system specification](specs/l-system.md).
 
 ## App Model
 
@@ -186,9 +190,12 @@ the generated grammar.
 - `color.rs` centralizes line-color mode selection and per-mode picker memory.
 - `animation.rs` contains hue-rotation state and phase advancement.
 
-Omitting `colors.line` deliberately resolves to a solid default color. Because
-line colors use an externally tagged TOML shape (`solid`, `gradient`,
-`hue_cycle`), a non-solid default would make solid mode unreachable by omission.
+The authored schema and omission/default behavior are defined in the
+[configuration specification](specs/configuration.md). Omitting `colors.line`
+resolves to solid mode because the externally tagged TOML shape requires an
+explicit subtable to select gradient or hue-cycle mode. Making either of those
+the omission default would leave no equivalent omission-based way to select
+solid mode.
 
 ## Rendering
 
@@ -282,20 +289,12 @@ Both shaders import `common.wesl` for the color uniform model.
 
 ## Color And Depth
 
-Line colors support solid RGB, traversal-order gradient, topological-depth
-gradient, and hue-cycle modes. Topological-depth gradient uses turtle branch
-depth: drawn `F` segments advance depth, `f` does not, and bracket push/pop
-restores depth along with turtle state.
-
-Depth-aware geometry is generated only when the grammar has stack directives.
-At the render/export boundary, `color_params_from_config` selects
-topological-depth shader mode only when the config asks for it and depth
-geometry is actually available. Bracketless grammars therefore fall back to
-traversal-order gradient even if `topological_depth = true` is authored.
-
-Hue rotation is transient UI state. It changes the color uniform for hue-cycle
-rendering, but it does not mutate TOML, presets, geometry, exports, or the config
-schema.
+`color_params_from_config` is the boundary that maps resolved line-color state
+and available scene metadata into shader uniforms. Grammars with stack
+directives use depth-bearing records; the requested color mode decides whether
+the shader consumes that depth. Hue animation updates uniforms without
+rebuilding geometry. Color and topological-depth semantics are defined in the
+[rendering specification](specs/rendering-and-interaction.md#color-modes).
 
 ## App Layers
 
@@ -341,20 +340,19 @@ log reports the chosen `template_iterations` (0 = interpreter), while the
 upload-frame metric measures from successful rebuild completion through the
 next submitted frame's GPU completion.
 
-Both app layers temporarily suspend 3D camera auto-rotation during a pointer
-orbit interaction without disabling the user's auto-rotate setting. Hue
-rotation continues independently, and camera auto-rotation resumes when the
-interaction ends.
+Shared and platform-specific interaction behavior is defined in the
+[rendering specification](specs/rendering-and-interaction.md).
 
 ## Export Behavior
 
-SVG export is 2D-only and lives in `lsystem-core` behind the `svg` feature. Both
-apps hide SVG export when `dimensions = "3D"`.
+Format availability and output behavior are defined in the
+[export specification](specs/exports.md).
 
-PNG and APNG export live in `lsystem-renderer` behind the `png` feature. APNG
-uploads geometry once and changes uniforms per frame. Browser and native UI
-layers use app-specific download/file plumbing around the shared renderer export
-APIs. Like the web canvas, `offscreen.rs`'s `RenderTarget` owns a
+SVG export lives in `lsystem-core` behind the `svg` feature. PNG and APNG export
+live in `lsystem-renderer` behind the `png` feature. APNG uploads geometry once
+and changes uniforms per frame. Browser and native UI layers use app-specific
+download/file plumbing around the shared renderer export APIs. Like the web
+canvas, `offscreen.rs`'s `RenderTarget` owns a
 `LINE_DEPTH_FORMAT` depth attachment and attaches it for 3D scenes, so
 exported 3D images are depth-tested the same way the live web canvas is.
 

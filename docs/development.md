@@ -194,7 +194,9 @@ crates/
   lsystem-web-app/          browser-first Leptos app with DOM controls and GPU canvas
 
 presets/                    bundled TOML L-System definitions
-docs/                       shared developer and architecture documentation
+docs/specs/                 authoritative behavior and configuration contracts
+docs/architecture.md        crate boundaries, data flow, and implementation design
+docs/development.md         setup, verification, CI, deploy, and repository layout
 ```
 
 ## Documentation Updates
@@ -202,8 +204,16 @@ docs/                       shared developer and architecture documentation
 When changing behavior, commands, architecture, config format, deploy workflow,
 or contributor workflow, update the relevant docs in the same change:
 
-- `README.md` for user-facing product, alphabet, or config-format information.
+- `README.md` for the user-facing product overview and documentation entry
+  points.
+- `docs/specs/` for supported behavior, L-system semantics, config format,
+  application UX, rendering/interaction, or export contracts.
 - `CONTRIBUTING.md` for contributor entry-point changes.
 - `AGENTS.md` for agent-only workflow rules.
 - `docs/architecture.md` for design, boundaries, or invariants.
 - `docs/development.md` for commands, setup, CI, deploy, or repository layout.
+
+Keep README explanations concise and link to the canonical specification rather
+than maintaining a second detailed copy of the same contract. Future designs
+and implementation proposals are non-normative working documents until a
+change explicitly promotes their behavior into `docs/specs/`.
