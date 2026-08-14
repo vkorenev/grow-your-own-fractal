@@ -334,11 +334,11 @@ mod tests {
     }
 
     #[test]
-    fn topological_gradient_single_segment_uses_start_color() {
-        // Bracketless axiom: has_stack_directives() is false → plain traversal path.
-        // For a single segment, traversal gradient t=0 → start color only.
+    fn topological_gradient_zero_maximum_depth_uses_start_color() {
+        // Bracketed axiom: has_stack_directives() is true → depth path is taken.
+        // The only segment is emitted at depth 0, so the maximum depth is zero.
         let cfg = make_config(
-            "F",
+            "[F]",
             LineColorConfig::Gradient {
                 start: hex("#ff0000"),
                 end: hex("#0000ff"),
@@ -350,7 +350,7 @@ mod tests {
         assert!(svg.contains("#ff0000"), "missing start color");
         assert!(
             !svg.contains("#0000ff"),
-            "single segment should not use end color"
+            "zero-maximum-depth gradient should not use end color"
         );
     }
 

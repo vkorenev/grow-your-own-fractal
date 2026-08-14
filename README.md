@@ -15,8 +15,9 @@ The browser app is available on
 - Fast GPU-accelerated rendering.
 - Built-in 2D and 3D presets with editable TOML configs.
 - Open and save custom configs.
-- Pan and zoom 2D fractals; grab and drag to orbit, roll, and auto-rotate 3D fractals.
-- Solid, gradient (including topological-depth mode), and hue-cycle line colors (with animatable hue rotation).
+- Pan and zoom 2D fractals; orbit, roll, and auto-rotate 3D fractals.
+- Solid, gradient (including topological-depth coloring), and animated
+  hue-cycle line colors.
 - Save still images as SVG (2D) or PNG, and animations as APNG.
 
 ## What are L-Systems?
@@ -40,104 +41,19 @@ iter 1:  F-F++F-F  ++  F-F++F-F  ++  F-F++F-F
 
 Each `F` is replaced; `+` has no rule, so it passes through unchanged.
 
-## Alphabet
+## Using the app
 
-Every character in the axiom and in rule right-hand sides must be one of the
-following:
+The project specifications contain the complete supported behavior:
 
-**2D and 3D symbols** (valid for any `dimensions` value):
-
-| Symbol | Name | Effect |
-|--------|------|--------|
-| `F` | Forward (draw) | Move one step forward and draw a line segment. |
-| `f` | Forward (no draw) | Move one step forward without drawing. |
-| `+` | Turn left | Rotate counter-clockwise by the configured `angle`. |
-| `-` | Turn right | Rotate clockwise by the configured `angle`. |
-| `\|` | U-turn | Rotate 180° in place. |
-| `[` | Push state | Save the current position and heading on a stack. |
-| `]` | Pop state | Restore the most recently saved position and heading. |
-| `A`–`Z`, `a`–`z` | Non-terminal | Rewritten by rules during expansion. Any letter that has no rule and is not a reserved symbol above is silently skipped by the turtle. |
-
-**3D-only symbols** (only valid when `dimensions = "3D"`):
-
-| Symbol | Name | Effect |
-|--------|------|--------|
-| `&` | Pitch down | Rotate the heading downward by `angle` (around the left axis). |
-| `^` | Pitch up | Rotate the heading upward by `angle` (around the left axis). |
-| `/` | Roll right | Roll clockwise by `angle` (around the heading axis). |
-| `\` | Roll left | Roll counter-clockwise by `angle`. |
-
-Any other character is a validation error.
-
-## Config format
-
-Each L-System is defined in a TOML file:
-
-```toml
-[metadata]
-name = "Koch Snowflake"
-
-[l-system]
-dimensions = "2D"       # "2D" or "3D"
-axiom = "F++F++F"
-iterations = 4          # number of times the rules are applied
-angle = 60.0            # degrees; used by + - and |
-step = 1.0              # optional; length of each F / f move
-initial_heading = 0.0   # optional; starting direction in degrees
-                        # (0 = east, counter-clockwise positive)
-
-[l-system.rules]
-F = "F-F++F-F"          # each F is replaced by this string each iteration
-
-[colors]
-background = "#000000"   # optional hex color
-
-# Choose exactly one line color mode: solid, gradient, or hue_cycle.
-# Omit [colors.line] entirely to use the built-in solid line color.
-[colors.line]
-solid = "#00e680"        # solid line color
-
-# gradient example:
-# [colors.line.gradient]
-# start = "#ff6600"
-# end = "#9900ff"
-# topological_depth = false  # optional
-
-# hue_cycle example:
-# [colors.line.hue_cycle]
-# initial = "#e60000"
-
-# Topological-depth gradient example (branching fractals only, i.e. those using
-# `[` / `]` brackets; same as traversal gradient otherwise):
-# [colors.line.gradient]
-# start = "#ff6600"
-# end = "#9900ff"
-# topological_depth = true
-```
-
-Whitespace inside `axiom` and rule strings is stripped before processing, so
-you can break long rules across lines for readability.
-
-## Controls
-
-**2D**
-
-| Input | Action |
-|-------|--------|
-| Drag (left button) | Pan |
-| Scroll wheel | Zoom in / out toward the cursor |
-| `F` | Reset view to fit the fractal |
-
-**3D** (when `dimensions = "3D"`)
-
-| Input | Action |
-|-------|--------|
-| Drag (left button) | Orbit (rotate azimuth / elevation) |
-| Scroll wheel | Zoom in / out |
-| Arrow keys | Rotate azimuth (left / right) or elevation (up / down) by 5° |
-| `Q` / `E` | Roll counter-clockwise / clockwise by 5° |
-| `F` | Reset camera to fit the fractal |
-| Auto-rotate toggle | Continuously orbit around the Y axis at the configured speed |
+- [L-system semantics](docs/specs/l-system.md) describes the alphabet,
+  rewriting, turtle actions, and 2D/3D geometry.
+- [Configuration](docs/specs/configuration.md) describes the strict TOML
+  format, validation, defaults, color modes, and complete examples.
+- [Application workspace](docs/specs/application-workspace.md) describes
+  presets, custom configurations, editing, and platform variants.
+- [Rendering and interaction](docs/specs/rendering-and-interaction.md)
+  describes colors, camera controls, animation, and failure recovery.
+- [Exports](docs/specs/exports.md) describes SVG, PNG, and APNG behavior.
 
 ## Bundled presets
 
