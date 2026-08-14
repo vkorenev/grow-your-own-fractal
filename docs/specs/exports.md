@@ -1,7 +1,8 @@
 # Exports
 
-Exports use the resolved configuration and the same geometry and color
-semantics as live rendering. Suggested filenames follow the rules in
+Exports use the resolved configuration and the same geometry and
+[color semantics](rendering-and-interaction.md#color-modes) as live rendering.
+Suggested filenames follow the rules in
 [Application workspace](application-workspace.md#copy-import-rename-and-save).
 
 ## Format availability
@@ -34,11 +35,8 @@ An empty SVG has a `1 × 1` view box and contains only the configured background
 Degenerate horizontal or vertical bounds are padded using half the configured
 step before the normal margin is added.
 
-Solid output combines all segments in one path. Gradient and hue-cycle output
-assign colors per segment in traversal order. A topological-depth gradient uses
-depth colors when stack directives are present and traversal colors otherwise.
-RGB interpolation and HSV conversion match live rendering at byte-color
-precision.
+Solid output combines all segments in one path. Other color modes encode each
+segment separately.
 
 Live hue-animation phase is not part of a still SVG; the export starts from the
 resolved configured color.

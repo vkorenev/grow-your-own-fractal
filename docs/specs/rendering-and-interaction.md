@@ -21,9 +21,11 @@ segment uses the initial color.
 
 A gradient with `topological_depth = true` interpolates by the segment depth
 defined in [L-system semantics](l-system.md#segments-and-traversal-order). The
-deepest emitted segment uses `end` when the maximum depth is nonzero. When the
-grammar contains no stack directives, this mode falls back to the traversal
-gradient.
+interpolation fraction is the segment depth divided by the greater of the
+maximum emitted depth and one. The deepest emitted segment therefore uses
+`end` when the maximum depth is nonzero. When every emitted segment has depth
+zero, every segment uses `start`. When the grammar contains no stack
+directives, this mode falls back to the traversal gradient.
 
 Changing only colors updates rendering without regenerating geometry. Live hue
 rotation changes only the hue-cycle color phase. It does not mutate the
