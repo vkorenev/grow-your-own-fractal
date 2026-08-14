@@ -98,13 +98,20 @@ unreachable rules and prevents selection of 2D while 3D-only symbols remain.
 The authored iteration domain is `0..=65535`. Each application additionally
 computes a smaller interactive maximum for the selected grammar and dimension.
 
-The maximum is the largest prefix-safe iteration count, capped at the workload
-policy ceiling of 30. Predicted drawn-segment counts are checked from iteration
-zero upward, and the first count exceeding the platform-selected GPU record
-capacity ends the selectable range. Capacity uses the depth-bearing record size
-whenever the grammar contains stack directives, even if the active color mode
-does not use topological depth. Changing only the color mode therefore does not
-change this maximum.
+When iteration zero fits, the maximum is the largest prefix-safe iteration
+count, capped at the workload policy ceiling of 30. Predicted drawn-segment
+counts are checked from iteration zero upward, and the first count exceeding
+the platform-selected GPU record capacity ends the selectable range. Capacity
+uses the depth-bearing record size whenever the grammar contains stack
+directives, even if the active color mode does not use topological depth.
+Changing only the color mode therefore does not change this maximum.
+
+If iteration zero already exceeds capacity, no prefix-safe iteration exists.
+The document remains valid, and the application represents the interactive
+maximum as zero because the iteration domain has no lower value. The effective
+configuration therefore uses iteration zero and the direct control range is
+`0..=0`, but scene construction reports a segment-capacity failure. It does not
+truncate the geometry or substitute a fallback scene.
 
 Changing the axiom, rules, or dimension recomputes the maximum. The effective
 render configuration clamps iterations to it without rewriting a larger

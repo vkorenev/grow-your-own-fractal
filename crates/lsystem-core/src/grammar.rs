@@ -381,8 +381,13 @@ fn char_to_id(c: char, non_ascii: &mut Vec<(char, u8)>, next_id: &mut u8) -> u8 
     }
 }
 
-/// Returns the maximum iteration count for which the total number of drawn segments
-/// (produced by `F` symbols) does not exceed `max_segments`.
+/// Returns the maximum prefix-safe iteration count for which the total number
+/// of drawn segments (produced by `F` symbols) does not exceed `max_segments`.
+///
+/// If the axiom at iteration zero already exceeds `max_segments`, returns zero
+/// because the return type cannot represent the absence of a safe iteration.
+/// In that case, zero is a sentinel and does not imply that iteration zero is
+/// safe; scene construction must still enforce its segment capacity.
 ///
 /// Uses symbolic growth tracking: iterates the per-character segment yield one step at
 /// a time without materialising any strings. Saturating arithmetic prevents overflow for
@@ -601,6 +606,12 @@ mod tests {
         let rules = koch_rules();
         assert_eq!(max_safe_iterations("F++F++F", &rules, 768), 4);
         assert_eq!(max_safe_iterations("F++F++F", &rules, 767), 3);
+    }
+
+    #[test]
+    fn max_safe_returns_zero_when_axiom_exceeds_limit() {
+        let rules = BTreeMap::new();
+        assert_eq!(max_safe_iterations("FF", &rules, 1), 0);
     }
 
     #[test]
