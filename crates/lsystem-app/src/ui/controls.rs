@@ -3,36 +3,64 @@ use iced::widget::{
     text_input,
 };
 use iced::{Color, Element, Length, Theme};
-use lsystem_app_model::{ConfigDefaults, EditorColorConfig, EditorLineColorConfig};
 use lsystem_app_model::{
-    HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
-    HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
-    selected_line_color_mode,
+    CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+    CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
+    CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND, HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+    HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, HueRotation, HueRotationDirection, LineColorMode,
+    line_color_for_controls, selected_line_color_mode,
 };
+use lsystem_app_model::{ConfigDefaults, EditorColorConfig, EditorLineColorConfig};
 use lsystem_core::{LineColorConfig, Rgb};
 
-use super::app_state::{ColorDefaultField, FractalApp, Message};
+use super::app_state::{ColorDefaultField, FractalApp, Message, normalized_rename_name};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
     pub(super) fn controls(&self) -> Element<'_, Message> {
-        let preset_options = self.config_workspace.display_options();
         let selected_entry = self.config_workspace.selected();
-        let selected_id = self.config_workspace.selected_id();
-        let selected_preset = preset_options
-            .iter()
-            .find(|(id, _)| *id == selected_id)
-            .cloned();
         let is_dirty = selected_entry.is_dirty();
-        let can_reset = !is_dirty && selected_entry.differs_from_default();
+
+        let config_controls = if let Some(rename_draft) = &self.rename_draft {
+            column![
+                text_input("Config name", rename_draft)
+                    .on_input(Message::RenameDraftChanged)
+                    .width(Length::Fill),
+                row![
+                    button("Save").on_press_maybe(
+                        normalized_rename_name(rename_draft).map(|_| Message::CommitRename)
+                    ),
+                    button("Cancel").on_press(Message::CancelRename),
+                ]
+                .spacing(8),
+            ]
+            .spacing(8)
+        } else {
+            let preset_options = self.config_workspace.display_options();
+            let selected_id = self.config_workspace.selected_id();
+            let selected_preset = preset_options
+                .iter()
+                .find(|(id, _)| *id == selected_id)
+                .cloned();
+            let can_reset = !is_dirty && selected_entry.differs_from_default();
+            column![
+                pick_list(selected_preset, preset_options, |(_, label)| label.clone())
+                    .on_select(|(id, _)| Message::PresetSelected(id))
+                    .width(Length::Fill),
+                row![
+                    button("Copy").on_press(Message::CopyConfig),
+                    button("Rename").on_press(Message::BeginRename),
+                    button("Reset").on_press_maybe(can_reset.then_some(Message::ResetConfig)),
+                ]
+                .spacing(8),
+            ]
+            .spacing(8)
+        };
 
         let mut controls = column![
             text(TITLE).size(24),
             text("Config").size(13),
-            pick_list(selected_preset, preset_options, |(_, label)| label.clone())
-                .on_select(|(id, _)| Message::PresetSelected(id))
-                .width(Length::Fill),
-            button("Copy").on_press(Message::CopyConfig),
+            config_controls,
             text("Config (TOML)").size(13),
             text_editor(&self.toml)
                 .height(260)
@@ -40,7 +68,6 @@ impl FractalApp {
             row![
                 button("Apply").on_press_maybe(is_dirty.then_some(Message::ApplyConfig)),
                 button("Revert").on_press_maybe(is_dirty.then_some(Message::RevertConfig)),
-                button("Reset").on_press_maybe(can_reset.then_some(Message::ResetConfig)),
             ]
             .spacing(8),
             self.status_text(),
@@ -109,11 +136,12 @@ impl FractalApp {
                     .push(text(format!("Speed: {:.0} °/s", self.auto_rotate_speed)).size(13))
                     .push(
                         slider(
-                            10.0..=360.0,
+                            CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND
+                                ..=CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
                             self.auto_rotate_speed,
                             Message::SetAutoRotateSpeed,
                         )
-                        .step(10.0_f32),
+                        .step(CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND),
                     );
             }
         }

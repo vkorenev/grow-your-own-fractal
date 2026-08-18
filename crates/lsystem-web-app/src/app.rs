@@ -5,9 +5,10 @@ use glam::{DVec2, Vec2};
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace,
-    EditorColorConfig, EntryViewMut, HueRotation, HueRotationDirection, ParseConfigError,
-    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND, CleanMut, ColorControlMemory,
+    ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorColorConfig, EntryViewMut, HueRotation,
+    HueRotationDirection, ParseConfigError, advance_hue_rotation_phase_degrees,
+    line_color_for_controls, load_presets,
 };
 use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols};
 use lsystem_renderer::scene_upload::SceneUploadError;
@@ -128,7 +129,7 @@ pub(crate) fn App() -> impl IntoView {
     let colors_error = RwSignal::new(None::<String>);
     let viewport_error = RwSignal::new(None::<ViewportError>);
     let auto_rotate = RwSignal::new(true);
-    let auto_rotate_speed = RwSignal::new(20.0f32);
+    let auto_rotate_speed = RwSignal::new(CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND);
     let hue_rotation = RwSignal::new(HueRotation::default());
     let hue_rotation_phase = StoredValue::new(0.0f32);
     let sheet_open = RwSignal::new(false);

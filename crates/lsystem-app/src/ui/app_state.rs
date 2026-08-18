@@ -3,9 +3,12 @@ use iced::keyboard;
 use iced::widget::row;
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
-    CleanMut, ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorConfig,
-    EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection, LineColorMode,
-    ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND,
+    CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+    CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, CleanMut, ColorControlMemory,
+    ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorConfig, EditorLineColorConfig,
+    EntryViewMut, HueRotation, HueRotationDirection, LineColorMode, ParseConfigError,
+    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{ColorConfig, Config, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
@@ -27,6 +30,11 @@ fn camera_auto_rotation_active(auto_rotate: bool, is_3d: bool, orbit_drag_active
     auto_rotate && is_3d && !orbit_drag_active
 }
 
+pub(super) fn normalized_rename_name(name: &str) -> Option<&str> {
+    let name = name.trim();
+    (!name.is_empty()).then_some(name)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ColorDefaultField {
     SolidLine,
@@ -39,6 +47,10 @@ pub(super) enum ColorDefaultField {
 pub(super) enum Message {
     PresetSelected(ConfigEntryId),
     CopyConfig,
+    BeginRename,
+    RenameDraftChanged(String),
+    CommitRename,
+    CancelRename,
     TomlEdited(iced::widget::text_editor::Action),
     ApplyConfig,
     RevertConfig,
@@ -90,6 +102,7 @@ pub(super) enum Message {
 pub(super) struct FractalApp {
     pub(super) config_workspace: ConfigWorkspace,
     pub(super) toml: iced::widget::text_editor::Content,
+    pub(super) rename_draft: Option<String>,
     pub(super) iterations: u16,
     pub(super) max_iterations: u16,
     pub(super) png_width: u32,
@@ -123,6 +136,7 @@ impl FractalApp {
         let mut app = Self {
             config_workspace,
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
+            rename_draft: None,
             iterations: 1,
             max_iterations: 1,
             png_width: 800,
@@ -134,7 +148,7 @@ impl FractalApp {
             scene_pending: false,
             scene: Scene::default(),
             auto_rotate: false,
-            auto_rotate_speed: 45.0,
+            auto_rotate_speed: CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND,
             orbit_drag_active: false,
             hue_rotation: HueRotation::default(),
             hue_rotation_phase_degrees: 0.0,
@@ -162,7 +176,45 @@ impl FractalApp {
                     Task::none()
                 }
             },
+            Message::BeginRename => {
+                self.rename_draft = Some(
+                    self.config_workspace
+                        .selected()
+                        .name_for_rename()
+                        .into_owned(),
+                );
+                Task::none()
+            }
+            Message::RenameDraftChanged(name) => {
+                if let Some(rename_draft) = &mut self.rename_draft {
+                    *rename_draft = name;
+                }
+                Task::none()
+            }
+            Message::CommitRename => {
+                let Some(name) = self
+                    .rename_draft
+                    .as_deref()
+                    .and_then(normalized_rename_name)
+                else {
+                    return Task::none();
+                };
+                match self.config_workspace.selected_mut().rename(name) {
+                    Ok(()) => {
+                        self.refresh_toml_from_workspace();
+                    }
+                    Err(error) => self.error = Some(error.to_string()),
+                }
+                Task::none()
+            }
+            Message::CancelRename => {
+                self.rename_draft = None;
+                Task::none()
+            }
             Message::TomlEdited(action) => {
+                if action.is_edit() {
+                    self.rename_draft = None;
+                }
                 self.toml.perform(action);
                 self.config_workspace
                     .selected_mut()
@@ -364,7 +416,10 @@ impl FractalApp {
                 Task::none()
             }
             Message::SetAutoRotateSpeed(speed) => {
-                self.auto_rotate_speed = speed;
+                self.auto_rotate_speed = speed.clamp(
+                    CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
+                    CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+                );
                 Task::none()
             }
             Message::ToggleHueRotation => {
@@ -473,6 +528,7 @@ impl FractalApp {
     }
 
     fn apply_config(&mut self) -> Task<Message> {
+        self.rename_draft = None;
         self.config_workspace
             .selected_mut()
             .set_draft_text(self.toml.text());
@@ -503,16 +559,21 @@ impl FractalApp {
     }
 
     fn refresh_from_workspace_impl(&mut self, reset_color_memory: bool) -> Task<Message> {
-        let entry = self.config_workspace.selected();
-        let toml_text = entry.draft_text();
-        self.toml = iced::widget::text_editor::Content::with_text(&toml_text);
+        self.refresh_toml_from_workspace();
         if reset_color_memory {
             self.reset_color_memory_from_workspace();
         }
         self.sync_controls_from_workspace();
+        self.schedule_scene_generation()
+    }
+
+    fn refresh_toml_from_workspace(&mut self) {
+        self.toml = iced::widget::text_editor::Content::with_text(
+            self.config_workspace.selected().draft_text().as_ref(),
+        );
+        self.rename_draft = None;
         self.error = None;
         self.export_status = None;
-        self.schedule_scene_generation()
     }
 
     /// Rebuilds the scene from scratch (config-affecting changes such as
@@ -563,16 +624,12 @@ impl FractalApp {
     }
 
     fn refresh_after_clean_color_update(&mut self) -> Task<Message> {
-        self.toml = iced::widget::text_editor::Content::with_text(
-            self.config_workspace.selected().draft_text().as_ref(),
-        );
+        self.refresh_toml_from_workspace();
         let current_iterations = self.iterations;
         self.recompute_max_iterations();
         self.iterations = current_iterations.min(self.max_iterations);
 
         self.scene.update_colors(&self.render_colors());
-        self.error = None;
-        self.export_status = None;
         Task::none()
     }
 
@@ -823,6 +880,103 @@ mod tests {
         assert_eq!(app.png_width_text, "800");
         assert_eq!(app.png_height, 800);
         assert_eq!(app.png_height_text, "800");
+    }
+
+    #[test]
+    fn camera_auto_rotation_defaults_to_twenty_degrees_per_second() {
+        let (app, _) = FractalApp::new();
+
+        assert_eq!(
+            app.auto_rotate_speed,
+            CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND
+        );
+    }
+
+    #[test]
+    fn rename_updates_the_selected_config_and_toml_editor() {
+        let (mut app, _) = FractalApp::new();
+
+        let _ = app.update(Message::BeginRename);
+        assert_eq!(
+            app.rename_draft.as_deref(),
+            Some(app.config_workspace.selected().name())
+        );
+
+        let _ = app.update(Message::RenameDraftChanged("  Renamed Plant  ".to_string()));
+        let _ = app.update(Message::CommitRename);
+
+        assert_eq!(app.rename_draft, None);
+        assert_eq!(app.config_workspace.selected().name(), "Renamed Plant");
+        assert!(app.toml.text().contains("name = \"Renamed Plant\""));
+    }
+
+    #[test]
+    fn rename_prefills_and_preserves_an_unapplied_draft_name() {
+        let (mut app, _) = FractalApp::new();
+        let applied_name = app.config_workspace.selected().name().to_string();
+        let draft = app.config_workspace.selected().draft_text().replace(
+            &format!("name = \"{applied_name}\""),
+            "name = \"Draft Plant\"",
+        );
+        app.toml = iced::widget::text_editor::Content::with_text(&draft);
+        app.config_workspace.selected_mut().set_draft_text(draft);
+
+        let _ = app.update(Message::BeginRename);
+        assert_eq!(app.rename_draft.as_deref(), Some("Draft Plant"));
+
+        let _ = app.update(Message::CommitRename);
+
+        assert_eq!(app.config_workspace.selected().name(), "Draft Plant");
+        assert!(app.toml.text().contains("name = \"Draft Plant\""));
+    }
+
+    #[test]
+    fn applying_toml_closes_rename_without_reverting_the_applied_name() {
+        let (mut app, _) = FractalApp::new();
+        let applied_name = app.config_workspace.selected().name().to_string();
+        let draft = app.config_workspace.selected().draft_text().replace(
+            &format!("name = \"{applied_name}\""),
+            "name = \"Applied Plant\"",
+        );
+        app.toml = iced::widget::text_editor::Content::with_text(&draft);
+        app.config_workspace.selected_mut().set_draft_text(draft);
+        let _ = app.update(Message::BeginRename);
+        let _ = app.update(Message::RenameDraftChanged("Stale Rename".to_string()));
+
+        let _ = app.update(Message::ApplyConfig);
+        let _ = app.update(Message::CommitRename);
+
+        assert_eq!(app.rename_draft, None);
+        assert_eq!(app.config_workspace.selected().name(), "Applied Plant");
+    }
+
+    #[test]
+    fn editing_toml_closes_rename_mode() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::BeginRename);
+
+        let _ = app.update(Message::TomlEdited(
+            iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert(' ')),
+        ));
+
+        assert_eq!(app.rename_draft, None);
+    }
+
+    #[test]
+    fn camera_auto_rotation_speed_is_clamped() {
+        let (mut app, _) = FractalApp::new();
+
+        let _ = app.update(Message::SetAutoRotateSpeed(0.0));
+        assert_eq!(
+            app.auto_rotate_speed,
+            CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND
+        );
+
+        let _ = app.update(Message::SetAutoRotateSpeed(500.0));
+        assert_eq!(
+            app.auto_rotate_speed,
+            CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND
+        );
     }
 
     #[test]

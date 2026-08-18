@@ -370,6 +370,10 @@ impl ConfigSource {
         self.document.to_string()
     }
 
+    pub(crate) fn authored_name(&self) -> Option<&str> {
+        self.document.get("metadata")?.get("name")?.as_str()
+    }
+
     pub fn set_name(&mut self, name: &str) {
         if self
             .document

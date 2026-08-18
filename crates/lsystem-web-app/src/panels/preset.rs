@@ -22,6 +22,29 @@ pub(crate) fn PresetPanel() -> impl IntoView {
     let rename_draft = RwSignal::new(String::new());
     let file_input_ref = NodeRef::<Input>::new();
 
+    // Rename is local UI state, but raw TOML and structured controls mutate the shared
+    // workspace from sibling panels. Close the form only when the selected entry's actual
+    // state changes; merely dropping a write guard after a failed mutation must leave the
+    // user's rejected input available for correction.
+    Effect::watch(
+        move || {
+            config_workspace.with(|workspace| {
+                let selected = workspace.selected();
+                (
+                    selected.id(),
+                    selected.is_dirty(),
+                    selected.draft_text().into_owned(),
+                )
+            })
+        },
+        move |current, previous, _: Option<()>| {
+            if previous != Some(current) {
+                rename_mode.set(false);
+            }
+        },
+        false,
+    );
+
     let commit_rename = move || {
         let name = rename_draft.get_untracked().trim().to_string();
         let result = config_workspace.write().selected_mut().rename(&name);
@@ -120,7 +143,9 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                             <button
                                 type="button"
                                 on:click=move |_| {
-                                    rename_draft.set(selected_name.get());
+                                    rename_draft.set(config_workspace.with_untracked(|workspace| {
+                                        workspace.selected().name_for_rename().into_owned()
+                                    }));
                                     rename_mode.set(true);
                                 }
                             >"Rename"</button>

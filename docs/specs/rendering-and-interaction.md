@@ -70,7 +70,7 @@ away from the exact poles to `-89..=89` degrees.
 | `F` | Fit and reset the 2D view. | Fit and reset the 3D camera. |
 | Left/Right arrows | No camera action. | Change azimuth by 5 degrees. |
 | Up/Down arrows | No camera action. | Change elevation by 5 degrees. |
-| `Q` / `E` | No camera action. | Roll by 5 degrees in opposite directions. |
+| `Q` / `E` | No camera action. | Roll clockwise / counter-clockwise by 5 degrees. |
 
 Keyboard controls apply while the fractal viewport has focus.
 

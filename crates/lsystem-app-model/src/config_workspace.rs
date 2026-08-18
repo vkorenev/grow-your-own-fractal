@@ -259,6 +259,20 @@ impl ConfigEntry {
         self.last_applied.name()
     }
 
+    /// Returns the name to prefill in a rename control.
+    ///
+    /// A parseable pending draft takes precedence over the applied document so opening
+    /// the control cannot silently overwrite an unapplied `metadata.name` edit. An
+    /// unparseable draft has no reliably authored name, so this falls back to the last
+    /// applied name.
+    pub fn name_for_rename(&self) -> Cow<'_, str> {
+        self.draft
+            .as_deref()
+            .and_then(|draft| ConfigSource::parse(draft).ok())
+            .and_then(|source| source.authored_name().map(str::to_owned))
+            .map_or_else(|| Cow::Borrowed(self.name()), Cow::Owned)
+    }
+
     pub fn draft_text(&self) -> Cow<'_, str> {
         match &self.draft {
             Some(draft) => Cow::Borrowed(draft),
@@ -1573,6 +1587,29 @@ end = "#ffffff"
         workspace.selected_mut().rename("My Plant").unwrap();
         assert_eq!(workspace.selected().name(), "My Plant");
         assert!(workspace.selected().draft_text().contains("\"My Plant\""));
+    }
+
+    #[test]
+    fn name_for_rename_prefers_a_parseable_pending_draft() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first.clone())]).unwrap();
+        workspace
+            .selected_mut()
+            .set_draft_text(config_text_renamed(&first, "Draft Plant"));
+
+        assert_eq!(workspace.selected().name(), "Plant");
+        assert_eq!(workspace.selected().name_for_rename(), "Draft Plant");
+    }
+
+    #[test]
+    fn name_for_rename_falls_back_to_applied_name_for_unparseable_draft() {
+        let first = config_text("Plant", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("Plant", first)]).unwrap();
+        workspace
+            .selected_mut()
+            .set_draft_text("not valid toml".to_string());
+
+        assert_eq!(workspace.selected().name_for_rename(), "Plant");
     }
 
     #[test]

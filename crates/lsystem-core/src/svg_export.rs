@@ -355,6 +355,22 @@ mod tests {
     }
 
     #[test]
+    fn topological_gradient_without_stack_directives_uses_traversal_colors() {
+        let cfg = make_config(
+            "FF",
+            LineColorConfig::Gradient {
+                start: hex("#ff0000"),
+                end: hex("#0000ff"),
+                topological_depth: true,
+            },
+        );
+        let svg = export_svg(&cfg);
+
+        assert!(svg.contains("#ff0000"), "missing traversal start color");
+        assert!(svg.contains("#0000ff"), "missing traversal end color");
+    }
+
+    #[test]
     fn empty_geometry_returns_minimal_svg() {
         let cfg = make_config("+", LineColorConfig::Solid(hex("#00e680")));
         let svg = export_svg(&cfg);
