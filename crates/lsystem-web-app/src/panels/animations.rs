@@ -1,8 +1,10 @@
 use crate::app::{ConfigContext, RenderContext};
 use leptos::prelude::*;
 use lsystem_app_model::{
-    HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
-    HueRotationDirection,
+    CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+    CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
+    CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND, HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
+    HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, HueRotationDirection,
 };
 use lsystem_core::LineColorConfig;
 
@@ -37,9 +39,9 @@ pub(crate) fn AnimationsPanel() -> impl IntoView {
                         <span class="spinner-label">"Speed (°/s)"</span>
                         <crate::ui::Spinner
                             value=auto_rotate_speed
-                            step=5.0
-                            min=5.0_f32
-                            max=360.0_f32
+                            step=f64::from(CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND)
+                            min=CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND
+                            max=CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND
                             decimals=0
                             on_commit=move |v: f32| auto_rotate_speed.set(v)
                         />

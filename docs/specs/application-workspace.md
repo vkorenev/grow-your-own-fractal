@@ -63,13 +63,13 @@ digits are lowercased and preserved; every other character becomes `_`; the
 requested extension is then appended. Consecutive substitutions are not
 collapsed.
 
-**Platform variant:** The primary Leptos app exposes Copy, Rename, Reset, Open,
-and Save controls. Open imports one `.toml` file. Save downloads the currently
-displayed TOML, including an unapplied draft.
+Both applications expose preset selection, Copy, Rename, Reset, and raw TOML
+Apply/Revert controls.
 
-**Platform variant:** The Iced app exposes preset selection, Copy, Reset, and
-raw TOML Apply/Revert. It does not expose config-file Open, config-file Save, or
-Rename controls.
+**Platform variant:** The primary Leptos app additionally exposes Open and Save
+controls. Open imports one `.toml` file. Save downloads the currently displayed
+TOML, including an unapplied draft. The Iced app does not expose config-file
+Open or config-file Save.
 
 ## Structured controls
 
@@ -85,6 +85,10 @@ the user commits the corresponding control.
 Hue rotation is active only for hue-cycle line color. Its speed is clamped to
 `1..=60` degrees per second and its direction is forward or reverse. Hue
 rotation state and phase are transient rather than authored configuration.
+
+Both applications expose transient on/off and speed controls for camera
+auto-rotation in 3D. Camera auto-rotation speed is constrained to `5..=360`
+degrees per second in steps of 5.
 
 **Platform variant:** The primary Leptos app has a structured grammar editor.
 Its uncommitted grammar draft is separate from the raw TOML draft. A grammar
