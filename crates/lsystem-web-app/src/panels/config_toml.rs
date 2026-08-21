@@ -11,6 +11,7 @@ pub(crate) fn ConfigTomlPanel() -> impl IntoView {
         is_dirty,
         grammar,
         select_current_config,
+        clear_toml_revert_state,
         ..
     } = expect_context();
     let grammar_is_dirty = grammar.is_dirty;
@@ -38,27 +39,25 @@ pub(crate) fn ConfigTomlPanel() -> impl IntoView {
             }
         };
         if reverted {
-            select_current_config.run(());
-        }
-    };
-
-    let grammar_dirty_tooltip = move || {
-        if grammar_is_dirty.get() {
-            "Apply or Revert grammar changes first"
-        } else {
-            ""
+            // Not `select_current_config`: reverting doesn't change the
+            // applied document, so a pending grammar draft (and any error
+            // describing it) must survive. See `clear_toml_revert_state`'s
+            // doc comment on `ConfigContext`.
+            clear_toml_revert_state.run(());
         }
     };
 
     view! {
         <crate::ui::Disclosure title="Edit Config" open=false
             badge=is_dirty>
-            <div title=grammar_dirty_tooltip>
+            <crate::ui::DirtyDraftWarning
+                is_dirty=grammar_is_dirty
+                message="Applying will discard your unapplied grammar changes."
+            />
             <textarea
                 id="config"
                 spellcheck="false"
                 prop:value=move || toml_text.get()
-                disabled=grammar_is_dirty
                 on:input:target=move |ev| {
                     let text = ev.target().value();
                     config_workspace.update(|workspace| {
@@ -66,24 +65,21 @@ pub(crate) fn ConfigTomlPanel() -> impl IntoView {
                     });
                 }
             />
-            </div>
-            <div title=grammar_dirty_tooltip>
             <div class="btn-row">
                 <button
                     type="button"
-                    disabled=move || !is_dirty.get() || grammar_is_dirty.get()
+                    disabled=move || !is_dirty.get()
                     on:click=move |_| apply_current()
                 >
                     "Apply"
                 </button>
                 <button
                     type="button"
-                    disabled=move || !is_dirty.get() || grammar_is_dirty.get()
+                    disabled=move || !is_dirty.get()
                     on:click=move |_| do_revert()
                 >
                     "Revert"
                 </button>
-            </div>
             </div>
             {move || toml_error.get().map(|msg| view! {
                 <span class="inline-status error">{msg}</span>

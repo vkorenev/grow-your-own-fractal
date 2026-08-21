@@ -302,8 +302,7 @@ textarea {
 /* ── Disabled interactive controls ── */
 .controls button:disabled,
 .controls input:disabled,
-.controls select:disabled,
-.controls textarea:disabled {
+.controls select:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

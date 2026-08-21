@@ -36,16 +36,22 @@ pub fn Disclosure(
     }
 }
 
-/// Persistent warning shown at the top of a panel while a raw TOML draft is
-/// pending, since using any of the panel's controls will discard that draft —
-/// see docs/specs/application-workspace.md's "Direct configuration controls".
+/// Persistent warning shown at the top of a panel while a draft that the
+/// panel's actions would discard is pending — a raw TOML draft for most
+/// panels, or a grammar draft for the raw TOML panel itself — since
+/// (depending on `message`) using the panel's controls, or applying its
+/// own pending draft, will discard that draft. See the "Applied documents
+/// and drafts" and "Direct configuration controls" sections of
+/// docs/specs/application-workspace.md.
 #[component]
-pub fn DirtyDraftWarning(#[prop(into)] is_dirty: Signal<bool>) -> impl IntoView {
+pub fn DirtyDraftWarning(
+    #[prop(into)] is_dirty: Signal<bool>,
+    #[prop(default = "Editing these controls will discard your unapplied TOML changes.")]
+    message: &'static str,
+) -> impl IntoView {
     view! {
         <Show when=move || is_dirty.get()>
-            <span class="inline-status warning">
-                "Editing these controls will discard your unapplied TOML changes."
-            </span>
+            <span class="inline-status warning">{message}</span>
         </Show>
     }
 }

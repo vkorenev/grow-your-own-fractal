@@ -52,8 +52,10 @@ impl ViewportError {
 }
 
 /// Grammar-editor draft state. The draft signals live in `App` (not in the
-/// grammar panel) because `select_current_config` resyncs them on entry
-/// switches and `is_dirty` participates in the TOML/grammar cross-lockout.
+/// grammar panel) because entry switches, a successful raw TOML apply, and a
+/// bundled-preset reset all need to resync them from one place, while a raw
+/// TOML *revert* must leave them untouched — see
+/// `crate::app::ConfigContext::clear_toml_revert_state`.
 #[derive(Clone, Copy)]
 pub(crate) struct GrammarDraft {
     pub(crate) axiom: RwSignal<String>,
@@ -95,6 +97,15 @@ pub(crate) struct ConfigContext {
     /// Clears panel errors and resyncs editors after the selected entry (or its
     /// applied config) changes.
     pub(crate) select_current_config: Callback<()>,
+    /// Clears every panel error except `grammar_error`, and refreshes color
+    /// memory, without touching the grammar draft. Used only after
+    /// reverting the raw TOML draft: reverting doesn't change the applied
+    /// document, so a pending grammar draft (and any error describing it)
+    /// is still valid — see the "Platform variant" grammar behavior in
+    /// docs/specs/application-workspace.md. `select_current_config` above is
+    /// for the cases that *do* change the applied document (entry switches,
+    /// a successful apply, a reset) and must resync the grammar draft too.
+    pub(crate) clear_toml_revert_state: Callback<()>,
 }
 
 /// Renderer and animation state shared between `App` and the control panels,
@@ -412,11 +423,33 @@ pub(crate) fn App() -> impl IntoView {
         sync_grammar_editor();
     };
 
+    // Narrower than `select_current_config`: reverting the raw TOML draft
+    // doesn't change the applied document, so `grammar_error` and the
+    // grammar draft itself (owned by `App`, not touched here) must
+    // survive. `refresh_color_memory` is kept here unchanged from today's
+    // behavior: Revert already calls it whenever the entry is dirty and
+    // the grammar draft is clean, so this task doesn't change its
+    // reachability, only extends it to also cover a pending grammar draft.
+    // Note for a future PR: `ColorControlMemory::from_editor_config`
+    // rebuilds memory for only the currently-authored line-color mode, so
+    // calling it here can drop a remembered override for a different mode —
+    // that's a pre-existing lossiness in `refresh_color_memory` itself, not
+    // introduced by this task, and out of scope to fix here.
+    let clear_toml_revert_state = move || {
+        toml_error.set(None);
+        workspace_error.set(None);
+        colors_error.set(None);
+        refresh_color_memory();
+    };
+
     // Resync editor panels whenever a different entry becomes selected (select,
-    // copy, import). Same-id mutations (apply/revert/reset) call
-    // select_current_config() explicitly: keying this watch off the applied
-    // config instead would clobber in-progress grammar drafts on unrelated
-    // parameter edits.
+    // copy, import). Same-id mutations that change the applied document
+    // (apply, reset) call select_current_config() explicitly; keying this
+    // watch off the applied config instead would clobber in-progress
+    // grammar drafts on unrelated parameter edits. Reverting the raw TOML
+    // draft is a same-id mutation too, but doesn't change the applied
+    // document — it calls the narrower clear_toml_revert_state() instead,
+    // which leaves a pending grammar draft untouched.
     Effect::watch(
         move || selected_id.get(),
         move |_, _, _: Option<()>| select_current_config(),
@@ -531,6 +564,7 @@ pub(crate) fn App() -> impl IntoView {
         workspace_error,
         colors_error,
         select_current_config: Callback::new(move |()| select_current_config()),
+        clear_toml_revert_state: Callback::new(move |()| clear_toml_revert_state()),
     });
     provide_context(RenderContext {
         renderer,

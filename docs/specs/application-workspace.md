@@ -92,12 +92,25 @@ during the session. This memory is transient and does not change the TOML until
 the user commits the corresponding control.
 
 **Platform variant:** The primary Leptos app has a structured grammar editor.
-Its uncommitted grammar draft is separate from the raw TOML draft. A grammar
-draft disables raw TOML editing. Applying structured grammar discards a
-pending raw TOML draft the same way other direct controls do, then replaces
-the axiom and complete rule table; reverting restores them from the applied
-document. It warns about unreachable rules and prevents selection of 2D while
-3D-only symbols remain.
+Its uncommitted grammar draft is separate from the raw TOML draft, and each
+may be pending independently of the other. Applying structured grammar
+discards a pending raw TOML draft the same way other direct controls do, then
+replaces the axiom and complete rule table; reverting the grammar draft
+restores them from the applied document. A successful raw TOML apply
+discards a pending grammar draft the same way, resetting the grammar editor
+to the newly-applied document; a failed raw TOML apply leaves the pending
+grammar draft untouched, same as it leaves the raw draft and previous applied
+document untouched. The raw TOML panel displays a persistent warning while a
+grammar draft is pending, noting that a successful apply discards it.
+Reverting the raw TOML draft leaves a pending grammar draft intact, since
+reverting does not change the applied document the grammar draft is based
+on. The grammar editor warns about unreachable rules and prevents
+selection of 2D while 3D-only symbols remain.
+
+**Non-normative:** Discarding a pending grammar draft this way has no undo,
+same as the discards described earlier under "Applied documents and
+drafts" — the persistent warning is the only safeguard until a general undo
+capability exists.
 
 ## Transient controls
 
