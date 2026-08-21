@@ -1,6 +1,25 @@
 //! Shared helpers for tests that pin the `fold` fast path.
 
 use crate::{AnyCompiledGeneration, CompiledGeneration2D, CompiledGeneration3D, GenerationConfig};
+use glam::Vec3;
+
+/// `count` directions spread roughly evenly over the sphere via a
+/// golden-angle spiral, deliberately not aligned with any fixed direction
+/// generator. Shared by `sphere_table`'s own coverage tests and
+/// `template`'s 3D support-table tests so the two cannot drift apart.
+pub(crate) fn probe_directions_3d(count: usize) -> impl Iterator<Item = Vec3> {
+    let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    (0..count).map(move |index| {
+        let y = 1.0 - 2.0 * (index as f64 + 0.5) / count as f64;
+        let radius = (1.0 - y * y).max(0.0).sqrt();
+        let theta = golden_angle * index as f64;
+        Vec3::new(
+            (radius * theta.cos()) as f32,
+            y as f32,
+            (radius * theta.sin()) as f32,
+        )
+    })
+}
 
 pub(crate) fn compile_2d(config: &GenerationConfig) -> CompiledGeneration2D {
     let AnyCompiledGeneration::TwoD(generation) = config.compile() else {

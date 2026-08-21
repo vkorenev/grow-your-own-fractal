@@ -8,7 +8,8 @@ use crate::{D3, Segment3DWithTopologicalDepth};
 /// `Turtle` accessors.
 ///
 /// Heading = `orientation * Vec3::X`, left = `* Vec3::Y`, up = `* Vec3::Z`.
-pub(crate) struct TurtleState3D {
+#[doc(hidden)]
+pub struct TurtleState3D {
     rot_yaw_plus: Quat,
     rot_yaw_minus: Quat,
     rot_pitch_down: Quat,

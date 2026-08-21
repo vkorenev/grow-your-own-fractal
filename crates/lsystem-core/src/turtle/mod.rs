@@ -4,7 +4,8 @@ pub(crate) mod turtle3d;
 use crate::{D2, D3, Dimension, SegmentWithTopologicalDepth};
 use glam::{Quat, Vec2, Vec3};
 
-pub(crate) trait Turtle {
+#[doc(hidden)]
+pub trait Turtle: Send {
     type Dimension: Dimension;
 
     fn new(angle_deg: f32, step: f32, initial_heading_deg: f32) -> Self;
@@ -22,7 +23,8 @@ pub(crate) trait Turtle {
 /// Dimension-keyed turtle construction and the point/rotation operations the
 /// generic template walk needs. Crate-private: the public face stays
 /// `TemplateDimension`, whose blanket impl is bounded on this trait.
-pub(crate) trait TurtleDimension: Dimension {
+#[doc(hidden)]
+pub trait TurtleDimension: Dimension {
     type Turtle: Turtle<Dimension = Self>;
 
     const POINT_ZERO: Self::Point;
