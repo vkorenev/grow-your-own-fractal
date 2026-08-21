@@ -161,13 +161,15 @@ textarea {
 
   .controls {
     position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    bottom: var(--visual-viewport-bottom, 0px);
+    left: var(--visual-viewport-left, 0px);
+    right: auto;
+    width: var(--visual-viewport-width, 100vw);
+    box-sizing: border-box;
     border-right: none;
     border-top: 1px solid #303642;
     border-radius: 12px 12px 0 0;
-    max-height: 80vh;
+    max-height: calc(var(--visual-viewport-height, 100vh) * 0.8);
     transform: translateY(calc(100% - 52px));
     transition: transform 0.25s ease;
     z-index: 100;

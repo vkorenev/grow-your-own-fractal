@@ -4,6 +4,31 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Grow Your Own Fractal</title>
+    <script>
+      const visualViewport = window.visualViewport;
+
+      function syncVisualViewport() {
+        if (!visualViewport) return;
+
+        const root = document.documentElement;
+        const bottom = Math.max(
+          0,
+          root.clientHeight - visualViewport.offsetTop - visualViewport.height,
+        );
+
+        root.style.setProperty("--visual-viewport-left", `${visualViewport.offsetLeft}px`);
+        root.style.setProperty("--visual-viewport-bottom", `${bottom}px`);
+        root.style.setProperty("--visual-viewport-width", `${visualViewport.width}px`);
+        root.style.setProperty("--visual-viewport-height", `${visualViewport.height}px`);
+      }
+
+      if (visualViewport) {
+        visualViewport.addEventListener("resize", syncVisualViewport);
+        visualViewport.addEventListener("scroll", syncVisualViewport);
+        window.addEventListener("resize", syncVisualViewport);
+        syncVisualViewport();
+      }
+    </script>
     <link data-trunk rel="css" href="style.css" />
     <link data-trunk rel="rust" href="Cargo.toml" data-target-name="lsystem_web_app" data-wasm-opt="z" />
   </head>

@@ -77,6 +77,8 @@ Keyboard controls apply while the fractal viewport has focus.
 **Platform variant:** The primary Leptos app accepts pointer input and supports
 two-pointer pinch zoom around the pointer midpoint. It interprets pointer deltas
 in CSS pixels, keeping orbit sensitivity independent of display pixel density.
+On narrow layouts, its control sheet remains anchored to the visual viewport as
+page zoom or the on-screen keyboard changes the visible area.
 
 **Platform variant:** The Iced app uses mouse input for viewport drag and wheel
 navigation.
