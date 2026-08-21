@@ -22,7 +22,7 @@ pub(crate) fn PresetPanel() -> impl IntoView {
     let rename_draft = RwSignal::new(String::new());
     let file_input_ref = NodeRef::<Input>::new();
 
-    // Rename is local UI state, but raw TOML and structured controls mutate the shared
+    // Rename is local UI state, but raw TOML and direct controls mutate the shared
     // workspace from sibling panels. Close the form only when the selected entry's actual
     // state changes; merely dropping a write guard after a failed mutation must leave the
     // user's rejected input available for correction.
