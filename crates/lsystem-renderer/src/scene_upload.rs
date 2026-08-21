@@ -731,7 +731,13 @@ mod gpu_tests {
                 ),
             );
             let before = render_2d(&device, &queue, &pipeline).await;
-            assert!(before.chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]));
+            assert!(
+                before
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| *pixel != [0, 0, 0, 255])
+            );
 
             let over_cap = generation(Dimensions::TwoD, "F", 30, [('F', "FF".to_string())].into());
             assert!(matches!(
@@ -780,7 +786,11 @@ mod gpu_tests {
 
             let cleared = render_2d(&device, &queue, &pipeline).await;
             assert!(
-                cleared.chunks_exact(4).all(|pixel| pixel == [0, 0, 0, 255]),
+                cleared
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == [0, 0, 0, 255]),
                 "failed target layout must be active with zero drawable records"
             );
         });
@@ -820,7 +830,11 @@ mod gpu_tests {
             pipeline.write_mvp(&queue, mvp);
             let pixels = render_3d(&device, &queue, &pipeline).await;
             assert!(
-                pixels.chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]),
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| *pixel != [0, 0, 0, 255]),
                 "3D plain draw must produce non-background pixels"
             );
 
@@ -839,7 +853,11 @@ mod gpu_tests {
             pipeline.write_mvp(&queue, mvp);
             let pixels = render_3d(&device, &queue, &pipeline).await;
             assert!(
-                pixels.chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]),
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|pixel| *pixel != [0, 0, 0, 255]),
                 "3D depth draw must produce non-background pixels"
             );
         });

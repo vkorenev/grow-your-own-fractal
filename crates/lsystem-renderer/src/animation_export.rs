@@ -367,8 +367,10 @@ mod gpu_tests {
             .expect("first APNG frame decodes");
         assert!(
             pixels[..frame.buffer_size()]
-                .chunks_exact(4)
-                .any(|pixel| pixel != [0, 0, 0, 255]),
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| *pixel != [0, 0, 0, 255]),
             "APNG frame must contain stamped line pixels"
         );
     }
