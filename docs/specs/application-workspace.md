@@ -38,8 +38,16 @@ any pending draft. A custom copy or import has no bundled default and cannot be
 reset. Applications expose reset only when it has a visible effect.
 
 Direct configuration controls operate on clean entries. While a raw TOML draft
-is pending, controls that would mutate the applied document are disabled until
-the draft is applied or reverted.
+is pending, controls that would mutate the applied document remain available;
+using one discards the pending draft and then applies the control's change. If
+that change fails validation, the discarded draft is restored unchanged and
+the control's error is reported, so a failed change never loses the pending
+draft. Each panel exposing such controls displays a persistent warning while a
+draft is pending, noting that using its controls discards the draft.
+
+**Non-normative:** This discard has no undo. The persistent warning is the
+only safeguard until a general undo capability exists; adding one is expected
+to cover recovery of a discarded draft.
 
 ## Copy, import, rename, and save
 
@@ -92,10 +100,11 @@ degrees per second in steps of 5.
 
 **Platform variant:** The primary Leptos app has a structured grammar editor.
 Its uncommitted grammar draft is separate from the raw TOML draft. A grammar
-draft disables raw TOML editing, and a raw TOML draft disables structured
-controls. Applying structured grammar replaces the axiom and complete rule
-table; reverting restores them from the applied document. It warns about
-unreachable rules and prevents selection of 2D while 3D-only symbols remain.
+draft disables raw TOML editing. Applying structured grammar discards a
+pending raw TOML draft the same way other direct controls do, then replaces
+the axiom and complete rule table; reverting restores them from the applied
+document. It warns about unreachable rules and prevents selection of 2D while
+3D-only symbols remain.
 
 ## Interactive iteration limit
 

@@ -18,7 +18,6 @@ fn ColorOverrideRow(
     label: Option<&'static str>,
     #[prop(into)] is_default: Signal<bool>,
     #[prop(into)] color: Signal<Rgb>,
-    #[prop(into)] disabled: Signal<bool>,
     on_default_change: Callback<bool>,
     on_color_change: Callback<Rgb>,
     error: RwSignal<Option<String>>,
@@ -31,7 +30,6 @@ fn ColorOverrideRow(
                     id=checkbox_id
                     type="checkbox"
                     prop:checked=move || is_default.get()
-                    disabled=disabled
                     on:change:target=move |ev| on_default_change.run(ev.target().checked())
                 />
                 <span>"Default"</span>
@@ -40,7 +38,6 @@ fn ColorOverrideRow(
                 id=color_id
                 type="color"
                 prop:value=move || color.get().to_string()
-                disabled=disabled
                 on:input:target=move |ev| {
                     match ev.target().value().parse::<Rgb>() {
                         Ok(c) => on_color_change.run(c),
@@ -64,20 +61,10 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
         ..
     } = expect_context();
 
-    let dirty_tooltip = move || {
-        if is_dirty.get() {
-            "Apply or Revert TOML changes first"
-        } else {
-            ""
-        }
-    };
-
     view! {
         <crate::ui::Disclosure title="Colors">
-            <div
-                style="display:flex;flex-direction:column;gap:9px"
-                title=dirty_tooltip
-            >
+            <crate::ui::DirtyDraftWarning is_dirty=is_dirty />
+            <div style="display:flex;flex-direction:column;gap:9px">
             <span class="section-label">"Background"</span>
             <ColorOverrideRow
                 checkbox_id="background-override"
@@ -90,7 +77,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                         editor.background.unwrap_or(ConfigDefaults::embedded().colors.background)
                     })
                 })
-                disabled=is_dirty
                 on_default_change=Callback::new(move |use_default: bool| {
                     if use_default {
                         let current_bg = editor_color_config.with_untracked(|editor| {
@@ -145,7 +131,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                         .key()
                         .to_string()
                 }
-                disabled=is_dirty
                 on:change:target=move |ev| {
                     let mode_key = ev.target().value();
                     let Some(mode) = LineColorMode::from_key(&mode_key) else {
@@ -196,7 +181,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                     color=Signal::derive(move || {
                         solid_color_for_mode(control_line_color, color_memory)
                     })
-                    disabled=is_dirty
                     on_default_change=Callback::new(move |use_default: bool| {
                         if use_default {
                             let editor_line = editor_color_config.with_untracked(|e| e.line);
@@ -258,7 +242,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                         );
                         start
                     })
-                    disabled=is_dirty
                     on_default_change=Callback::new(move |use_default: bool| {
                         let editor_line = editor_color_config.with_untracked(|e| e.line);
                         if use_default {
@@ -324,7 +307,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                         );
                         end
                     })
-                    disabled=is_dirty
                     on_default_change=Callback::new(move |use_default: bool| {
                         let editor_line = editor_color_config.with_untracked(|e| e.line);
                         if use_default {
@@ -385,7 +367,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                             );
                             topological_depth
                         }
-                        disabled=is_dirty
                         on:change:target=move |ev| {
                             let editor_line = editor_color_config.get_untracked().line;
                             let (editor_start, editor_end, _) =
@@ -436,7 +417,6 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                     color=Signal::derive(move || {
                         hue_cycle_initial_for_mode(control_line_color, color_memory)
                     })
-                    disabled=is_dirty
                     on_default_change=Callback::new(move |use_default: bool| {
                         if use_default {
                             let editor_line = editor_color_config.with_untracked(|e| e.line);

@@ -423,6 +423,23 @@ pub(crate) fn App() -> impl IntoView {
         false,
     );
 
+    // Clear a stale "TOML Apply failed" message once the draft it described
+    // is gone. TOML Apply/Revert already clear `toml_error` themselves, but a
+    // direct control elsewhere (colors, grammar, dimensions) can also discard
+    // the pending draft via `update_clean_config`, which doesn't own this
+    // panel-specific signal. Watching the dirty→clean transition covers both,
+    // instead of threading `toml_error` through every direct-control call
+    // site.
+    Effect::watch(
+        move || is_dirty.get(),
+        move |current: &bool, prev: Option<&bool>, _: Option<()>| {
+            if prev == Some(&true) && !current {
+                toml_error.set(None);
+            }
+        },
+        false,
+    );
+
     let grammar_has_3d_symbols = Memo::new(move |_| {
         grammar_axiom.with(|a| contains_3d_symbols(a))
             || grammar_rows.with(|rows| {
@@ -746,6 +763,13 @@ fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec
         .collect()
 }
 
+/// Applies `update` to the selected entry, returning whether it succeeded and
+/// setting/clearing `error` accordingly. If a raw TOML draft is pending, it
+/// is discarded first — see docs/specs/application-workspace.md's "Direct
+/// configuration controls" section — so `update` always runs against a clean
+/// entry. If `update` fails, the discarded draft is restored rather than
+/// lost: the direct control's change didn't end up applied either, so the
+/// user should not lose both the draft and the attempted change.
 pub(crate) fn update_clean_config(
     config_workspace: RwSignal<ConfigWorkspace>,
     error: RwSignal<Option<String>>,
@@ -754,22 +778,32 @@ pub(crate) fn update_clean_config(
 ) -> bool {
     let result = {
         let mut workspace = config_workspace.write();
-        match workspace.selected_mut().view_mut() {
-            EntryViewMut::Clean(mut clean) => {
-                update(&mut clean).map(|()| true).map_err(|e| e.to_string())
-            }
-            EntryViewMut::Dirty(_) => {
-                log::error!("{event} fired while entry is dirty; UI guards bypassed");
-                Ok(false)
-            }
+        let entry = workspace.selected_mut();
+        let pending_draft = entry.is_dirty().then(|| entry.draft_text().into_owned());
+        if let EntryViewMut::Dirty(dirty) = entry.view_mut() {
+            log::info!("{event}: discarding pending TOML draft to apply a direct control change");
+            dirty.revert();
         }
+        let update_result = match entry.view_mut() {
+            EntryViewMut::Clean(mut clean) => update(&mut clean).map_err(|e| e.to_string()),
+            EntryViewMut::Dirty(_) => {
+                log::error!("{event}: entry still dirty after discarding its draft");
+                Err("Internal error: could not apply this change.".to_string())
+            }
+        };
+        if update_result.is_err()
+            && let Some(pending_draft) = pending_draft
+        {
+            log::info!("{event}: restoring discarded TOML draft after a failed change");
+            entry.set_draft_text(pending_draft);
+        }
+        update_result
     };
     match result {
-        Ok(true) => {
+        Ok(()) => {
             error.set(None);
             true
         }
-        Ok(false) => false,
         Err(msg) => {
             error.set(Some(msg));
             false

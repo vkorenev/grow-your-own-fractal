@@ -600,24 +600,40 @@ impl FractalApp {
         self.update_clean_entry(event, update, Self::refresh_after_clean_color_update)
     }
 
-    /// Applies `update` to the selected entry while it is clean, then runs
-    /// `on_success`. Logs and no-ops if UI guards let a dirty entry through.
+    /// Applies `update` to the selected entry, then runs `on_success`. If a
+    /// raw TOML draft is pending, it is discarded first — see
+    /// docs/specs/application-workspace.md's "Direct configuration controls"
+    /// section — so `update` always runs against a clean entry. If `update`
+    /// fails, the discarded draft is restored rather than lost: the direct
+    /// control's change didn't end up applied either, so the user should not
+    /// lose both the draft and the attempted change.
     fn update_clean_entry(
         &mut self,
         event: &'static str,
         update: impl FnOnce(&mut CleanMut<'_>) -> Result<(), ParseConfigError>,
         on_success: impl FnOnce(&mut Self) -> Task<Message>,
     ) -> Task<Message> {
-        match self.config_workspace.selected_mut().view_mut() {
-            EntryViewMut::Clean(mut clean) => match update(&mut clean) {
-                Ok(()) => on_success(self),
-                Err(error) => {
-                    self.error = Some(error.to_string());
-                    Task::none()
-                }
-            },
+        let entry = self.config_workspace.selected_mut();
+        let pending_draft = entry.is_dirty().then(|| entry.draft_text().into_owned());
+        if let EntryViewMut::Dirty(dirty) = entry.view_mut() {
+            log::info!("{event}: discarding pending TOML draft to apply a direct control change");
+            dirty.revert();
+        }
+        let result = match entry.view_mut() {
+            EntryViewMut::Clean(mut clean) => update(&mut clean).map_err(|e| e.to_string()),
             EntryViewMut::Dirty(_) => {
-                log::error!("{event} fired while entry is dirty; UI guards bypassed");
+                log::error!("{event}: entry still dirty after discarding its draft");
+                Err("Internal error: could not apply this change.".to_string())
+            }
+        };
+        match result {
+            Ok(()) => on_success(self),
+            Err(message) => {
+                if let Some(pending_draft) = pending_draft {
+                    log::info!("{event}: restoring discarded TOML draft after a failed change");
+                    entry.set_draft_text(pending_draft);
+                }
+                self.error = Some(message);
                 Task::none()
             }
         }
@@ -979,6 +995,76 @@ mod tests {
         );
     }
 
+    /// Makes the selected entry dirty with a draft that only differs from the
+    /// applied document by its name, and syncs `app.toml` to match. Returns
+    /// `(applied_name, draft_text)` for assertions that need either.
+    fn make_dirty_with_draft(app: &mut FractalApp) -> (String, String) {
+        let applied_name = app.config_workspace.selected().name().to_string();
+        let draft = app.config_workspace.selected().draft_text().replace(
+            &format!("name = \"{applied_name}\""),
+            "name = \"Draft Plant\"",
+        );
+        app.toml = iced::widget::text_editor::Content::with_text(&draft);
+        app.config_workspace
+            .selected_mut()
+            .set_draft_text(draft.clone());
+        assert!(app.config_workspace.selected().is_dirty());
+        (applied_name, draft)
+    }
+
+    #[test]
+    fn angle_changed_discards_pending_toml_draft_and_applies() {
+        let (mut app, _) = FractalApp::new();
+        let (applied_name, _draft) = make_dirty_with_draft(&mut app);
+
+        let _ = app.update(Message::AngleChanged(90.0));
+
+        assert!(!app.config_workspace.selected().is_dirty());
+        assert_eq!(app.config_workspace.selected().name(), applied_name);
+        assert_eq!(
+            app.config_workspace
+                .selected()
+                .editor_config()
+                .generation
+                .angle,
+            90.0
+        );
+    }
+
+    #[test]
+    fn background_color_changed_discards_pending_toml_draft_and_applies() {
+        let (mut app, _) = FractalApp::new();
+        let (applied_name, _draft) = make_dirty_with_draft(&mut app);
+
+        let new_background = Rgb::new(0x11, 0x22, 0x33);
+        let _ = app.update(Message::BackgroundColorChanged(new_background));
+
+        assert!(!app.config_workspace.selected().is_dirty());
+        assert_eq!(app.config_workspace.selected().name(), applied_name);
+        assert_eq!(
+            app.config_workspace
+                .selected()
+                .editor_config()
+                .colors
+                .background,
+            Some(new_background)
+        );
+    }
+
+    #[test]
+    fn angle_changed_with_invalid_value_preserves_pending_toml_draft() {
+        let (mut app, _) = FractalApp::new();
+        let (_applied_name, draft) = make_dirty_with_draft(&mut app);
+
+        let _ = app.update(Message::AngleChanged(f32::NAN));
+
+        // The angle change failed validation — the pending TOML draft must
+        // survive, not be silently destroyed, and the failure must surface.
+        assert!(app.config_workspace.selected().is_dirty());
+        assert_eq!(app.config_workspace.selected().draft_text(), draft);
+        assert!(app.error.is_some());
+    }
+
     #[test]
     fn preset_selected_message_selects_by_id() {
         let (mut app, _) = FractalApp::new();
@@ -1103,18 +1189,18 @@ mod tests {
     }
 
     #[test]
-    fn angle_changed_while_dirty_is_ignored() {
+    fn angle_changed_while_dirty_discards_draft_and_applies() {
         let (mut app, _) = FractalApp::new();
         let original_angle = app.selected_editor_config().generation.angle;
         let modified = format!("{} ", app.config_workspace.selected().draft_text());
         app.config_workspace.selected_mut().set_draft_text(modified);
+        assert!(app.config_workspace.selected().is_dirty());
 
-        let _ = app.update(Message::AngleChanged(original_angle + 10.0));
+        let new_angle = original_angle + 10.0;
+        let _ = app.update(Message::AngleChanged(new_angle));
 
-        assert_eq!(
-            app.selected_editor_config().generation.angle,
-            original_angle
-        );
+        assert!(!app.config_workspace.selected().is_dirty());
+        assert_eq!(app.selected_editor_config().generation.angle, new_angle);
     }
 
     #[test]

@@ -36,6 +36,20 @@ pub fn Disclosure(
     }
 }
 
+/// Persistent warning shown at the top of a panel while a raw TOML draft is
+/// pending, since using any of the panel's controls will discard that draft —
+/// see docs/specs/application-workspace.md's "Direct configuration controls".
+#[component]
+pub fn DirtyDraftWarning(#[prop(into)] is_dirty: Signal<bool>) -> impl IntoView {
+    view! {
+        <Show when=move || is_dirty.get()>
+            <span class="inline-status warning">
+                "Editing these controls will discard your unapplied TOML changes."
+            </span>
+        </Show>
+    }
+}
+
 /// Numeric value type usable in a [`Spinner`].
 pub trait SpinnerValue: Copy + PartialOrd + Send + Sync + 'static {
     fn parse(text: &str) -> Option<Self>;

@@ -77,37 +77,42 @@ impl FractalApp {
         let is_3d = self.effective_is_3d();
 
         if is_dirty {
-            controls = controls
-                .push(text("Apply or Revert the edited config before using controls.").size(13));
-        } else {
-            let editor_config = self.selected_editor_config();
-            let editor_colors = &selected_entry.editor_config().colors;
-            controls = controls
-                .push(text("Overrides").size(13))
-                .push(text(format!(
-                    "Iterations (max {}): {}",
-                    self.max_iterations, self.iterations
-                )))
-                .push(slider(
-                    0..=self.max_iterations,
-                    self.iterations,
-                    Message::IterationsChanged,
-                ))
-                .push(text(format!(
-                    "Angle: {:.1}",
-                    editor_config.generation.angle
-                )))
-                .push(
-                    slider(
-                        1.0..=180.0,
-                        editor_config.generation.angle,
-                        Message::AngleChanged,
-                    )
-                    .step(0.5_f32),
-                );
+            controls = controls.push(
+                text("Editing these controls will discard your unapplied TOML changes.")
+                    .size(13)
+                    .style(text::warning),
+            );
+        }
 
-            controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
+        let editor_config = self.selected_editor_config();
+        let editor_colors = &editor_config.colors;
+        controls = controls
+            .push(text("Overrides").size(13))
+            .push(text(format!(
+                "Iterations (max {}): {}",
+                self.max_iterations, self.iterations
+            )))
+            .push(slider(
+                0..=self.max_iterations,
+                self.iterations,
+                Message::IterationsChanged,
+            ))
+            .push(text(format!(
+                "Angle: {:.1}",
+                editor_config.generation.angle
+            )))
+            .push(
+                slider(
+                    1.0..=180.0,
+                    editor_config.generation.angle,
+                    Message::AngleChanged,
+                )
+                .step(0.5_f32),
+            );
 
+        controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
+
+        if !is_dirty {
             controls = controls.push(text("PNG width").size(13)).push(
                 text_input("800", &self.png_width_text)
                     .on_input(Message::PngWidthChanged)
