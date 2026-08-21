@@ -1,0 +1,17 @@
+[metadata]
+name = "3D Box Fractal"
+
+[l-system]
+dimensions = "3D"
+axiom = "[+F][-F][&F][^F][|F]F"
+iterations = 5
+angle = 90.0
+
+[l-system.rules]
+F = "Ff[+F][-F][&F][^F][|F]F"
+f = "fff"
+
+[colors.line.gradient]
+start = "#ff7f00"
+end = "#007fff"
+topological_depth = true

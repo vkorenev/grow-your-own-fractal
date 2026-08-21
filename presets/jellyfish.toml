@@ -1,0 +1,17 @@
+[metadata]
+name = "Jellyfish"
+
+[l-system]
+dimensions = "3D"
+axiom = "F"
+iterations = 6
+angle = 45.0
+initial_heading = 90.0
+
+[l-system.rules]
+F = "f[+fF]/[+fF]/[+fF]/[+fF]/[+fF]/[+fF]/[+fF]/[+fF]F"
+f = "ffff"
+
+[colors.line]
+
+[colors.line.hue_cycle]

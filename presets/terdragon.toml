@@ -1,0 +1,13 @@
+[metadata]
+name = "Terdragon"
+
+[l-system]
+dimensions = "2D"
+axiom = "F"
+iterations = 11
+angle = 120.0
+
+[l-system.rules]
+F = "F-F+F"
+
+[colors.line.hue_cycle]
