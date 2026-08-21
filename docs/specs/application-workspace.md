@@ -37,8 +37,9 @@ Resetting a bundled entry restores its original embedded document and discards
 any pending draft. A custom copy or import has no bundled default and cannot be
 reset. Applications expose reset only when it has a visible effect.
 
-Direct configuration controls operate on clean entries. While a raw TOML draft
-is pending, controls that would mutate the applied document remain available;
+Direct configuration controls update specific values in the selected entry's
+applied document without using the raw TOML editor. They operate on clean
+entries. While a raw TOML draft is pending, those controls remain available;
 using one discards the pending draft and then applies the control's change. If
 that change fails validation, the discarded draft is restored unchanged and
 the control's error is reported, so a failed change never loses the pending
@@ -79,24 +80,16 @@ controls. Open imports one `.toml` file. Save downloads the currently displayed
 TOML, including an unapplied draft. The Iced app does not expose config-file
 Open or config-file Save.
 
-## Structured controls
+## Direct configuration controls
 
 Both applications expose direct controls for the effective iteration count,
-angle, and color settings. Direct angle controls use the interactive range
+angle, and color settings. Angle controls use the interactive range
 `1..=180` degrees even though authored TOML accepts any finite angle. Optional
 color controls distinguish an authored override from the effective default.
 
 Changing a line-color mode restores remembered control values for that mode
 during the session. This memory is transient and does not change the TOML until
 the user commits the corresponding control.
-
-Hue rotation is active only for hue-cycle line color. Its speed is clamped to
-`1..=60` degrees per second and its direction is forward or reverse. Hue
-rotation state and phase are transient rather than authored configuration.
-
-Both applications expose transient on/off and speed controls for camera
-auto-rotation in 3D. Camera auto-rotation speed is constrained to `5..=360`
-degrees per second in steps of 5.
 
 **Platform variant:** The primary Leptos app has a structured grammar editor.
 Its uncommitted grammar draft is separate from the raw TOML draft. A grammar
@@ -105,6 +98,16 @@ pending raw TOML draft the same way other direct controls do, then replaces
 the axiom and complete rule table; reverting restores them from the applied
 document. It warns about unreachable rules and prevents selection of 2D while
 3D-only symbols remain.
+
+## Transient controls
+
+Hue rotation is active only for hue-cycle line color. Its speed is clamped to
+`1..=60` degrees per second and its direction is forward or reverse. Hue
+rotation state and phase are transient rather than authored configuration.
+
+Both applications expose transient on/off and speed controls for camera
+auto-rotation in 3D. Camera auto-rotation speed is constrained to `5..=360`
+degrees per second in steps of 5.
 
 ## Interactive iteration limit
 
@@ -122,14 +125,14 @@ Changing only the color mode therefore does not change this maximum.
 If iteration zero already exceeds capacity, no prefix-safe iteration exists.
 The document remains valid, and the application represents the interactive
 maximum as zero because the iteration domain has no lower value. The effective
-configuration therefore uses iteration zero and the direct control range is
+configuration therefore uses iteration zero and the iteration control range is
 `0..=0`, but scene construction reports a segment-capacity failure. It does not
 truncate the geometry or substitute a fallback scene.
 
 Changing the axiom, rules, or dimension recomputes the maximum. The effective
 render configuration clamps iterations to it without rewriting a larger
-authored TOML value. The direct iteration control range is zero through the
-current maximum.
+authored TOML value. The iteration control range is zero through the current
+maximum.
 
 ## Errors and continuity
 
