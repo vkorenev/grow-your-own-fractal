@@ -55,14 +55,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
         ..
     } = expect_context();
 
-    let dirty_tooltip = move || {
-        if is_dirty.get() {
-            "Apply or Revert TOML changes first"
-        } else {
-            ""
-        }
-    };
-
     let do_apply_grammar = move || {
         let axiom = grammar_axiom.get_untracked();
         let rows = grammar_rows.get_untracked();
@@ -96,11 +88,10 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
         }
     };
 
-    // Grammar Apply is enabled only when grammar has changes, the entry is clean, and
-    // no 3D-only symbols are present in 2D mode.
-    let grammar_can_apply = move || {
-        grammar_is_dirty.get() && (is_3d.get() || !grammar_has_3d_symbols.get()) && !is_dirty.get()
-    };
+    // Grammar Apply is enabled only when grammar has changes and no 3D-only
+    // symbols are present in 2D mode.
+    let grammar_can_apply =
+        move || grammar_is_dirty.get() && (is_3d.get() || !grammar_has_3d_symbols.get());
 
     let try_apply_grammar = move || {
         // The Apply button is disabled when grammar has 3D symbols in 2D mode;
@@ -126,19 +117,21 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
 
     view! {
         <crate::ui::Disclosure title="L-System" badge=grammar_is_dirty>
+            <Show when=move || is_dirty.get()>
+                <span class="inline-status warning">
+                    "Editing these controls will discard your unapplied TOML changes."
+                </span>
+            </Show>
             <div style="display:flex;flex-direction:column;gap:5px">
                 <span class="section-label">"Dimensions"</span>
-                <div title=dirty_tooltip>
                 <crate::ui::SegmentedToggle
                     options=vec![(Dimensions::TwoD, "2D"), (Dimensions::ThreeD, "3D")]
                     selected=dimensions
                     on_change=move |key| try_set_dimensions(key)
-                    disabled=is_dirty
                     disabled_keys=Signal::derive(move || {
                         if grammar_has_3d_symbols.get() { vec![Dimensions::TwoD] } else { vec![] }
                     })
                 />
-                </div>
                 <Show when=move || grammar_has_3d_symbols.get()>
                     <span class="inline-status warning">
                         "Grammar contains 3D-only symbols (& ^ / \\) — 2D mode is unavailable"
@@ -149,7 +142,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
             <hr class="section-divider" />
 
             <span class="section-label">"Grammar"</span>
-            <div title=dirty_tooltip>
             <table class="grammar-table">
                 <tbody>
                     <tr>
@@ -161,7 +153,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                                 type="text"
                                 class="grammar-rhs"
                                 prop:value=move || grammar_axiom.get()
-                                disabled=is_dirty
                                 on:input:target=move |ev| grammar_axiom.set(ev.target().value())
                             />
                         </td>
@@ -180,7 +171,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                                             list="grammar-symbols"
                                             maxlength="1"
                                             prop:value=move || row.symbol.get()
-                                            disabled=is_dirty
                                             on:input:target=move |ev| row.symbol.set(ev.target().value())
                                         />
                                     </td>
@@ -189,7 +179,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                                             type="text"
                                             class="grammar-rhs"
                                             prop:value=move || row.rhs.get()
-                                            disabled=is_dirty
                                             on:input:target=move |ev| row.rhs.set(ev.target().value())
                                         />
                                     </td>
@@ -197,7 +186,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                                         <button
                                             type="button"
                                             class="grammar-delete-btn"
-                                            disabled=is_dirty
                                             on:click=move |_| {
                                                 grammar_rows.update(|rows| rows.retain(|r| r.id != row.id));
                                             }
@@ -221,27 +209,22 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                         .collect_view()
                 }}
             </datalist>
-            </div>
 
             <div class="btn-row">
-                <div title=dirty_tooltip>
-                    <button
-                        type="button"
-                        disabled=is_dirty
-                        on:click=move |_| {
-                            grammar_rows.update(|rows| {
-                                rows.push(GrammarRow {
-                                    id: next_grammar_row_id(grammar_row_counter),
-                                    symbol: RwSignal::new(String::new()),
-                                    rhs: RwSignal::new(String::new()),
-                                });
+                <button
+                    type="button"
+                    on:click=move |_| {
+                        grammar_rows.update(|rows| {
+                            rows.push(GrammarRow {
+                                id: next_grammar_row_id(grammar_row_counter),
+                                symbol: RwSignal::new(String::new()),
+                                rhs: RwSignal::new(String::new()),
                             });
-                        }
-                    >"Add rule"</button>
-                </div>
+                        });
+                    }
+                >"Add rule"</button>
                 <div title=move || {
-                    if is_dirty.get() { "Apply or Revert TOML changes first" }
-                    else if grammar_has_3d_symbols.get() && !is_3d.get() {
+                    if grammar_has_3d_symbols.get() && !is_3d.get() {
                         "Contains 3D-only symbols — switch to 3D mode in Dimensions first"
                     } else { "" }
                 }>
@@ -275,7 +258,7 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
             <hr class="section-divider" />
 
             <span class="section-label">"Parameters"</span>
-            <div class="spinner-row" title=dirty_tooltip>
+            <div class="spinner-row">
                 <span class="spinner-label">"Angle (°)"</span>
                 <crate::ui::Spinner
                     value=angle
@@ -283,7 +266,6 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                     min=1.0_f32
                     max=180.0_f32
                     decimals=1
-                    disabled=is_dirty
                     on_commit=move |v: f32| {
                         update_clean_config(
                             config_workspace, grammar_error,"angle",
@@ -293,13 +275,12 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                 />
             </div>
 
-            <div class="spinner-row" title=dirty_tooltip>
+            <div class="spinner-row">
                 <span class="spinner-label">"Initial heading (°)"</span>
                 <crate::ui::Spinner
                     value=Signal::derive(move || generation_config.with(|g| g.initial_heading))
                     step=1.0
                     decimals=1
-                    disabled=is_dirty
                     on_commit=move |v: f32| {
                         update_clean_config(
                             config_workspace, grammar_error,"initial_heading",
@@ -309,13 +290,12 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                 />
             </div>
 
-            <div class="spinner-row" title=dirty_tooltip>
+            <div class="spinner-row">
                 <span class="spinner-label">{move || format!("Iterations (max {})", max_iterations.get())}</span>
                 <crate::ui::Spinner
                     value=iterations
                     step=1.0
                     max=max_iterations
-                    disabled=is_dirty
                     on_commit=move |v: u16| {
                         update_clean_config(
                             config_workspace, grammar_error,"iterations",
