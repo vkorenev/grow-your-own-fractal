@@ -423,6 +423,23 @@ pub(crate) fn App() -> impl IntoView {
         false,
     );
 
+    // Clear a stale "TOML Apply failed" message once the draft it described
+    // is gone. TOML Apply/Revert already clear `toml_error` themselves, but a
+    // direct control elsewhere (colors, grammar, dimensions) can also discard
+    // the pending draft via `update_clean_config`, which doesn't own this
+    // panel-specific signal. Watching the dirty→clean transition covers both,
+    // instead of threading `toml_error` through every direct-control call
+    // site.
+    Effect::watch(
+        move || is_dirty.get(),
+        move |current: &bool, prev: Option<&bool>, _: Option<()>| {
+            if prev == Some(&true) && !current {
+                toml_error.set(None);
+            }
+        },
+        false,
+    );
+
     let grammar_has_3d_symbols = Memo::new(move |_| {
         grammar_axiom.with(|a| contains_3d_symbols(a))
             || grammar_rows.with(|rows| {
