@@ -63,11 +63,7 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
 
     view! {
         <crate::ui::Disclosure title="Colors">
-            <Show when=move || is_dirty.get()>
-                <span class="inline-status warning">
-                    "Editing these controls will discard your unapplied TOML changes."
-                </span>
-            </Show>
+            <crate::ui::DirtyDraftWarning is_dirty=is_dirty />
             <div style="display:flex;flex-direction:column;gap:9px">
             <span class="section-label">"Background"</span>
             <ColorOverrideRow

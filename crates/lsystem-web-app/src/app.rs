@@ -795,7 +795,7 @@ pub(crate) fn update_clean_config(
             && let Some(pending_draft) = pending_draft
         {
             log::info!("{event}: restoring discarded TOML draft after a failed change");
-            workspace.selected_mut().set_draft_text(pending_draft);
+            entry.set_draft_text(pending_draft);
         }
         update_result
     };

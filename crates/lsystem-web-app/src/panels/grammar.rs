@@ -117,11 +117,7 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
 
     view! {
         <crate::ui::Disclosure title="L-System" badge=grammar_is_dirty>
-            <Show when=move || is_dirty.get()>
-                <span class="inline-status warning">
-                    "Editing these controls will discard your unapplied TOML changes."
-                </span>
-            </Show>
+            <crate::ui::DirtyDraftWarning is_dirty=is_dirty />
             <div style="display:flex;flex-direction:column;gap:5px">
                 <span class="section-label">"Dimensions"</span>
                 <crate::ui::SegmentedToggle

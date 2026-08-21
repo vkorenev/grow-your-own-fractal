@@ -80,12 +80,12 @@ impl FractalApp {
             controls = controls.push(
                 text("Editing these controls will discard your unapplied TOML changes.")
                     .size(13)
-                    .color(Color::from_rgb(0.85, 0.6, 0.1)),
+                    .style(text::warning),
             );
         }
 
         let editor_config = self.selected_editor_config();
-        let editor_colors = &selected_entry.editor_config().colors;
+        let editor_colors = &editor_config.colors;
         controls = controls
             .push(text("Overrides").size(13))
             .push(text(format!(

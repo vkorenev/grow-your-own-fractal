@@ -631,9 +631,7 @@ impl FractalApp {
             Err(message) => {
                 if let Some(pending_draft) = pending_draft {
                     log::info!("{event}: restoring discarded TOML draft after a failed change");
-                    self.config_workspace
-                        .selected_mut()
-                        .set_draft_text(pending_draft);
+                    entry.set_draft_text(pending_draft);
                 }
                 self.error = Some(message);
                 Task::none()
@@ -997,17 +995,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn angle_changed_discards_pending_toml_draft_and_applies() {
-        let (mut app, _) = FractalApp::new();
+    /// Makes the selected entry dirty with a draft that only differs from the
+    /// applied document by its name, and syncs `app.toml` to match. Returns
+    /// `(applied_name, draft_text)` for assertions that need either.
+    fn make_dirty_with_draft(app: &mut FractalApp) -> (String, String) {
         let applied_name = app.config_workspace.selected().name().to_string();
         let draft = app.config_workspace.selected().draft_text().replace(
             &format!("name = \"{applied_name}\""),
             "name = \"Draft Plant\"",
         );
         app.toml = iced::widget::text_editor::Content::with_text(&draft);
-        app.config_workspace.selected_mut().set_draft_text(draft);
+        app.config_workspace
+            .selected_mut()
+            .set_draft_text(draft.clone());
         assert!(app.config_workspace.selected().is_dirty());
+        (applied_name, draft)
+    }
+
+    #[test]
+    fn angle_changed_discards_pending_toml_draft_and_applies() {
+        let (mut app, _) = FractalApp::new();
+        let (applied_name, _draft) = make_dirty_with_draft(&mut app);
 
         let _ = app.update(Message::AngleChanged(90.0));
 
@@ -1026,14 +1034,7 @@ mod tests {
     #[test]
     fn background_color_changed_discards_pending_toml_draft_and_applies() {
         let (mut app, _) = FractalApp::new();
-        let applied_name = app.config_workspace.selected().name().to_string();
-        let draft = app.config_workspace.selected().draft_text().replace(
-            &format!("name = \"{applied_name}\""),
-            "name = \"Draft Plant\"",
-        );
-        app.toml = iced::widget::text_editor::Content::with_text(&draft);
-        app.config_workspace.selected_mut().set_draft_text(draft);
-        assert!(app.config_workspace.selected().is_dirty());
+        let (applied_name, _draft) = make_dirty_with_draft(&mut app);
 
         let new_background = Rgb::new(0x11, 0x22, 0x33);
         let _ = app.update(Message::BackgroundColorChanged(new_background));
@@ -1053,16 +1054,7 @@ mod tests {
     #[test]
     fn angle_changed_with_invalid_value_preserves_pending_toml_draft() {
         let (mut app, _) = FractalApp::new();
-        let applied_name = app.config_workspace.selected().name().to_string();
-        let draft = app.config_workspace.selected().draft_text().replace(
-            &format!("name = \"{applied_name}\""),
-            "name = \"Draft Plant\"",
-        );
-        app.toml = iced::widget::text_editor::Content::with_text(&draft);
-        app.config_workspace
-            .selected_mut()
-            .set_draft_text(draft.clone());
-        assert!(app.config_workspace.selected().is_dirty());
+        let (_applied_name, draft) = make_dirty_with_draft(&mut app);
 
         let _ = app.update(Message::AngleChanged(f32::NAN));
 
