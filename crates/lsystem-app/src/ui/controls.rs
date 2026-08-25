@@ -6,9 +6,10 @@ use iced::{Color, Element, Length, Theme};
 use lsystem_app_model::{
     CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
     CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
-    CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND, HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
-    HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, HueRotation, HueRotationDirection, LineColorMode,
-    line_color_for_controls, selected_line_color_mode,
+    CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND, CAMERA_ROTATION_STEP_DEGREES,
+    HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND, HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND,
+    HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
+    selected_line_color_mode,
 };
 use lsystem_app_model::{ConfigDefaults, EditorColorConfig, EditorLineColorConfig};
 use lsystem_core::{LineColorConfig, Rgb};
@@ -111,6 +112,59 @@ impl FractalApp {
             );
 
         controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
+
+        // `Message::Fit` has no guard of its own (`self.scene.reset_camera()` always
+        // succeeds), and matches its keyboard equivalent `F`, which is likewise
+        // unconditional — so Reset view is never disabled.
+        controls = controls
+            .push(text("Camera").size(13))
+            .push(row![button("Reset view").on_press(Message::Fit)].spacing(8));
+
+        if is_3d {
+            // We're inside `if is_3d`, so `effective_is_3d()` (the document) is
+            // already known true here; `self.scene.is_3d()` (the rendered scene)
+            // is the only other half of the mismatch the `RotateBy`/`RollBy`
+            // handlers themselves gate on. Disabling orbit/roll exactly when the
+            // two disagree — not for the whole duration of any pending
+            // regeneration, most of which don't touch dimension at all (the
+            // iteration/angle sliders, color changes, non-dimension grammar
+            // edits) — keeps the buttons exactly as available as their keyboard
+            // equivalents, which have never checked `scene_pending`.
+            let orbit_ready = self.scene.is_3d();
+            controls = controls
+                .push(
+                    row![
+                        button("◀").on_press_maybe(orbit_ready.then_some(Message::RotateBy {
+                            d_az: -CAMERA_ROTATION_STEP_DEGREES,
+                            d_el: 0.0,
+                        })),
+                        button("▶").on_press_maybe(orbit_ready.then_some(Message::RotateBy {
+                            d_az: CAMERA_ROTATION_STEP_DEGREES,
+                            d_el: 0.0,
+                        })),
+                        button("▲").on_press_maybe(orbit_ready.then_some(Message::RotateBy {
+                            d_az: 0.0,
+                            d_el: CAMERA_ROTATION_STEP_DEGREES,
+                        })),
+                        button("▼").on_press_maybe(orbit_ready.then_some(Message::RotateBy {
+                            d_az: 0.0,
+                            d_el: -CAMERA_ROTATION_STEP_DEGREES,
+                        })),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    row![
+                        button("↺ Roll").on_press_maybe(
+                            orbit_ready.then_some(Message::RollBy(-CAMERA_ROTATION_STEP_DEGREES))
+                        ),
+                        button("↻ Roll").on_press_maybe(
+                            orbit_ready.then_some(Message::RollBy(CAMERA_ROTATION_STEP_DEGREES))
+                        ),
+                    ]
+                    .spacing(8),
+                );
+        }
 
         if !is_dirty {
             controls = controls.push(text("PNG width").size(13)).push(

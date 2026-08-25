@@ -5,6 +5,11 @@ pub const CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND: f32 = 5.0;
 pub const CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND: f32 = 360.0;
 pub const CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND: f32 = 5.0;
 
+/// Discrete per-press orbit/roll increment used by the keyboard shortcuts
+/// (arrows, `Q`/`E`) and the camera pane's matching buttons, on both apps.
+/// Unrelated to the continuous `CAMERA_AUTO_ROTATION_*` speeds above.
+pub const CAMERA_ROTATION_STEP_DEGREES: f32 = 5.0;
+
 pub(crate) const HUE_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND: f32 = 15.0;
 pub const HUE_ROTATION_MIN_SPEED_DEGREES_PER_SECOND: f32 = 1.0;
 pub const HUE_ROTATION_MAX_SPEED_DEGREES_PER_SECOND: f32 = 60.0;

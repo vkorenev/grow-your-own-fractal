@@ -5,10 +5,10 @@ use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, windo
 use lsystem_app_model::{
     CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND,
     CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
-    CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, CleanMut, ColorControlMemory,
-    ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorConfig, EditorLineColorConfig,
-    EntryViewMut, HueRotation, HueRotationDirection, LineColorMode, ParseConfigError,
-    advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, CAMERA_ROTATION_STEP_DEGREES, CleanMut,
+    ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorConfig,
+    EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection, LineColorMode,
+    ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{ColorConfig, Config, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
@@ -23,7 +23,6 @@ use crate::export::{ExportKind, ExportOutcome, ExportRequest, handle_export};
 use super::fractal_canvas::{Scene, SceneBuildResult, build_scene};
 use super::{PNG_MAX_DIMENSION, PNG_MIN_DIMENSION};
 
-const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 
 fn camera_auto_rotation_active(auto_rotate: bool, is_3d: bool, orbit_drag_active: bool) -> bool {
@@ -485,33 +484,33 @@ impl FractalApp {
                     }
                     keyboard::Key::Named(keyboard::key::Named::ArrowLeft) => {
                         Some(Message::RotateBy {
-                            d_az: -ROTATION_STEP_DEG,
+                            d_az: -CAMERA_ROTATION_STEP_DEGREES,
                             d_el: 0.0,
                         })
                     }
                     keyboard::Key::Named(keyboard::key::Named::ArrowRight) => {
                         Some(Message::RotateBy {
-                            d_az: ROTATION_STEP_DEG,
+                            d_az: CAMERA_ROTATION_STEP_DEGREES,
                             d_el: 0.0,
                         })
                     }
                     keyboard::Key::Named(keyboard::key::Named::ArrowUp) => {
                         Some(Message::RotateBy {
                             d_az: 0.0,
-                            d_el: ROTATION_STEP_DEG,
+                            d_el: CAMERA_ROTATION_STEP_DEGREES,
                         })
                     }
                     keyboard::Key::Named(keyboard::key::Named::ArrowDown) => {
                         Some(Message::RotateBy {
                             d_az: 0.0,
-                            d_el: -ROTATION_STEP_DEG,
+                            d_el: -CAMERA_ROTATION_STEP_DEGREES,
                         })
                     }
                     keyboard::Key::Character(ch) if ch.eq_ignore_ascii_case("q") => {
-                        Some(Message::RollBy(-ROTATION_STEP_DEG))
+                        Some(Message::RollBy(-CAMERA_ROTATION_STEP_DEGREES))
                     }
                     keyboard::Key::Character(ch) if ch.eq_ignore_ascii_case("e") => {
-                        Some(Message::RollBy(ROTATION_STEP_DEG))
+                        Some(Message::RollBy(CAMERA_ROTATION_STEP_DEGREES))
                     }
                     _ => None,
                 },
