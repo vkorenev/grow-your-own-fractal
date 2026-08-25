@@ -17,7 +17,7 @@ use wasm_bindgen::closure::Closure;
 
 pub(crate) type RendererState = StoredValue<Option<CanvasRenderer>, LocalStorage>;
 
-const ROTATION_STEP_DEG: f32 = 5.0;
+pub(crate) const ROTATION_STEP_DEG: f32 = 5.0;
 
 #[derive(Clone)]
 enum ViewportError {
@@ -121,6 +121,24 @@ pub(crate) struct RenderContext {
     /// Snapshot of the currently applied config for rendering/export.
     pub(crate) config_for_render: Callback<(), Config>,
     pub(crate) set_hue_rotation: Callback<Option<HueRotationDirection>>,
+    /// Fits and resets the camera — the same action as pressing `F`.
+    pub(crate) camera_reset: Callback<()>,
+    /// Changes azimuth/elevation by `(d_az, d_el)` degrees — the same action
+    /// as an arrow-key press. A no-op outside a 3D scene.
+    pub(crate) camera_orbit: Callback<(f32, f32)>,
+    /// Rolls by the given signed degrees — the same action as `Q`/`E`. A
+    /// no-op outside a 3D scene.
+    pub(crate) camera_roll: Callback<f32>,
+    /// `false` while no `CanvasRenderer` is currently installed (before
+    /// first init, and during GPU surface recovery, when it's briefly taken
+    /// out of `RendererState`) or while `viewport_error` is set (a failed
+    /// rebuild or an unavailable renderer) — every camera action already
+    /// silently no-ops in either state (`with_renderer` is a no-op with no
+    /// renderer installed; see also `CanvasRenderer::{orbit_and_render,
+    /// roll_and_render, reset_and_render}`'s own scene-state guards), so the
+    /// camera pane uses this to disable its buttons instead of leaving them
+    /// visibly clickable but inert.
+    pub(crate) camera_ready: Memo<bool>,
 }
 
 #[component]
@@ -209,6 +227,7 @@ pub(crate) fn App() -> impl IntoView {
     };
 
     let canvas_ref = NodeRef::<Canvas>::new();
+    let renderer_ready = RwSignal::new(false);
 
     let config_for_render = move || Config {
         name: selected_name.get_untracked(),
@@ -228,6 +247,7 @@ pub(crate) fn App() -> impl IntoView {
             let Some(Some(mut renderer_state)) = renderer.try_update_value(|opt| opt.take()) else {
                 return;
             };
+            renderer_ready.set(false);
             match renderer_state.recover_surface(canvas.clone()).await {
                 Ok(()) => {
                     let config = config_for_render();
@@ -244,6 +264,7 @@ pub(crate) fn App() -> impl IntoView {
                     } else {
                         update_viewport_error(viewport_error, outcome.rebuild_result);
                         renderer.update_value(|opt| *opt = Some(renderer_state));
+                        renderer_ready.set(true);
                     }
                 }
                 Err(err) => {
@@ -253,6 +274,42 @@ pub(crate) fn App() -> impl IntoView {
             }
         });
     };
+
+    let camera_ready =
+        Memo::new(move |_| renderer_ready.get() && viewport_error.with(|e| e.is_none()));
+    let camera_reset = Callback::new(move |()| {
+        let Some(canvas) = canvas_ref.get_untracked() else {
+            return;
+        };
+        with_renderer(canvas, renderer, recover_after_render, |r, c| {
+            r.reset_and_render(c)
+        });
+        if let Some(canvas) = canvas_ref.get_untracked() {
+            let _ = canvas.focus();
+        }
+    });
+    let camera_orbit = Callback::new(move |(d_az, d_el): (f32, f32)| {
+        let Some(canvas) = canvas_ref.get_untracked() else {
+            return;
+        };
+        with_renderer(canvas, renderer, recover_after_render, move |r, c| {
+            r.orbit_and_render(c, d_az, d_el)
+        });
+        if let Some(canvas) = canvas_ref.get_untracked() {
+            let _ = canvas.focus();
+        }
+    });
+    let camera_roll = Callback::new(move |degrees: f32| {
+        let Some(canvas) = canvas_ref.get_untracked() else {
+            return;
+        };
+        with_renderer(canvas, renderer, recover_after_render, move |r, c| {
+            r.roll_and_render(c, degrees)
+        });
+        if let Some(canvas) = canvas_ref.get_untracked() {
+            let _ = canvas.focus();
+        }
+    });
 
     let animation_active = Memo::new(move |_| {
         (auto_rotate.get() && is_3d.get())
@@ -329,6 +386,7 @@ pub(crate) fn App() -> impl IntoView {
             match CanvasRenderer::new(canvas.clone()).await {
                 Ok(new_renderer) => {
                     renderer.update_value(|opt| *opt = Some(new_renderer));
+                    renderer_ready.set(true);
                     let config = config_for_render();
                     with_renderer_for_rebuild(
                         canvas,
@@ -575,6 +633,10 @@ pub(crate) fn App() -> impl IntoView {
         animation_error,
         config_for_render: Callback::new(move |()| config_for_render()),
         set_hue_rotation: Callback::new(try_set_hue_rotation),
+        camera_reset,
+        camera_orbit,
+        camera_roll,
+        camera_ready,
     });
 
     view! {
@@ -617,6 +679,7 @@ pub(crate) fn App() -> impl IntoView {
                 <crate::panels::config_toml::ConfigTomlPanel />
                 <crate::panels::grammar::GrammarPanel />
                 <crate::panels::colors::ColorsPanel />
+                <crate::panels::camera::CameraPanel />
                 <crate::panels::animations::AnimationsPanel />
                 <crate::panels::save::SavePanel />
                 </div>
@@ -704,53 +767,33 @@ pub(crate) fn App() -> impl IntoView {
                         }
                     }
                     on:keydown=move |ev: web_sys::KeyboardEvent| {
-                        let Some(canvas) = canvas_ref.get_untracked() else {
-                            return;
-                        };
                         let key = ev.key();
                         if key.eq_ignore_ascii_case("f") {
-                            with_renderer(
-                                canvas,
-                                renderer,
-                                recover_after_render,
-                                |r, c| r.reset_and_render(c),
-                            );
+                            camera_reset.run(());
                         } else if is_3d.get_untracked() {
                             let handled = match key.as_str() {
                                 "ArrowLeft" => {
-                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                                        r.orbit_and_render(c, -ROTATION_STEP_DEG, 0.0)
-                                    });
+                                    camera_orbit.run((-ROTATION_STEP_DEG, 0.0));
                                     true
                                 }
                                 "ArrowRight" => {
-                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                                        r.orbit_and_render(c, ROTATION_STEP_DEG, 0.0)
-                                    });
+                                    camera_orbit.run((ROTATION_STEP_DEG, 0.0));
                                     true
                                 }
                                 "ArrowUp" => {
-                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                                        r.orbit_and_render(c, 0.0, ROTATION_STEP_DEG)
-                                    });
+                                    camera_orbit.run((0.0, ROTATION_STEP_DEG));
                                     true
                                 }
                                 "ArrowDown" => {
-                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                                        r.orbit_and_render(c, 0.0, -ROTATION_STEP_DEG)
-                                    });
+                                    camera_orbit.run((0.0, -ROTATION_STEP_DEG));
                                     true
                                 }
                                 "q" | "Q" => {
-                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                                        r.roll_and_render(c, -ROTATION_STEP_DEG)
-                                    });
+                                    camera_roll.run(-ROTATION_STEP_DEG);
                                     true
                                 }
                                 "e" | "E" => {
-                                    with_renderer(canvas, renderer, recover_after_render, |r, c| {
-                                        r.roll_and_render(c, ROTATION_STEP_DEG)
-                                    });
+                                    camera_roll.run(ROTATION_STEP_DEG);
                                     true
                                 }
                                 _ => false,

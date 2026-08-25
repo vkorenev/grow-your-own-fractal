@@ -122,6 +122,59 @@ Both applications expose transient on/off and speed controls for camera
 auto-rotation in 3D. Camera auto-rotation speed is constrained to `5..=360`
 degrees per second in steps of 5.
 
+## Camera pane
+
+Both applications expose a camera pane with a Reset view button and, in 3D,
+orbit and roll buttons. Each button performs the same camera action, on the
+same target, as its keyboard equivalent defined in
+[Rendering and interaction](rendering-and-interaction.md#shared-controls):
+Reset view fits and resets the view like `F`; the orbit buttons match the
+Left/Right/Up/Down arrow actions; the roll buttons match `Q`/`E`. A pane
+button dispatches through the same mechanism as its keyboard equivalent and
+introduces no separate targeting behavior of its own. These are discrete
+actions, not a pointer drag, so pane buttons do not suspend camera
+auto-rotation, the same as their keyboard equivalents.
+
+Orbit and roll buttons are 3D-only and are not shown in 2D, where those
+actions have no camera effect. Reset view is available in both dimensions.
+
+Every camera pane button is disabled, rather than staying clickable with no
+visible response, in states where its action is known to have no effect.
+
+**Platform variant:** The Iced app disables every camera pane button while a
+scene regeneration triggered by the current configuration is pending.
+
+**Platform variant:** The primary Leptos app disables every camera pane
+button while no renderer is currently installed (including while briefly
+recovering a lost GPU surface), or while the current scene is unavailable
+because its most recent rebuild failed. That unavailability is a persistent
+state, not a one-render check: a later render that only updates colors, not
+geometry, does not clear it, since it does not attempt to rebuild the
+missing scene. Only a render that successfully rebuilds the scene clears it.
+
+**Non-normative:** Neither app's coverage is exhaustive. The Iced app has no
+recoverable render-failure state to gate on, so a failed generation isn't
+covered there. The web app has no signal analogous to Iced's
+pending-regeneration flag, so there is an unverified, narrow window between
+a configuration change and the scene catching up where a button can be
+enabled but not yet effective. Each app covers the states it already tracks
+for other purposes, not every theoretically possible one.
+
+Camera pane actions are transient viewport actions, independent of the
+selected entry's applied document and draft state: they remain available
+while a raw TOML or grammar draft is pending, and never apply, revert, or
+discard a draft. This is distinct from the workspace Reset control described
+above, which restores a bundled entry's original document and discards its
+pending draft; the camera pane's Reset view button only affects the camera
+and never touches the document.
+
+**Platform variant:** In the primary Leptos app, clicking a pane button moves
+keyboard focus off the fractal canvas. The app restores canvas focus after
+the action, so keyboard camera controls keep working immediately afterward.
+
+**Platform variant:** The Iced app's keyboard camera controls are not tied to
+canvas focus, so its camera pane needs no focus-restoration behavior.
+
 ## Interactive iteration limit
 
 The authored iteration domain is `0..=65535`. Each application additionally

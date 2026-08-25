@@ -13,7 +13,9 @@ use lsystem_app_model::{
 use lsystem_app_model::{ConfigDefaults, EditorColorConfig, EditorLineColorConfig};
 use lsystem_core::{LineColorConfig, Rgb};
 
-use super::app_state::{ColorDefaultField, FractalApp, Message, normalized_rename_name};
+use super::app_state::{
+    ColorDefaultField, FractalApp, Message, ROTATION_STEP_DEG, normalized_rename_name,
+};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
@@ -111,6 +113,54 @@ impl FractalApp {
             );
 
         controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
+
+        // `scene_pending` is true while a regeneration is in flight — including a
+        // dimension-changing one, where `effective_is_3d()` (used for `is_3d` below)
+        // can briefly disagree with `self.scene.is_3d()` (used by the `RotateBy`/
+        // `RollBy` handlers). Gating every camera button's `on_press` on
+        // `camera_ready` prevents a visible-but-inert button during that window,
+        // without changing keyboard behavior at all.
+        let camera_ready = !self.scene_pending;
+        controls = controls.push(text("Camera").size(13)).push(
+            row![button("Reset view").on_press_maybe(camera_ready.then_some(Message::Fit))]
+                .spacing(8),
+        );
+
+        if is_3d {
+            controls = controls
+                .push(
+                    row![
+                        button("◀").on_press_maybe(camera_ready.then_some(Message::RotateBy {
+                            d_az: -ROTATION_STEP_DEG,
+                            d_el: 0.0,
+                        })),
+                        button("▶").on_press_maybe(camera_ready.then_some(Message::RotateBy {
+                            d_az: ROTATION_STEP_DEG,
+                            d_el: 0.0,
+                        })),
+                        button("▲").on_press_maybe(camera_ready.then_some(Message::RotateBy {
+                            d_az: 0.0,
+                            d_el: ROTATION_STEP_DEG,
+                        })),
+                        button("▼").on_press_maybe(camera_ready.then_some(Message::RotateBy {
+                            d_az: 0.0,
+                            d_el: -ROTATION_STEP_DEG,
+                        })),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    row![
+                        button("↺ Roll").on_press_maybe(
+                            camera_ready.then_some(Message::RollBy(-ROTATION_STEP_DEG))
+                        ),
+                        button("↻ Roll").on_press_maybe(
+                            camera_ready.then_some(Message::RollBy(ROTATION_STEP_DEG))
+                        ),
+                    ]
+                    .spacing(8),
+                );
+        }
 
         if !is_dirty {
             controls = controls.push(text("PNG width").size(13)).push(

@@ -23,7 +23,7 @@ use crate::export::{ExportKind, ExportOutcome, ExportRequest, handle_export};
 use super::fractal_canvas::{Scene, SceneBuildResult, build_scene};
 use super::{PNG_MAX_DIMENSION, PNG_MIN_DIMENSION};
 
-const ROTATION_STEP_DEG: f32 = 5.0;
+pub(super) const ROTATION_STEP_DEG: f32 = 5.0;
 const AUTO_ROTATE_DT_SECS: f32 = 1.0 / 60.0;
 
 fn camera_auto_rotation_active(auto_rotate: bool, is_3d: bool, orbit_drag_active: bool) -> bool {
