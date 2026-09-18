@@ -68,8 +68,8 @@ away from the exact poles to `-89..=89` degrees.
 | Primary drag | Pan. | Orbit in direct-manipulation direction. |
 | Wheel or scroll gesture | Zoom toward the pointer. | Change camera distance. |
 | `F` | Fit and reset the 2D view. | Fit and reset the 3D camera. |
-| Left/Right arrows | No camera action. | Change azimuth by 5 degrees. |
-| Up/Down arrows | No camera action. | Change elevation by 5 degrees. |
+| Left/Right arrows | No camera action. | Change azimuth by 5 degrees, in the same direct-manipulation sense as drag. |
+| Up/Down arrows | No camera action. | Change elevation by 5 degrees, in the same direct-manipulation sense as drag. |
 | `Q` / `E` | No camera action. | Roll clockwise / counter-clockwise by 5 degrees. |
 
 Keyboard controls apply while the fractal viewport has focus.
@@ -86,7 +86,8 @@ navigation.
 ## Animation
 
 Camera auto-rotation affects only 3D scenes. It advances azimuth around the
-world Y axis at the configured speed.
+world Y axis at the configured speed, in the same direct-manipulation sense
+as drag and the orbit controls.
 
 During a pointer orbit, camera auto-rotation is suspended without clearing the
 user’s enabled setting. It resumes when the orbit ends or is cancelled. Hue
