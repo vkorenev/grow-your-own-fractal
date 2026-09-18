@@ -183,16 +183,19 @@ impl Scene {
         self.camera.orbit_by_pixels(delta);
     }
 
+    /// Buttons/keyboard send a raw camera-orbit delta; negate it so it
+    /// matches drag's direct-manipulation direction instead of opposing it.
     pub(super) fn orbit_by(&mut self, d_az: f32, d_el: f32) {
-        self.camera.orbit_by(d_az, d_el);
+        self.camera.orbit_by(-d_az, -d_el);
     }
 
     pub(super) fn roll_by(&mut self, degrees: f32) {
         self.camera.roll_by(degrees);
     }
 
+    /// Negated to match `orbit_by`'s (now-reversed) direction.
     pub(super) fn auto_rotate_by(&mut self, degrees: f32) {
-        self.camera.auto_rotate_by(degrees);
+        self.camera.auto_rotate_by(-degrees);
     }
 
     pub(super) fn zoom_toward_cursor(&mut self, delta_y: f32, cursor: Point, size: Size) {
@@ -1136,5 +1139,44 @@ mod tests {
         ));
 
         assert!(matches!(result, SceneBuildResult::Cancelled));
+    }
+
+    fn three_d_scene() -> Scene {
+        Scene::from_geometry(
+            &color_config(),
+            SceneGeometry::ThreeD {
+                segments: Arc::new(Vec::new()),
+                bounds: BoundingCylinder3D {
+                    center_xz: Vec2::ZERO,
+                    radius: 1.0,
+                    min_y: -1.0,
+                    max_y: 1.0,
+                },
+            },
+            Camera::new(),
+            0,
+        )
+    }
+
+    #[test]
+    fn button_orbit_and_auto_rotate_reverse_the_raw_camera_orbit_sign() {
+        let mut scene = three_d_scene();
+        let start_elevation = scene.camera.elevation;
+
+        scene.orbit_by(5.0, 3.0);
+        assert_eq!(scene.camera.azimuth, -5.0);
+        assert_eq!(scene.camera.elevation, start_elevation - 3.0);
+
+        scene.auto_rotate_by(2.0);
+        assert_eq!(scene.camera.azimuth, -7.0);
+    }
+
+    #[test]
+    fn roll_is_not_reversed() {
+        let mut scene = three_d_scene();
+
+        scene.roll_by(4.0);
+
+        assert_eq!(scene.camera.roll, 4.0);
     }
 }

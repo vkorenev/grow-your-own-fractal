@@ -228,7 +228,8 @@ impl CanvasRenderer {
         hue_offset_degrees: Option<f32>,
     ) -> RenderStatus {
         if let (ActiveScene::ThreeD(_), Some(degrees)) = (&self.scene, auto_rotate_degrees) {
-            self.camera.auto_rotate_by(degrees);
+            // Negated to match the (now-reversed) orbit buttons' direction.
+            self.camera.auto_rotate_by(-degrees);
         }
         if !matches!(self.scene, ActiveScene::NoUpload)
             && let Some(offset) = hue_offset_degrees
@@ -309,7 +310,9 @@ impl CanvasRenderer {
         d_el: f32,
     ) -> RenderStatus {
         if matches!(self.scene, ActiveScene::ThreeD(_)) {
-            self.camera.orbit_by(d_az, d_el);
+            // Buttons/keyboard send a raw camera-orbit delta; negate it so it
+            // matches drag's direct-manipulation direction instead of opposing it.
+            self.camera.orbit_by(-d_az, -d_el);
         }
         self.render(canvas)
     }
