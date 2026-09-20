@@ -3,7 +3,7 @@
 Exports use the resolved configuration and the same geometry and
 [color semantics](rendering-and-interaction.md#color-modes) as live rendering.
 Suggested filenames follow the rules in
-[Application workspace](application-workspace.md#copy-import-rename-and-save).
+[Application workspace](application-workspace.md#copy-import-rename-remove-and-save).
 
 ## Format availability
 

@@ -75,7 +75,11 @@ pub(crate) struct ConfigContext {
     pub(crate) selected_id: Memo<ConfigEntryId>,
     pub(crate) selected_name: Memo<String>,
     pub(crate) display_options: Memo<Vec<(ConfigEntryId, String)>>,
-    pub(crate) differs_from_default: Memo<bool>,
+    /// Whether the selected entry is a bundled preset (Reset) rather than a custom
+    /// copy/import (Remove).
+    pub(crate) selected_is_bundled: Memo<bool>,
+    /// Whether Reset is enabled: see `ConfigEntry::can_reset`.
+    pub(crate) can_reset: Memo<bool>,
     pub(crate) generation_config: Memo<GenerationConfig>,
     pub(crate) editor_color_config: Memo<EditorColorConfig>,
     pub(crate) control_line_color: Memo<LineColorConfig>,
@@ -172,8 +176,9 @@ pub(crate) fn App() -> impl IntoView {
     let selected_name =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().name().to_string()));
     let display_options = Memo::new(move |_| config_workspace.with(|ws| ws.display_options()));
-    let differs_from_default =
-        Memo::new(move |_| config_workspace.with(|ws| ws.selected().differs_from_default()));
+    let selected_is_bundled =
+        Memo::new(move |_| config_workspace.with(|ws| ws.selected().is_bundled()));
+    let can_reset = Memo::new(move |_| config_workspace.with(|ws| ws.selected().can_reset()));
     let editor_generation_config = Memo::new(move |_| {
         config_workspace.with(|ws| ws.selected().editor_config().generation.clone())
     });
@@ -490,7 +495,8 @@ pub(crate) fn App() -> impl IntoView {
     };
 
     // Resync editor panels whenever a different entry becomes selected (select,
-    // copy, import). Same-id mutations that change the applied document
+    // copy, import, remove). Removal always selects a different entry, so this watcher
+    // is its single resync path. Same-id mutations that change the applied document
     // (apply, reset) call select_current_config() explicitly; keying this
     // watch off the applied config instead would clobber in-progress
     // grammar drafts on unrelated parameter edits. Reverting the raw TOML
@@ -585,7 +591,8 @@ pub(crate) fn App() -> impl IntoView {
         selected_id,
         selected_name,
         display_options,
-        differs_from_default,
+        selected_is_bundled,
+        can_reset,
         generation_config,
         editor_color_config,
         control_line_color,

@@ -43,19 +43,48 @@ impl FractalApp {
                 .iter()
                 .find(|(id, _)| *id == selected_id)
                 .cloned();
-            let can_reset = !is_dirty && selected_entry.differs_from_default();
-            column![
-                pick_list(selected_preset, preset_options, |(_, label)| label.clone())
-                    .on_select(|(id, _)| Message::PresetSelected(id))
-                    .width(Length::Fill),
-                row![
-                    button("Copy").on_press(Message::CopyConfig),
-                    button("Rename").on_press(Message::BeginRename),
-                    button("Reset").on_press_maybe(can_reset.then_some(Message::ResetConfig)),
+            if self.pending_removal == Some(selected_id) {
+                // Inline confirmation replaces the pick list and action row, so the
+                // selection cannot change while it is open.
+                let label = selected_preset
+                    .as_ref()
+                    .map_or_else(|| selected_entry.name(), |(_, label)| label.as_str());
+                column![
+                    text(format!(
+                        "Remove \"{label}\"? Any unapplied changes will be discarded."
+                    ))
+                    .size(13)
+                    .style(text::warning),
+                    row![
+                        button("Remove")
+                            .style(button::danger)
+                            .on_press(Message::ConfirmRemove),
+                        button("Cancel").on_press(Message::CancelRemove),
+                    ]
+                    .spacing(8),
                 ]
-                .spacing(8),
-            ]
-            .spacing(8)
+                .spacing(8)
+            } else {
+                // Bundled entries can only be reset; custom entries can only be removed.
+                let reset_or_remove = if selected_entry.is_bundled() {
+                    button("Reset")
+                        .on_press_maybe(selected_entry.can_reset().then_some(Message::ResetConfig))
+                } else {
+                    button("Remove").on_press(Message::BeginRemove)
+                };
+                column![
+                    pick_list(selected_preset, preset_options, |(_, label)| label.clone())
+                        .on_select(|(id, _)| Message::PresetSelected(id))
+                        .width(Length::Fill),
+                    row![
+                        button("Copy").on_press(Message::CopyConfig),
+                        button("Rename").on_press(Message::BeginRename),
+                        reset_or_remove,
+                    ]
+                    .spacing(8),
+                ]
+                .spacing(8)
+            }
         };
 
         let mut controls = column![

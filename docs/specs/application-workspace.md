@@ -34,8 +34,12 @@ Reverting discards the draft and restores the displayed TOML from the
 last-applied document.
 
 Resetting a bundled entry restores its original embedded document and discards
-any pending draft. A custom copy or import has no bundled default and cannot be
-reset. Applications expose reset only when it has a visible effect.
+any pending draft, without asking for confirmation. A custom copy or import has
+no bundled default and cannot be reset. Bundled entries display Reset, enabled
+if and only if resetting would change the applied document or discard a pending
+draft; custom entries do not display it. A pending raw TOML draft therefore
+keeps Reset enabled. Reset is a workspace action, not one of the direct
+configuration controls described next.
 
 Direct configuration controls update specific values in the selected entry's
 applied document without using the raw TOML editor. They operate on clean
@@ -50,30 +54,53 @@ draft is pending, noting that using its controls discards the draft.
 only safeguard until a general undo capability exists; adding one is expected
 to cover recovery of a discarded draft.
 
-## Copy, import, rename, and save
+## Copy, import, rename, remove, and save
 
-Copying creates and selects a custom entry with a fresh identity and no bundled
-default. Its name starts with `<current name> copy` and gains the first numeric
-suffix that makes it unique. The copy preserves a pending draft, including
-invalid draft text; parseable applied and draft documents are renamed to the
-copy name.
+Copying creates a custom entry with a fresh identity and no bundled default,
+appends it to the end of the workspace order, and selects it. Its name starts
+with `<current name> copy` and gains the first numeric suffix that makes it
+unique. The copy preserves a pending draft, including invalid draft text;
+parseable applied and draft documents are renamed to the copy name.
 
 Importing TOML parses and validates it before modifying the workspace. Success
-creates and selects a custom entry with the authored name. Failure leaves the
-entry list and selection unchanged. Imported names are permitted to duplicate
-existing names.
+creates a custom entry with the authored name, appends it to the end of the
+workspace order, and selects it. Failure leaves the entry list and selection
+unchanged. Imported names are permitted to duplicate existing names.
 
 Renaming changes `metadata.name` in the applied source and in a parseable
 pending draft. An unparseable pending draft remains verbatim. Names do not need
 to be unique.
+
+Removing deletes the selected entry from the session workspace. Custom entries
+display Remove; bundled entries do not display it and cannot be removed, so the
+workspace always retains at least one entry. Remove is a workspace action, not
+one of the direct configuration controls described above, and it is available
+while a raw TOML draft is pending.
+
+Removal requires explicit confirmation. The confirmation identifies the entry
+and states that any unapplied changes will be discarded. It applies only while
+the identified entry remains selected: changing the selection dismisses it and
+removes nothing, and cancelling it leaves the workspace unchanged. Confirming
+removes the identified entry, never a different one, together with its pending
+drafts: the raw TOML draft and, where the application has one, the structured
+grammar draft. Removal is an in-session action only: an imported file is never
+modified or deleted.
+
+**Non-normative:** Removal provides no undo, like the discards described
+earlier; a general undo capability is expected to cover it as well.
+
+After removal, the entry that followed the removed entry in workspace order
+becomes selected. If the removed entry was last, the entry that preceded it
+becomes selected instead. The newly selected entry is displayed and rendered as
+for any other selection change.
 
 Suggested filenames are derived from the applied name. ASCII letters and
 digits are lowercased and preserved; every other character becomes `_`; the
 requested extension is then appended. Consecutive substitutions are not
 collapsed.
 
-Both applications expose preset selection, Copy, Rename, Reset, and raw TOML
-Apply/Revert controls.
+Both applications expose preset selection, Copy, Rename, Reset, Remove, and raw
+TOML Apply/Revert controls.
 
 **Platform variant:** The primary Leptos app additionally exposes Open and Save
 controls. Open imports one `.toml` file. Save downloads the currently displayed

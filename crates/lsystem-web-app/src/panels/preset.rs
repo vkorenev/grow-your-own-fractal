@@ -2,7 +2,7 @@ use crate::app::ConfigContext;
 use crate::export::download_toml;
 use leptos::html::Input;
 use leptos::prelude::*;
-use lsystem_app_model::ConfigEntryId;
+use lsystem_app_model::{ConfigEntryId, ConfigWorkspaceError};
 
 #[component]
 pub(crate) fn PresetPanel() -> impl IntoView {
@@ -11,7 +11,8 @@ pub(crate) fn PresetPanel() -> impl IntoView {
         selected_id,
         selected_name,
         display_options,
-        differs_from_default,
+        selected_is_bundled,
+        can_reset,
         workspace_error,
         toml_text,
         select_current_config,
@@ -19,6 +20,11 @@ pub(crate) fn PresetPanel() -> impl IntoView {
     } = expect_context();
 
     let rename_mode = RwSignal::new(false);
+    // The custom entry awaiting removal confirmation. Per the specification only a
+    // selection change dismisses it, so it is cleared by a watcher keyed on `selected_id`
+    // alone (unlike the rename form, draft edits must not dismiss it) and confirming
+    // removes only this id.
+    let pending_removal = RwSignal::new(None::<ConfigEntryId>);
     let rename_draft = RwSignal::new(String::new());
     let file_input_ref = NodeRef::<Input>::new();
 
@@ -45,6 +51,12 @@ pub(crate) fn PresetPanel() -> impl IntoView {
         false,
     );
 
+    Effect::watch(
+        move || selected_id.get(),
+        move |_, _, _: Option<()>| pending_removal.set(None),
+        false,
+    );
+
     let commit_rename = move || {
         let name = rename_draft.get_untracked().trim().to_string();
         let result = config_workspace.write().selected_mut().rename(&name);
@@ -57,7 +69,13 @@ pub(crate) fn PresetPanel() -> impl IntoView {
         }
     };
 
+    // Reset is a workspace action, not a direct control: `can_reset` keeps it enabled while
+    // a raw TOML draft is pending, and it deliberately discards that draft.
     let do_reset = move || {
+        if !can_reset.get_untracked() {
+            log::warn!("do_reset: nothing to reset; button guard may have been bypassed");
+            return;
+        }
         let reset = config_workspace.write().selected_mut().reset_to_default();
         if reset {
             select_current_config.run(());
@@ -66,6 +84,42 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                 "do_reset: no-op for entry without a bundled default; button guard may have been bypassed"
             );
         }
+    };
+
+    let begin_remove = move || {
+        if selected_is_bundled.get_untracked() {
+            log::error!("begin_remove: bundled entry; button guard may have been bypassed");
+            workspace_error.set(Some(ConfigWorkspaceError::CannotRemoveBundled.to_string()));
+            return;
+        }
+        rename_mode.set(false);
+        pending_removal.set(Some(selected_id.get_untracked()));
+    };
+
+    // Removal changes `selected_id`, so the watcher in `App` (`select_current_config`)
+    // resyncs the editors and clears panel errors; nothing to resync here.
+    let confirm_remove = move |confirmed_id: ConfigEntryId| {
+        pending_removal.set(None);
+        if config_workspace.with_untracked(|workspace| workspace.selected_id()) != confirmed_id {
+            log::error!("confirm_remove: {confirmed_id} is no longer selected");
+            workspace_error.set(Some("Internal error: could not remove config.".to_string()));
+            return;
+        }
+        let result = config_workspace.write().remove_selected();
+        if let Err(e) = result {
+            workspace_error.set(Some(e.to_string()));
+        }
+    };
+
+    let selected_label = move || {
+        let id = selected_id.get();
+        display_options.with(|options| {
+            options
+                .iter()
+                .find(|(option_id, _)| *option_id == id)
+                .map(|(_, label)| label.clone())
+                .unwrap_or_default()
+        })
     };
 
     view! {
@@ -127,6 +181,29 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                         <button type="button" on:click=move |_| rename_mode.set(false)>"Cancel"</button>
                     </div>
                 }.into_any()
+            } else if let Some(confirmed_id) =
+                pending_removal.get().filter(|id| *id == selected_id.get())
+            {
+                view! {
+                    <div style="display:contents">
+                        <span class="inline-status warning">
+                            {move || format!(
+                                "Remove \"{}\"? Any unapplied changes will be discarded.",
+                                selected_label()
+                            )}
+                        </span>
+                        <div class="btn-row">
+                            <button
+                                type="button"
+                                on:click=move |_| confirm_remove(confirmed_id)
+                            >"Remove"</button>
+                            <button
+                                type="button"
+                                on:click=move |_| pending_removal.set(None)
+                            >"Cancel"</button>
+                        </div>
+                    </div>
+                }.into_any()
             } else {
                 view! {
                     <div style="display:contents">
@@ -146,14 +223,28 @@ pub(crate) fn PresetPanel() -> impl IntoView {
                                     rename_draft.set(config_workspace.with_untracked(|workspace| {
                                         workspace.selected().name_for_rename().into_owned()
                                     }));
+                                    pending_removal.set(None);
                                     rename_mode.set(true);
                                 }
                             >"Rename"</button>
-                            <button
-                                type="button"
-                                disabled=move || !differs_from_default.get()
-                                on:click=move |_| do_reset()
-                            >"Reset"</button>
+                            // Bundled entries can only be reset; custom entries can only be
+                            // removed.
+                            {move || if selected_is_bundled.get() {
+                                view! {
+                                    <button
+                                        type="button"
+                                        disabled=move || !can_reset.get()
+                                        on:click=move |_| do_reset()
+                                    >"Reset"</button>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <button
+                                        type="button"
+                                        on:click=move |_| begin_remove()
+                                    >"Remove"</button>
+                                }.into_any()
+                            }}
                         </div>
                         <hr class="section-divider" />
                         <div class="btn-row">
