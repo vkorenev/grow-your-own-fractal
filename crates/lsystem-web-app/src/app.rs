@@ -7,7 +7,7 @@ use leptos::prelude::*;
 use lsystem_app_model::{
     CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND, CAMERA_ROTATION_STEP_DEGREES, CleanMut,
     ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorColorConfig,
-    EntryViewMut, HueRotation, HueRotationDirection, ParseConfigError,
+    EntryViewMut, HueRotation, HueRotationDirection, ParseConfigError, PersistedBaseline,
     advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
 use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols};
@@ -143,67 +143,198 @@ pub(crate) struct RenderContext {
     pub(crate) camera_ready: Memo<bool>,
 }
 
+/// How long startup waits for browser storage before proceeding without it.
+///
+/// An implementation choice: the spec requires only that the wait is bounded.
+/// Long enough that a healthy IndexedDB open + load (normally a few
+/// milliseconds) is never cut short, short enough that a blocked database
+/// upgrade in another tab does not leave the user staring at an empty shell.
+const STARTUP_LOAD_TIMEOUT_MS: u32 = 3_000;
+
 /// Resolved startup state: the config workspace seeded from bundled presets
-/// and, if any, restored from autosaved TOML, plus the IndexedDB handle used
-/// for autosave writes (`None` if the database could not be opened).
+/// and, if any, restored from browser storage, plus the baseline describing
+/// what this window last loaded from storage (empty when nothing was loaded).
 struct InitialState {
     workspace: ConfigWorkspace,
-    db: Option<idb::Database>,
+    baseline: PersistedBaseline,
+}
+
+impl InitialState {
+    /// Bundled presets with nothing recorded as persisted: the state to start
+    /// from when storage is unavailable, failed to load, or timed out.
+    fn bundled() -> Self {
+        Self {
+            workspace: ConfigWorkspace::from_presets(load_presets())
+                .expect("bundled presets should parse"),
+            baseline: PersistedBaseline::default(),
+        }
+    }
+}
+
+/// Progress of the startup decision shared by `AppRoot`'s two startup tasks.
+///
+/// This is a three-state value rather than an `Option` so that "already
+/// decided" stays observable after `App` has taken the state: the late `open`
+/// path and the timer both need to tell "still waiting" from "decided and
+/// consumed".
+enum Startup {
+    /// Neither the loader nor the timer has decided yet.
+    Pending,
+    /// A decision was made and `App` has not been mounted from it yet.
+    Ready(InitialState),
+    /// A decision was made and `App` has been mounted from it.
+    Started,
+}
+
+type StartupSignal = RwSignal<Startup, LocalStorage>;
+
+fn startup_pending(init: StartupSignal) -> bool {
+    init.with_untracked(|startup| matches!(startup, Startup::Pending))
+}
+
+/// Records `state` as the startup decision unless one has already been made.
+/// Returns whether `state` was used; whichever caller gets here first wins.
+fn settle_startup(init: StartupSignal, state: InitialState) -> bool {
+    if !startup_pending(init) {
+        return false;
+    }
+    init.set(Startup::Ready(state));
+    true
 }
 
 /// Mounts at the document root. Gates `App` (and all its interactive
-/// controls) behind the async IndexedDB restore attempt, so a user can never
-/// interact with a stale bundled-preset config that then gets clobbered by a
-/// later-resolving restore. Renders an empty `app-shell` placeholder until
-/// the restore has fully resolved (success, "nothing stored", or failure —
-/// `storage::open`/`storage::load` always resolve, never hang).
+/// controls) behind the async IndexedDB restore attempt, so that, within the
+/// bounded wait described below, a user cannot interact with a stale
+/// bundled-preset config that a later-resolving restore then clobbers.
+/// Renders an empty `app-shell` placeholder until startup has been decided.
+///
+/// The wait is bounded. Two tasks race to decide startup: the loader opens
+/// storage and loads persisted state, and a timer
+/// ([`STARTUP_LOAD_TIMEOUT_MS`]) gives up on it. Whichever settles first
+/// wins. The loader settles with the restored workspace and its baseline on
+/// success, or with bundled presets and an empty baseline if storage failed
+/// to open or load. The timer settles with bundled presets and an empty
+/// baseline, and turns the persistence warning on; a blocked database
+/// upgrade in another tab can make `storage::open` hang, which is what the
+/// timer is for.
+///
+/// If `open` resolves after the timer has won, the loader installs the handle
+/// into `db_slot` and sets `storage_ready`, but never calls `storage::load`,
+/// so the late result can never be applied over what the user has already
+/// started doing. (A load already in progress when the timer fires is
+/// likewise dropped unread.) Saving and refreshing can then work for the rest
+/// of the session.
+///
+/// `persistence_warning` is turned on by a failed open or load, the timer
+/// firing, or the connection being closed by another window's upgrade
+/// (`versionchange`), and is never turned off. An empty but successful load
+/// is normal and does not warn.
+///
+/// Every await of a `storage::` future happens directly in the loader task
+/// (spawned with `spawn_local`) and the timer is a separate task, not a
+/// wrapper: IndexedDB transactions only stay alive while the futures using
+/// them resume from microtasks, so those futures must never be polled from a
+/// timer, animation-frame callback, or resource.
 #[component]
 pub(crate) fn AppRoot() -> impl IntoView {
-    let init: RwSignal<Option<InitialState>, LocalStorage> = RwSignal::new_local(None);
+    let init: StartupSignal = RwSignal::new_local(Startup::Pending);
+    let db_slot: StoredValue<Option<idb::Database>, LocalStorage> = StoredValue::new_local(None);
+    let persistence_warning = RwSignal::new(false);
+    let storage_ready = RwSignal::new(false);
 
+    // Loader.
     wasm_bindgen_futures::spawn_local(async move {
-        let db = crate::storage::open(|| {}).await;
-        let stored_text = match &db {
-            Some(db) => crate::storage::legacy_load(db).await,
-            None => None,
+        let Some(db) = crate::storage::open(move || persistence_warning.set(true)).await else {
+            persistence_warning.set(true);
+            settle_startup(init, InitialState::bundled());
+            return;
         };
 
-        let mut workspace =
-            ConfigWorkspace::from_presets(load_presets()).expect("bundled presets should parse");
-        if let Some(text) = stored_text
-            && let Err(err) = workspace.import_toml(&text)
-        {
-            log::warn!("failed to import autosaved config, using bundled presets: {err}");
+        if !startup_pending(init) {
+            // The timer won. Install the handle for later saves and
+            // refreshes, but do not load: the late result is discarded by
+            // never being read.
+            db_slot.update_value(|slot| *slot = Some(db));
+            storage_ready.set(true);
+            return;
         }
 
-        init.set(Some(InitialState { workspace, db }));
+        let initial = match crate::storage::load(&db).await {
+            Some(stored) => {
+                let mut initial = InitialState::bundled();
+                initial.baseline = initial.workspace.restore(&stored);
+                initial
+            }
+            None => {
+                persistence_warning.set(true);
+                InitialState::bundled()
+            }
+        };
+
+        // Install the handle before settling, so `App` sees it from its
+        // first render.
+        db_slot.update_value(|slot| *slot = Some(db));
+        if !settle_startup(init, initial) {
+            // The timer fired while the load was in flight: `initial` was
+            // dropped unused, and this handle is a late install.
+            storage_ready.set(true);
+        }
+    });
+
+    // Timer. A separate task, never a wrapper around a storage future.
+    wasm_bindgen_futures::spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(STARTUP_LOAD_TIMEOUT_MS).await;
+        if settle_startup(init, InitialState::bundled()) {
+            persistence_warning.set(true);
+        }
     });
 
     view! {
         <Show
-            when=move || init.with(|state| state.is_some())
+            when=move || init.with(|startup| !matches!(startup, Startup::Pending))
             fallback=|| view! { <main class="app-shell"></main> }
         >
             {move || {
-                let InitialState { workspace, db } = init
-                    .try_update_untracked(|state| state.take())
+                let InitialState { workspace, baseline } = init
+                    .try_update_untracked(|startup| {
+                        match std::mem::replace(startup, Startup::Started) {
+                            Startup::Ready(state) => Some(state),
+                            Startup::Pending | Startup::Started => None,
+                        }
+                    })
                     .flatten()
-                    .expect("Show only renders this branch once `init` is Some");
-                view! { <App initial_workspace=workspace db=db /> }
+                    .expect("Show only renders this branch once `init` is Ready");
+                view! {
+                    <App
+                        initial_workspace=workspace
+                        baseline=baseline
+                        db_slot=db_slot
+                        persistence_warning=persistence_warning
+                        storage_ready=storage_ready
+                    />
+                }
             }}
         </Show>
     }
 }
 
+// `baseline`, `persistence_warning` and `storage_ready` are consumed by the
+// storage task and the indicator, which are added in Tasks 7 and 8.
+#[allow(unused_variables)] // removed in Task 7/8
 #[component]
-pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>) -> impl IntoView {
+pub(crate) fn App(
+    initial_workspace: ConfigWorkspace,
+    baseline: PersistedBaseline,
+    db_slot: StoredValue<Option<idb::Database>, LocalStorage>,
+    persistence_warning: RwSignal<bool>,
+    storage_ready: RwSignal<bool>,
+) -> impl IntoView {
     let selected_entry = initial_workspace.selected();
     let color_memory = RwSignal::new(ColorControlMemory::from_editor_config(
         &selected_entry.editor_config().colors,
         &ConfigDefaults::embedded().colors,
     ));
     let config_workspace = RwSignal::new(initial_workspace);
-    let db: StoredValue<Option<idb::Database>, LocalStorage> = StoredValue::new_local(db);
     // Autosave single-flight queue bookkeeping; see the `try_save` closure below.
     let save_in_flight: StoredValue<bool, LocalStorage> = StoredValue::new_local(false);
     let pending_save: StoredValue<Option<String>, LocalStorage> = StoredValue::new_local(None);
@@ -589,21 +720,22 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
     // under several back-to-back changes (e.g. a dragged slider) — nothing
     // is silently superseded by a stale in-flight write.
     let try_save = move |text: String| {
-        // Check `save_in_flight` first, before ever looking at `db`. The
-        // in-flight task below takes the `Database` handle out of `db` for
-        // the entire duration of its save (see the comment at the take
-        // site), so `db` reads as empty while a save is running — that must
-        // never be confused with "storage was never available." This branch
-        // doesn't touch `db` at all: if a save is in flight, its spawned
-        // task already established availability when it started, so this
-        // call only needs to queue the latest value for it to pick up.
+        // Check `save_in_flight` first, before ever looking at `db_slot`.
+        // The in-flight task below takes the `Database` handle out of
+        // `db_slot` for the entire duration of its save (see the comment at
+        // the take site), so `db_slot` reads as empty while a save is
+        // running — that must never be confused with "storage was never
+        // available." This branch doesn't touch `db_slot` at all: if a save
+        // is in flight, its spawned task already established availability
+        // when it started, so this call only needs to queue the latest value
+        // for it to pick up.
         if save_in_flight.get_value() {
             pending_save.set_value(Some(text));
             return;
         }
-        // No save in flight, so `db` (if any) is currently held by nobody —
-        // safe to check availability here.
-        if db.with_value(Option::is_none) {
+        // No save in flight, so `db_slot` (if any) is currently held by
+        // nobody — safe to check availability here.
+        if db_slot.with_value(Option::is_none) {
             // Storage unavailable (IndexedDB failed to open) — degrade silently.
             return;
         }
@@ -611,18 +743,18 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
         wasm_bindgen_futures::spawn_local(async move {
             let mut current = text;
             loop {
-                // Exclusively takes the handle out of `db` for the duration
-                // of this save; `db` reads as empty to any concurrent
-                // `try_save`/`pagehide` call until it's restored just below.
-                // That's fine: those callers gate on `save_in_flight` (set
-                // above, before this task ever runs), not on `db`'s
-                // Some/None state, so a momentarily-empty `db` here is never
-                // mistaken for "storage unavailable."
-                let Some(Some(handle)) = db.try_update_value(|opt| opt.take()) else {
+                // Exclusively takes the handle out of `db_slot` for the
+                // duration of this save; `db_slot` reads as empty to any
+                // concurrent `try_save`/`pagehide` call until it's restored
+                // just below. That's fine: those callers gate on
+                // `save_in_flight` (set above, before this task ever runs),
+                // not on `db_slot`'s Some/None state, so a momentarily-empty
+                // `db_slot` here is never mistaken for "storage unavailable."
+                let Some(Some(handle)) = db_slot.try_update_value(|opt| opt.take()) else {
                     break;
                 };
                 crate::storage::legacy_save(&handle, &current).await;
-                db.update_value(|opt| *opt = Some(handle));
+                db_slot.update_value(|opt| *opt = Some(handle));
                 match pending_save.try_update_value(|opt| opt.take()) {
                     Some(Some(next)) => current = next,
                     _ => break,
