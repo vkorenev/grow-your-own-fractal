@@ -21,7 +21,7 @@ pub use color::{
 pub use config_defaults::{ConfigDefaults, LSystemDefaults, ParseConfigError};
 pub use config_workspace::{
     CleanMut, ConfigEntry, ConfigEntryId, ConfigWorkspace, ConfigWorkspaceError, DirtyMut,
-    EntryViewMut,
+    EntryViewMut, RefreshOutcome,
 };
 pub use editor_config::{
     ConfigDocument, ConfigSource, EditorColorConfig, EditorConfig, EditorGenerationConfig,

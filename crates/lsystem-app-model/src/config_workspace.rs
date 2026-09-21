@@ -26,19 +26,23 @@ pub enum ConfigWorkspaceError {
 
 /// The set of config entries a user can select, edit, copy, import and remove.
 ///
-/// Only the selected entry is edited by the user. Non-selected entries are mutated solely
-/// by [`ConfigWorkspace::assign_custom_id`], which does not change the entry's applied
-/// text. Anything that persists the workspace may therefore skip re-serializing
+/// Only the selected entry is edited by the user. Non-selected entries are mutated by just
+/// two non-user paths: [`ConfigWorkspace::assign_custom_id`], which does not change an
+/// entry's applied text, and [`ConfigWorkspace::refresh`], which adopts what other windows
+/// saved. Both keep the persisted baseline in step with what they change, so neither needs
+/// to start a save. Anything that persists the workspace may therefore skip re-serializing
 /// non-selected entries until the selection, the entry set, or an assigned id changes.
 #[derive(Debug, Clone)]
 pub struct ConfigWorkspace {
     entries: Vec<ConfigEntry>,
     // INVARIANT: `selected < entries.len()`. Upheld by `from_presets` (rejects empty),
     // `select_by_id` (derives the index via `entries.iter().position`), `copy` and
-    // `import_toml` (assign `len() - 1` after a push), and `remove_selected` (re-anchors
-    // to the following entry, or the preceding one when the last entry is removed).
-    // `entries` never becomes empty: `from_presets` requires a bundled entry and
-    // `remove_selected` refuses to remove bundled entries. Any future method that removes
+    // `import_toml` (assign `len() - 1` after a push), `restore` (assigns an index into
+    // `entries`), and `remove_entry` — the one place entries are removed, used by
+    // `remove_selected` and `refresh` — which re-anchors to the following entry, or the
+    // preceding one when the last entry is removed, and steps back when an earlier entry
+    // is removed. `entries` never becomes empty: `from_presets` requires a bundled entry
+    // and `remove_entry` refuses to remove bundled entries. Any future method that removes
     // or reorders entries must re-anchor `selected` to preserve it, because `selected()`/
     // `selected_mut()` index into `entries` directly.
     selected: usize,
@@ -101,6 +105,17 @@ pub enum EntryViewMut<'a> {
 
 pub struct CleanMut<'a>(&'a mut ConfigEntry);
 pub struct DirtyMut<'a>(&'a mut ConfigEntry);
+
+/// What a [`ConfigWorkspace::refresh`] changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RefreshOutcome {
+    /// Whether anything changed: an entry's applied content, or the set of entries.
+    pub changed: bool,
+    /// Whether the selected entry's own applied content was updated in place.
+    pub selected_content_changed: bool,
+    /// Whether the selected entry was removed, so the selection re-anchored onto a neighbor.
+    pub selection_moved: bool,
+}
 
 impl ConfigWorkspace {
     /// Build a workspace from a collection of `(label, text)` preset pairs.
@@ -361,6 +376,163 @@ impl ConfigWorkspace {
         baseline
     }
 
+    /// Picks up what other windows saved, on top of what this window holds, and updates
+    /// `baseline` to match what this window holds afterwards.
+    ///
+    /// `stored` is storage as it was just read and `grammar_draft_pending` says whether the
+    /// selected entry has an unapplied grammar draft (which belongs to the selected entry
+    /// alone). Eligibility is decided entirely from the arguments and the live workspace, so
+    /// callers must call this in the same synchronous step as the read they are applying, and
+    /// must never carry the decision to refresh across an await.
+    ///
+    /// An entry is updated only while this window has nothing of its own pending in it: it
+    /// has no raw draft, it is not the selected entry while a grammar draft is pending, and
+    /// what it holds is exactly what `baseline` records for it (so an applied change not
+    /// saved yet is pending too). A custom entry that `baseline` does not record has never
+    /// been synced and is left alone, as is an entry with no persisted identity at all. Any
+    /// other entry is left completely alone, and its own changes reach storage through the
+    /// normal save and win there.
+    ///
+    /// An eligible entry takes the stored content, reverts to its bundled default if the
+    /// preset was reset elsewhere, and disappears if the custom was removed elsewhere.
+    /// Customs in storage that are neither held here nor recorded in `baseline` (which would
+    /// make them a removal this window has not flushed yet) are appended in ascending
+    /// [`CustomId`] order. Stored preset rows whose path is not bundled are left alone: only
+    /// [`restore`](Self::restore) converts those into custom entries.
+    ///
+    /// The selection is never adopted from storage — [`PersistedBaseline::selected`] is left
+    /// untouched — and moves only when the selected entry is removed, exactly as
+    /// [`remove_selected`](Self::remove_selected) moves it. A caller that re-renders the
+    /// selected configuration should act on `selected_content_changed || selection_moved`.
+    /// Nothing here needs to start a save: `baseline` is kept in step with every change.
+    ///
+    /// Stored content that fails to parse or validate is never deleted, and is reported only
+    /// once: the entry keeps what it has and the content is noted in the baseline's ignored
+    /// map, which suppresses the warning until the stored content changes again.
+    pub fn refresh(
+        &mut self,
+        stored: &StoredState,
+        baseline: &mut PersistedBaseline,
+        grammar_draft_pending: bool,
+    ) -> RefreshOutcome {
+        let mut outcome = RefreshOutcome::default();
+        let stored_entries: HashMap<&PersistedKey, &str> = stored
+            .entries
+            .iter()
+            .map(|persisted| (&persisted.key, persisted.toml.as_str()))
+            .collect();
+        // Removing an entry shifts the ones after it, so removals wait until the scan is done.
+        let mut removed: Vec<ConfigEntryId> = Vec::new();
+
+        for index in 0..self.entries.len() {
+            let entry = &self.entries[index];
+            let Some(key) = entry.persisted_key() else {
+                continue;
+            };
+            let selected = index == self.selected;
+            let eligible = !entry.is_dirty()
+                && !(selected && grammar_draft_pending)
+                && baseline.get(&key) == entry.persisted_repr().as_deref();
+            if !eligible {
+                continue;
+            }
+            let (id, applied) = (entry.id(), entry.applied_text());
+            let is_preset = entry.preset_path().is_some();
+            let differs_from_default = entry.differs_from_default();
+            let found = stored_entries.get(&key).copied();
+
+            match found {
+                // Content this window could not use is not retried until it changes.
+                Some(toml) if baseline.is_ignored(&key, toml) => {}
+                Some(toml) if toml != applied => {
+                    let entry = &mut self.entries[index];
+                    entry.set_draft_text(toml.to_string());
+                    match entry.apply_draft() {
+                        Ok(()) => {
+                            self.record_in_baseline(id, baseline);
+                            outcome.changed = true;
+                            outcome.selected_content_changed |= selected;
+                        }
+                        Err(err) => {
+                            if let EntryViewMut::Dirty(dirty) = entry.view_mut() {
+                                dirty.revert();
+                            }
+                            ignore_stored(baseline, key, toml, &err);
+                        }
+                    }
+                }
+                // Already identical, including a stored preset row equal to the bundled
+                // default: it is treated as absent locally, so it is neither recorded nor
+                // deleted, and the entry stays eligible.
+                Some(_) => {}
+                // Reset elsewhere. A preset already at its default has no stored row and no
+                // baseline record either, so there is nothing to do for it.
+                None if is_preset => {
+                    if differs_from_default {
+                        self.entries[index].reset_to_default();
+                        self.record_in_baseline(id, baseline);
+                        outcome.changed = true;
+                        outcome.selected_content_changed |= selected;
+                    }
+                }
+                // Removed elsewhere. The entry is about to go, so its key is dropped here
+                // rather than through `record_in_baseline`, which describes a live entry.
+                None => {
+                    removed.push(id);
+                    baseline.remove(&key);
+                    outcome.changed = true;
+                }
+            }
+        }
+
+        for id in removed {
+            outcome.selection_moved |= self.remove_entry(id);
+        }
+
+        let mut created: Vec<(CustomId, &str)> = stored
+            .entries
+            .iter()
+            .filter_map(|persisted| match &persisted.key {
+                PersistedKey::Custom(id) => Some((*id, persisted.toml.as_str())),
+                PersistedKey::Preset(_) => None,
+            })
+            .collect();
+        created.sort_by_key(|(id, _)| *id);
+        for (id, toml) in created {
+            let key = PersistedKey::Custom(id);
+            // A key the baseline records but the workspace does not hold is a removal this
+            // window has not flushed yet, not an entry created elsewhere.
+            if self.position_of(&key).is_some()
+                || baseline.get(&key).is_some()
+                || baseline.is_ignored(&key, toml)
+            {
+                continue;
+            }
+            match parse_document(toml) {
+                Ok(doc) => {
+                    let entry = self.push_custom(doc, Some(id));
+                    self.record_in_baseline(entry, baseline);
+                    outcome.changed = true;
+                }
+                Err(err) => ignore_stored(baseline, key, toml, &err),
+            }
+        }
+
+        // Keys that are neither in storage nor held here describe nothing any more: dropping
+        // them keeps a later diff from deleting a row that is already gone. Any ignored note
+        // for such a key is deliberately left in place, as `PersistedBaseline::remove` says.
+        let stale: Vec<PersistedKey> = baseline
+            .keys()
+            .filter(|key| !stored_entries.contains_key(*key) && self.position_of(key).is_none())
+            .cloned()
+            .collect();
+        for key in stale {
+            baseline.remove(&key);
+        }
+
+        outcome
+    }
+
     /// The index of the entry that `key` identifies: a preset by its path, a custom by its
     /// storage-minted id. Never by `metadata.name` or position.
     fn position_of(&self, key: &PersistedKey) -> Option<usize> {
@@ -412,14 +584,44 @@ impl ConfigWorkspace {
         if self.selected().is_bundled() {
             return Err(ConfigWorkspaceError::CannotRemoveBundled);
         }
-        self.entries.remove(self.selected);
-        // The following entry (if any) slid into the removed index. Otherwise the removed
-        // entry was last, so step back to its predecessor. `entries` cannot be empty here:
-        // a bundled entry always remains (see the invariant on `selected`).
-        if self.selected == self.entries.len() {
-            self.selected -= 1;
-        }
+        self.remove_entry(self.selected_id());
         Ok(())
+    }
+
+    /// Removes the entry `id`, together with its pending draft, and returns whether the
+    /// selection moved, which happens exactly when the removed entry was the selected one.
+    ///
+    /// This is the only place entries are removed, so it is the only place that has to
+    /// re-anchor the selection: onto the entry that followed the removed one, or the
+    /// preceding entry when the removed one was last. Removing an entry before the selected
+    /// one keeps the same entry selected, and removing one after it changes nothing.
+    ///
+    /// Nothing is removed, and `false` returned, if no entry has that id or the entry is
+    /// bundled — so `entries` never becomes empty. Ids are never reused: `next_id` is left
+    /// unchanged.
+    fn remove_entry(&mut self, id: ConfigEntryId) -> bool {
+        let Some(index) = self.entries.iter().position(|entry| entry.id() == id) else {
+            return false;
+        };
+        if self.entries[index].is_bundled() {
+            return false;
+        }
+        self.entries.remove(index);
+        if index < self.selected {
+            // Everything after the removed entry slid down one; stay on the same entry.
+            self.selected -= 1;
+            false
+        } else if index == self.selected {
+            // The following entry slid into the removed index. Otherwise the removed entry
+            // was last, so step back to its predecessor. `entries` cannot be empty here:
+            // a bundled entry always remains (see the invariant on `selected`).
+            if self.selected == self.entries.len() {
+                self.selected -= 1;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     fn unique_name(&self, base: &str) -> String {
@@ -444,6 +646,22 @@ impl ConfigWorkspace {
 /// Parses and validates `text` as a config document.
 fn parse_document(text: &str) -> Result<ConfigDocument, ParseConfigError> {
     ConfigDocument::try_from(ConfigSource::parse(text)?)
+}
+
+/// Notes stored `toml` for `key` as content this window cannot use, warning about `err` once.
+/// The note is what keeps the row from being deleted and from being reported again until its
+/// stored content changes.
+fn ignore_stored(
+    baseline: &mut PersistedBaseline,
+    key: PersistedKey,
+    toml: &str,
+    err: &ParseConfigError,
+) {
+    match &key {
+        PersistedKey::Preset(path) => log::warn!("Ignoring stored preset {path}: {err}"),
+        PersistedKey::Custom(id) => log::warn!("Ignoring stored custom entry {}: {err}", id.get()),
+    }
+    baseline.ignore(key, toml.to_string());
 }
 
 impl ConfigEntry {
@@ -484,6 +702,26 @@ impl ConfigEntry {
     /// The storage-minted id of this custom entry, if it has one yet.
     pub fn custom_id(&self) -> Option<CustomId> {
         self.custom_id
+    }
+
+    /// This entry's persisted identity: a preset by its path, a custom by its storage-minted
+    /// id. `None` for a custom that storage has not minted an id for yet, which no persisted
+    /// state can name.
+    fn persisted_key(&self) -> Option<PersistedKey> {
+        match (self.preset_path(), self.custom_id()) {
+            (Some(path), _) => Some(PersistedKey::Preset(path.to_string())),
+            (None, Some(id)) => Some(PersistedKey::Custom(id)),
+            (None, None) => None,
+        }
+    }
+
+    /// What this entry contributes to persisted state, for an entry that has a persisted key:
+    /// its applied text for a custom or a preset that differs from its bundled default, and
+    /// `None` for a preset at its default, which storage treats as absent. It must agree with
+    /// [`ConfigWorkspace::persisted_view`], which produces the rows, and with
+    /// [`ConfigWorkspace::record_in_baseline`], which records them.
+    fn persisted_repr(&self) -> Option<String> {
+        (self.preset_path().is_none() || self.differs_from_default()).then(|| self.applied_text())
     }
 
     pub fn name(&self) -> &str {
@@ -2567,14 +2805,20 @@ end = "#ffffff"
         }
     }
 
+    /// The applied text of the entry at `index` of [`workspace_with_paths`] after an edit, as
+    /// another window would have stored it.
+    fn edited_text(index: usize) -> String {
+        let mut workspace = workspace_with_paths();
+        let id = workspace.entries()[index].id();
+        workspace.select_by_id(id).unwrap();
+        clean_mut(&mut workspace).set_iterations(5).unwrap();
+        workspace.selected().applied_text()
+    }
+
     /// The applied text of `presets/b.toml` of [`workspace_with_paths`] after an edit, as a
     /// window would have stored it.
     fn edited_b_text() -> String {
-        let mut workspace = workspace_with_paths();
-        let second_id = workspace.entries()[1].id();
-        workspace.select_by_id(second_id).unwrap();
-        clean_mut(&mut workspace).set_iterations(5).unwrap();
-        workspace.selected().applied_text()
+        edited_text(1)
     }
 
     fn entry_names(workspace: &ConfigWorkspace) -> Vec<&str> {
@@ -2897,5 +3141,649 @@ end = "#ffffff"
         assert_eq!(delta.mint[0].entry, converted.id());
         assert_eq!(delta.mint[0].toml, converted.applied_text());
         assert_eq!(delta.selected, None);
+    }
+
+    /// A window that has just loaded `state`: its workspace, plus the baseline of what it
+    /// believes storage holds. Nothing of its own is pending, so every entry is eligible.
+    fn synced(state: &StoredState) -> (ConfigWorkspace, PersistedBaseline) {
+        let mut workspace = workspace_with_paths();
+        let baseline = workspace.restore(state);
+        (workspace, baseline)
+    }
+
+    /// Storage holding `entries` with `presets/a.toml` selected, which is also what
+    /// [`workspace_with_paths`] selects, so a diff never has a selection to write.
+    fn stored_with_a_selected(entries: Vec<(PersistedKey, String)>) -> StoredState {
+        stored(entries, Some(preset_key("presets/a.toml")))
+    }
+
+    fn applied_texts(workspace: &ConfigWorkspace) -> Vec<String> {
+        workspace
+            .entries()
+            .iter()
+            .map(ConfigEntry::applied_text)
+            .collect()
+    }
+
+    #[test]
+    fn refresh_adopts_entries_edited_elsewhere() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        let edited_a = edited_text(0);
+        let edited_b = edited_text(1);
+        let selected = workspace.selected_id();
+
+        // The stored selection names the other entry; a refresh must not adopt it.
+        let outcome = workspace.refresh(
+            &stored(
+                vec![
+                    (preset_key("presets/a.toml"), edited_a.clone()),
+                    (preset_key("presets/b.toml"), edited_b.clone()),
+                ],
+                Some(preset_key("presets/b.toml")),
+            ),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(workspace.entries()[0].applied_text(), edited_a);
+        assert_eq!(workspace.entries()[1].applied_text(), edited_b);
+        assert!(workspace.entries().iter().all(|entry| !entry.is_dirty()));
+        // Applied through the draft, so the bundled default and Reset survive.
+        assert!(workspace.entries().iter().all(ConfigEntry::can_reset));
+        assert_eq!(
+            baseline.get(&preset_key("presets/a.toml")),
+            Some(&*edited_a)
+        );
+        assert_eq!(
+            baseline.get(&preset_key("presets/b.toml")),
+            Some(&*edited_b)
+        );
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                selected_content_changed: true,
+                selection_moved: false,
+            }
+        );
+        // The selection is never adopted from storage, and the recorded one is untouched.
+        assert_eq!(workspace.selected_id(), selected);
+        assert_eq!(baseline.selected(), Some(&preset_key("presets/a.toml")));
+    }
+
+    #[test]
+    fn refresh_adopts_a_custom_edited_elsewhere() {
+        let state = stored(
+            vec![(custom_key(3), config_text("Three", "F", 3.0))],
+            Some(custom_key(3)),
+        );
+        let (mut workspace, mut baseline) = synced(&state);
+        assert_eq!(workspace.selected().name(), "Three");
+        let edited = config_text("Three renamed", "F+F", 33.0);
+
+        let outcome = workspace.refresh(
+            &stored(vec![(custom_key(3), edited.clone())], Some(custom_key(3))),
+            &mut baseline,
+            false,
+        );
+
+        let entry = &workspace.entries()[2];
+        assert_eq!(entry.applied_text(), edited);
+        assert_eq!(entry.name(), "Three renamed");
+        assert_eq!(entry.custom_id(), Some(CustomId::new(3)));
+        assert!(!entry.is_dirty());
+        assert!(!entry.is_bundled());
+        assert_eq!(baseline.get(&custom_key(3)), Some(&*edited));
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                selected_content_changed: true,
+                selection_moved: false,
+            }
+        );
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+    }
+
+    #[test]
+    fn refresh_reverts_a_clean_preset_reset_elsewhere() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![(
+            preset_key("presets/b.toml"),
+            edited_text(1),
+        )]));
+        assert!(workspace.entries()[1].differs_from_default());
+
+        let outcome = workspace.refresh(&stored_with_a_selected(vec![]), &mut baseline, false);
+
+        let entry = &workspace.entries()[1];
+        assert_eq!(entry.name(), "B");
+        assert!(!entry.differs_from_default());
+        assert!(!entry.is_dirty());
+        assert!(!entry.can_reset());
+        assert_eq!(baseline.get(&preset_key("presets/b.toml")), None);
+        assert_eq!(baseline.keys().count(), 0);
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                ..RefreshOutcome::default()
+            }
+        );
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+    }
+
+    #[test]
+    fn refresh_removes_a_custom_removed_elsewhere() {
+        let five = config_text("Five", "F", 5.0);
+        let state = stored_with_a_selected(vec![
+            (custom_key(3), config_text("Three", "F", 3.0)),
+            (custom_key(5), five.clone()),
+        ]);
+        let (mut workspace, mut baseline) = synced(&state);
+        assert_eq!(entry_names(&workspace), ["A", "B", "Three", "Five"]);
+
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![(custom_key(5), five)]),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Five"]);
+        assert_eq!(baseline.get(&custom_key(3)), None);
+        assert!(baseline.keys().all(|key| *key != custom_key(3)));
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                ..RefreshOutcome::default()
+            }
+        );
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+    }
+
+    #[test]
+    fn refresh_keeps_an_entry_removed_elsewhere_that_has_pending_work() {
+        let state = stored_with_a_selected(vec![
+            (custom_key(3), config_text("Three", "F", 3.0)),
+            (custom_key(5), config_text("Five", "F", 5.0)),
+        ]);
+        let (mut workspace, mut baseline) = synced(&state);
+        let three = workspace.entries()[2].id();
+        let five = workspace.entries()[3].id();
+        // One entry holds an unapplied raw draft, the other an applied change this window
+        // has not saved yet.
+        workspace.select_by_id(three).unwrap();
+        workspace
+            .selected_mut()
+            .set_draft_text("pending edit".to_string());
+        workspace.select_by_id(five).unwrap();
+        clean_mut(&mut workspace).set_iterations(5).unwrap();
+        let five_text = workspace.selected().applied_text();
+
+        let outcome = workspace.refresh(&stored_with_a_selected(vec![]), &mut baseline, false);
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Three", "Five"]);
+        assert!(workspace.entries()[2].is_dirty());
+        assert_eq!(workspace.entries()[2].draft_text(), "pending edit");
+        assert_eq!(workspace.entries()[3].applied_text(), five_text);
+        assert_eq!(outcome, RefreshOutcome::default());
+        // The unsaved change still reaches storage and wins there.
+        let delta = diff(&baseline, &workspace.persisted_view());
+        assert_eq!(
+            delta.put,
+            vec![PersistedEntry {
+                key: custom_key(5),
+                toml: five_text,
+            }]
+        );
+        assert!(delta.delete.is_empty());
+    }
+
+    #[test]
+    fn refresh_leaves_a_custom_alone_until_its_first_save_is_recorded() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        workspace
+            .import_toml(&config_text("Mine", "F", 15.0))
+            .unwrap();
+        let mine = workspace.selected_id();
+        let text = workspace.selected().applied_text();
+        // Storage minted an id for it, but the save that wrote it is not recorded yet.
+        assert!(workspace.assign_custom_id(mine, CustomId::new(4)));
+
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![(custom_key(4), config_text("Theirs", "F", 45.0))]),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Mine"]);
+        assert_eq!(workspace.selected().applied_text(), text);
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline.get(&custom_key(4)), None);
+    }
+
+    #[test]
+    fn refresh_skips_only_the_selected_entry_while_a_grammar_draft_is_pending() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        let edited_b = edited_text(1);
+        let state = stored_with_a_selected(vec![
+            (preset_key("presets/a.toml"), edited_text(0)),
+            (preset_key("presets/b.toml"), edited_b.clone()),
+        ]);
+
+        let outcome = workspace.refresh(&state, &mut baseline, true);
+
+        // The grammar draft belongs to the selected entry, which keeps what it is based on.
+        assert!(!workspace.entries()[0].differs_from_default());
+        assert_eq!(baseline.get(&preset_key("presets/a.toml")), None);
+        assert_eq!(workspace.entries()[1].applied_text(), edited_b);
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                ..RefreshOutcome::default()
+            }
+        );
+    }
+
+    #[test]
+    fn refresh_appends_customs_created_elsewhere_in_id_order_without_selecting_them() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        let selected = workspace.selected_id();
+
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![
+                (custom_key(9), config_text("Nine", "F", 9.0)),
+                (custom_key(3), config_text("Three", "F", 3.0)),
+            ]),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Three", "Nine"]);
+        assert_eq!(workspace.entries()[2].custom_id(), Some(CustomId::new(3)));
+        assert_eq!(workspace.entries()[3].custom_id(), Some(CustomId::new(9)));
+        assert!(workspace.entries()[2..].iter().all(|e| !e.is_bundled()));
+        assert_eq!(workspace.selected_id(), selected);
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                ..RefreshOutcome::default()
+            }
+        );
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+    }
+
+    #[test]
+    fn refresh_does_not_resurrect_a_custom_this_window_removed() {
+        let state = stored_with_a_selected(vec![(custom_key(3), config_text("Three", "F", 3.0))]);
+        let (mut workspace, mut baseline) = synced(&state);
+        let three = workspace.entries()[2].id();
+        workspace.select_by_id(three).unwrap();
+        workspace.remove_selected().unwrap();
+        assert_eq!(
+            diff(&baseline, &workspace.persisted_view()).delete,
+            vec![custom_key(3)]
+        );
+
+        // Storage still holds the row: this window's delete has not been flushed yet.
+        let outcome = workspace.refresh(&state, &mut baseline, false);
+
+        assert_eq!(entry_names(&workspace), ["A", "B"]);
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(
+            diff(&baseline, &workspace.persisted_view()).delete,
+            vec![custom_key(3)]
+        );
+    }
+
+    #[test]
+    fn refresh_prunes_a_baseline_key_for_a_row_that_is_gone_from_storage_too() {
+        let state = stored_with_a_selected(vec![(custom_key(3), config_text("Three", "F", 3.0))]);
+        let (mut workspace, mut baseline) = synced(&state);
+        let three = workspace.entries()[2].id();
+        workspace.select_by_id(three).unwrap();
+        // This window removed it and has not flushed the delete; another window deleted the
+        // row first, so there is nothing left to delete.
+        workspace.remove_selected().unwrap();
+
+        let outcome = workspace.refresh(&stored_with_a_selected(vec![]), &mut baseline, false);
+
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline.keys().count(), 0);
+        assert!(
+            diff(&baseline, &workspace.persisted_view())
+                .delete
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn refresh_moves_the_selection_when_the_selected_entry_is_removed_elsewhere() {
+        let five = config_text("Five", "F", 5.0);
+        let state = stored(
+            vec![
+                (custom_key(3), config_text("Three", "F", 3.0)),
+                (custom_key(5), five.clone()),
+            ],
+            Some(custom_key(3)),
+        );
+        let (mut workspace, mut baseline) = synced(&state);
+        let five_id = workspace.entries()[3].id();
+        assert_eq!(workspace.selected().name(), "Three");
+
+        let outcome = workspace.refresh(
+            &stored(vec![(custom_key(5), five)], Some(custom_key(3))),
+            &mut baseline,
+            false,
+        );
+
+        // The entry that followed the removed one.
+        assert_eq!(entry_names(&workspace), ["A", "B", "Five"]);
+        assert_eq!(workspace.selected_id(), five_id);
+        assert_eq!(
+            outcome,
+            RefreshOutcome {
+                changed: true,
+                selected_content_changed: false,
+                selection_moved: true,
+            }
+        );
+
+        // Removing the last entry falls back to the preceding one.
+        let outcome = workspace.refresh(&stored(vec![], Some(custom_key(3))), &mut baseline, false);
+
+        assert_eq!(entry_names(&workspace), ["A", "B"]);
+        assert_eq!(workspace.selected().name(), "B");
+        assert!(outcome.selection_moved);
+    }
+
+    #[test]
+    fn refresh_keeps_the_selection_when_another_entry_is_removed_elsewhere() {
+        let three = config_text("Three", "F", 3.0);
+        let five = config_text("Five", "F", 5.0);
+        let state = stored(
+            vec![
+                (custom_key(3), three.clone()),
+                (custom_key(5), five.clone()),
+                (custom_key(7), config_text("Seven", "F", 7.0)),
+            ],
+            Some(custom_key(5)),
+        );
+        let (mut workspace, mut baseline) = synced(&state);
+        let five_id = workspace.selected_id();
+        assert_eq!(workspace.selected().name(), "Five");
+
+        // The entry before the selected one disappears: the same entry stays selected.
+        let outcome = workspace.refresh(
+            &stored(
+                vec![
+                    (custom_key(5), five.clone()),
+                    (custom_key(7), config_text("Seven", "F", 7.0)),
+                ],
+                Some(custom_key(5)),
+            ),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Five", "Seven"]);
+        assert_eq!(workspace.selected_id(), five_id);
+        assert!(outcome.changed);
+        assert!(!outcome.selection_moved);
+
+        // The entry after the selected one disappears: the selection does not move either.
+        let outcome = workspace.refresh(
+            &stored(vec![(custom_key(5), five)], Some(custom_key(5))),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Five"]);
+        assert_eq!(workspace.selected_id(), five_id);
+        assert!(outcome.changed);
+        assert!(!outcome.selection_moved);
+    }
+
+    #[test]
+    fn refresh_removing_the_selected_entry_and_a_later_one_re_anchors_once() {
+        let state = stored(
+            vec![
+                (custom_key(3), config_text("Three", "F", 3.0)),
+                (custom_key(5), config_text("Five", "F", 5.0)),
+                (custom_key(7), config_text("Seven", "F", 7.0)),
+            ],
+            Some(custom_key(5)),
+        );
+        let (mut workspace, mut baseline) = synced(&state);
+        let three_id = workspace.entries()[2].id();
+        assert_eq!(workspace.selected().name(), "Five");
+
+        let outcome = workspace.refresh(
+            &stored(
+                vec![(custom_key(3), config_text("Three", "F", 3.0))],
+                Some(custom_key(5)),
+            ),
+            &mut baseline,
+            false,
+        );
+
+        // Both the selected entry and the one after it are gone; "Three" precedes it.
+        assert_eq!(entry_names(&workspace), ["A", "B", "Three"]);
+        assert_eq!(workspace.selected_id(), three_id);
+        assert!(outcome.selection_moved);
+        assert!(outcome.changed);
+    }
+
+    #[test]
+    fn refresh_ignores_invalid_stored_text_and_retries_it_once_it_changes() {
+        let three = config_text("Three", "F", 3.0);
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![(
+            custom_key(3),
+            three.clone(),
+        )]));
+        let bad = stored_with_a_selected(vec![(custom_key(3), "not = [valid".to_string())]);
+
+        let outcome = workspace.refresh(&bad, &mut baseline, false);
+
+        // The entry keeps what it has, and the row is neither adopted nor deleted.
+        assert_eq!(workspace.entries()[2].applied_text(), three);
+        assert!(!workspace.entries()[2].is_dirty());
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline.get(&custom_key(3)), Some(&*three));
+        assert!(baseline.is_ignored(&custom_key(3), "not = [valid"));
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+
+        // Refreshing the same content again changes nothing at all; the suppressed warning
+        // is the only remaining effect, and a log warning is not observable here.
+        let before = baseline.clone();
+        let outcome = workspace.refresh(&bad, &mut baseline, false);
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline, before);
+        assert_eq!(workspace.entries()[2].applied_text(), three);
+
+        // Changed stored content is retried: still invalid, so the note is replaced.
+        let worse = stored_with_a_selected(vec![(custom_key(3), "also = [invalid".to_string())]);
+        assert_eq!(
+            workspace.refresh(&worse, &mut baseline, false),
+            RefreshOutcome::default()
+        );
+        assert!(baseline.is_ignored(&custom_key(3), "also = [invalid"));
+
+        // Valid content is adopted, and the note goes with it.
+        let good = config_text("Three", "F+F", 33.0);
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![(custom_key(3), good.clone())]),
+            &mut baseline,
+            false,
+        );
+        assert_eq!(workspace.entries()[2].applied_text(), good);
+        assert_eq!(baseline.get(&custom_key(3)), Some(&*good));
+        assert_eq!(baseline.ignored(&custom_key(3)), None);
+        assert!(outcome.changed);
+    }
+
+    #[test]
+    fn refresh_ignores_an_invalid_custom_created_elsewhere_without_retrying_it() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        let bad = stored_with_a_selected(vec![(custom_key(3), "not = [valid".to_string())]);
+
+        let outcome = workspace.refresh(&bad, &mut baseline, false);
+
+        assert_eq!(entry_names(&workspace), ["A", "B"]);
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline.get(&custom_key(3)), None);
+        assert!(baseline.is_ignored(&custom_key(3), "not = [valid"));
+        // Never recorded, so no diff ever deletes the row it could not read.
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+
+        let before = baseline.clone();
+        assert_eq!(
+            workspace.refresh(&bad, &mut baseline, false),
+            RefreshOutcome::default()
+        );
+        assert_eq!(baseline, before);
+
+        // A changed stored text is retried.
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![(custom_key(3), config_text("Three", "F", 3.0))]),
+            &mut baseline,
+            false,
+        );
+        assert_eq!(entry_names(&workspace), ["A", "B", "Three"]);
+        assert!(outcome.changed);
+        assert_eq!(baseline.ignored(&custom_key(3)), None);
+    }
+
+    #[test]
+    fn refresh_leaves_a_preset_eligible_when_its_stored_row_equals_the_default() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        let default_text = workspace.entries()[0].applied_text();
+
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![(preset_key("presets/a.toml"), default_text.clone())]),
+            &mut baseline,
+            false,
+        );
+
+        // Treated as absent locally: neither recorded nor deleted, and the entry is untouched.
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline.get(&preset_key("presets/a.toml")), None);
+        assert_eq!(baseline.keys().count(), 0);
+        assert_eq!(baseline.ignored_keys().count(), 0);
+        let entry = &workspace.entries()[0];
+        assert_eq!(entry.applied_text(), default_text);
+        assert!(!entry.differs_from_default());
+        assert!(!entry.is_dirty());
+
+        // No stuck state: a later edit elsewhere is still adopted.
+        let edited = edited_text(0);
+        let outcome = workspace.refresh(
+            &stored_with_a_selected(vec![(preset_key("presets/a.toml"), edited.clone())]),
+            &mut baseline,
+            false,
+        );
+
+        assert_eq!(workspace.entries()[0].applied_text(), edited);
+        assert!(outcome.changed);
+        assert_eq!(baseline.get(&preset_key("presets/a.toml")), Some(&*edited));
+    }
+
+    #[test]
+    fn refresh_leaves_a_stored_preset_row_that_is_no_longer_bundled_alone() {
+        // `restore` converted it into a custom and kept the stale key so the next save
+        // deletes the row; a refresh before that save must not convert it a second time.
+        let state = stored_with_a_selected(vec![(
+            preset_key("presets/gone.toml"),
+            config_text("Orphan", "F", 33.0),
+        )]);
+        let (mut workspace, mut baseline) = synced(&state);
+        assert_eq!(entry_names(&workspace), ["A", "B", "Orphan"]);
+
+        let outcome = workspace.refresh(&state, &mut baseline, false);
+
+        assert_eq!(entry_names(&workspace), ["A", "B", "Orphan"]);
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(
+            diff(&baseline, &workspace.persisted_view()).delete,
+            vec![preset_key("presets/gone.toml")]
+        );
+    }
+
+    #[test]
+    fn a_second_refresh_of_the_same_stored_state_changes_nothing() {
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![]));
+        let state = stored_with_a_selected(vec![
+            (preset_key("presets/b.toml"), edited_text(1)),
+            (custom_key(3), config_text("Three", "F", 3.0)),
+        ]);
+        assert!(workspace.refresh(&state, &mut baseline, false).changed);
+        let texts = applied_texts(&workspace);
+        let selected = workspace.selected_id();
+        let before = baseline.clone();
+
+        let outcome = workspace.refresh(&state, &mut baseline, false);
+
+        assert_eq!(outcome, RefreshOutcome::default());
+        assert_eq!(baseline, before);
+        assert_eq!(applied_texts(&workspace), texts);
+        assert_eq!(workspace.selected_id(), selected);
+    }
+
+    #[test]
+    fn refresh_leaves_nothing_to_write_back() {
+        let state = stored_with_a_selected(vec![
+            (custom_key(3), config_text("Three", "F", 3.0)),
+            (custom_key(5), config_text("Five", "F", 5.0)),
+        ]);
+        let (mut workspace, mut baseline) = synced(&state);
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+
+        // Another window edited a preset and a custom, removed one custom and created another.
+        let next = stored_with_a_selected(vec![
+            (preset_key("presets/b.toml"), edited_text(1)),
+            (custom_key(5), config_text("Five", "F+F", 55.0)),
+            (custom_key(7), config_text("Seven", "F", 7.0)),
+        ]);
+
+        let outcome = workspace.refresh(&next, &mut baseline, false);
+
+        assert!(outcome.changed);
+        assert_eq!(entry_names(&workspace), ["A", "B", "Five", "Seven"]);
+        assert!(diff(&baseline, &workspace.persisted_view()).is_empty());
+    }
+
+    #[test]
+    fn a_recorded_key_that_is_also_ignored_is_still_deleted_and_overwritten_locally() {
+        let three = config_text("Three", "F", 3.0);
+        let (mut workspace, mut baseline) = synced(&stored_with_a_selected(vec![(
+            custom_key(3),
+            three.clone(),
+        )]));
+        let three_id = workspace.entries()[2].id();
+        let bad = stored_with_a_selected(vec![(custom_key(3), "not = [valid".to_string())]);
+        workspace.refresh(&bad, &mut baseline, false);
+        assert_eq!(baseline.get(&custom_key(3)), Some(&*three));
+        assert!(baseline.is_ignored(&custom_key(3), "not = [valid"));
+
+        // A local edit to the entry is written, ignored note or not.
+        workspace.select_by_id(three_id).unwrap();
+        clean_mut(&mut workspace).set_iterations(5).unwrap();
+        assert_eq!(
+            diff(&baseline, &workspace.persisted_view()).put,
+            vec![PersistedEntry {
+                key: custom_key(3),
+                toml: workspace.selected().applied_text(),
+            }]
+        );
+
+        // Removing it locally deletes the row: the baseline still records the key, and the
+        // note beside it never spares a recorded key.
+        workspace.remove_selected().unwrap();
+        assert_eq!(
+            diff(&baseline, &workspace.persisted_view()).delete,
+            vec![custom_key(3)]
+        );
     }
 }
