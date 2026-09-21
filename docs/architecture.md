@@ -185,7 +185,11 @@ Authored grammar normalization and turtle behavior are defined in the
 - `config_workspace.rs` tracks preset/custom entries identified by opaque
   `ConfigEntryId`s, dirty drafts, last-applied documents, copy/apply/revert/reset
   operations, and derived display labels for entries with duplicate authored
-  names.
+  names. It owns the bundled/custom distinction and shared Reset eligibility
+  (`can_reset`), and removal of custom entries (`remove_selected`), which
+  re-anchors the selection to the following (or else preceding) entry and never
+  reuses ids. Each UI owns only the removal confirmation and the editor and
+  renderer resync.
 - `presets.rs` embeds and sorts the `presets/` directory.
 - `color.rs` centralizes line-color mode selection and per-mode picker memory.
 - `animation.rs` contains hue-rotation state and phase advancement.

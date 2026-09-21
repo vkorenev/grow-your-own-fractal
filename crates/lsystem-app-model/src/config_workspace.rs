@@ -16,6 +16,9 @@ pub enum ConfigWorkspaceError {
     #[error("unknown config entry id `{0}`")]
     UnknownId(ConfigEntryId),
 
+    #[error("a bundled config cannot be removed")]
+    CannotRemoveBundled,
+
     #[error(transparent)]
     ParseConfig(#[from] ParseConfigError),
 }
@@ -24,9 +27,12 @@ pub enum ConfigWorkspaceError {
 pub struct ConfigWorkspace {
     entries: Vec<ConfigEntry>,
     // INVARIANT: `selected < entries.len()`. Upheld by `from_presets` (rejects empty),
-    // `select_by_id` (derives the index via `entries.iter().position`), and `copy`
-    // (assigns `len() - 1` after a push). Any future method that removes or reorders
-    // entries must re-anchor `selected` to preserve it, because `selected()`/
+    // `select_by_id` (derives the index via `entries.iter().position`), `copy` and
+    // `import_toml` (assign `len() - 1` after a push), and `remove_selected` (re-anchors
+    // to the following entry, or the preceding one when the last entry is removed).
+    // `entries` never becomes empty: `from_presets` requires a bundled entry and
+    // `remove_selected` refuses to remove bundled entries. Any future method that removes
+    // or reorders entries must re-anchor `selected` to preserve it, because `selected()`/
     // `selected_mut()` index into `entries` directly.
     selected: usize,
     next_id: u64,
@@ -179,9 +185,9 @@ impl ConfigWorkspace {
         Ok(())
     }
 
-    /// Creates a renamed copy of the selected entry, auto-selects the new entry, and
-    /// returns a borrow of it. After the borrow drops, the same entry remains accessible
-    /// via [`ConfigWorkspace::selected`].
+    /// Creates a renamed copy of the selected entry, appends it to the end of the workspace
+    /// order, auto-selects it, and returns a borrow of it. After the borrow drops, the same
+    /// entry remains accessible via [`ConfigWorkspace::selected`].
     pub fn copy(&mut self) -> Result<&ConfigEntry, ConfigWorkspaceError> {
         let id = self.allocate_id();
         let new_entry = {
@@ -195,7 +201,8 @@ impl ConfigWorkspace {
     }
 
     /// Parses and validates `text` as a config document, creates a new custom entry from it
-    /// (no bundled default), auto-selects the new entry, and returns a borrow of it.
+    /// (no bundled default), appends it to the end of the workspace order, auto-selects it,
+    /// and returns a borrow of it.
     ///
     /// The imported document's `metadata.name` is preserved unchanged, even if it collides
     /// with an existing entry's name — duplicate names are allowed. Returns
@@ -208,6 +215,28 @@ impl ConfigWorkspace {
         self.entries.push(ConfigEntry::custom(doc, id));
         self.selected = self.entries.len() - 1;
         Ok(&self.entries[self.selected])
+    }
+
+    /// Removes the selected custom entry, together with its pending draft, and selects a
+    /// neighbor: the entry that followed it in workspace order, or the preceding entry when
+    /// the removed one was last. Returns [`ConfigWorkspaceError::CannotRemoveBundled`],
+    /// leaving the workspace untouched, if the selected entry is bundled.
+    ///
+    /// Ids are never reused: `next_id` is left unchanged, so entries created later receive
+    /// ids distinct from the removed one. Callers are responsible for confirming with the
+    /// user first.
+    pub fn remove_selected(&mut self) -> Result<(), ConfigWorkspaceError> {
+        if self.selected().is_bundled() {
+            return Err(ConfigWorkspaceError::CannotRemoveBundled);
+        }
+        self.entries.remove(self.selected);
+        // The following entry (if any) slid into the removed index. Otherwise the removed
+        // entry was last, so step back to its predecessor. `entries` cannot be empty here:
+        // a bundled entry always remains (see the invariant on `selected`).
+        if self.selected == self.entries.len() {
+            self.selected -= 1;
+        }
+        Ok(())
     }
 
     fn unique_name(&self, base: &str) -> String {
@@ -346,8 +375,8 @@ impl ConfigEntry {
     /// Restores this entry to its bundled default document, discarding any draft.
     /// Returns `false` without changing anything if the entry has no bundled default
     /// (e.g. a custom copy or import). Callers should gate user-visible resets on
-    /// [`ConfigEntry::differs_from_default`] to avoid no-op resets when the applied
-    /// document already matches the default.
+    /// [`ConfigEntry::can_reset`]. The method itself always discards a pending draft, even
+    /// when the applied document already matches the default.
     pub fn reset_to_default(&mut self) -> bool {
         let Some(default) = self.default.clone() else {
             return false;
@@ -398,6 +427,20 @@ impl ConfigEntry {
         self.default
             .as_ref()
             .is_some_and(|default| self.applied_text() != default.to_toml_string())
+    }
+
+    /// Whether this entry ships with the application (a bundled preset), as opposed to a
+    /// custom copy or import. Bundled entries can be reset but not removed; custom entries
+    /// can be removed but not reset.
+    pub fn is_bundled(&self) -> bool {
+        self.default.is_some()
+    }
+
+    /// Whether a user-visible Reset should be enabled: the entry is bundled and resetting
+    /// would either change its applied document or discard a pending draft. Always `false`
+    /// for custom entries, even when dirty.
+    pub fn can_reset(&self) -> bool {
+        self.is_bundled() && (self.differs_from_default() || self.is_dirty())
     }
 }
 
@@ -724,9 +767,9 @@ solid = "#00e680"
 
     #[test]
     fn reset_to_default_discards_pending_draft() {
-        // The web UI gates its Reset button on `differs_from_default()` alone, with no
-        // `is_dirty()` check (unlike the native app), so resetting a dirty entry is a
-        // real reachable path, not just a theoretical one.
+        // `can_reset()` is enabled for a dirty bundled entry (the specification requires
+        // Reset to be available when it would discard a pending draft), so resetting a
+        // dirty entry is a reachable path in both apps.
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
 
@@ -748,6 +791,216 @@ solid = "#00e680"
         assert!(!reset_entry.is_dirty());
         assert_eq!(reset_entry.editor_config().generation.angle, 60.0);
         assert_eq!(reset_entry.draft_text(), first);
+    }
+
+    #[test]
+    fn can_reset_requires_bundled_entry_with_change_or_draft() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
+
+        // Unchanged bundled entry: nothing to reset.
+        assert!(workspace.selected().is_bundled());
+        assert!(!workspace.selected().can_reset());
+
+        // Only a pending draft: Reset would discard it.
+        workspace
+            .selected_mut()
+            .set_draft_text(first.replace("angle = 60", "angle = 45"));
+        assert!(!workspace.selected().differs_from_default());
+        assert!(workspace.selected().can_reset());
+        revert_selected(&mut workspace);
+        assert!(!workspace.selected().can_reset());
+
+        // Changed applied document: Reset would restore the default.
+        workspace
+            .selected_mut()
+            .set_draft_text(first.replace("angle = 60", "angle = 45"));
+        workspace.selected_mut().apply_draft().unwrap();
+        assert!(workspace.selected().can_reset());
+
+        // A custom entry can never be reset, even when it is dirty or differs.
+        workspace.copy().unwrap();
+        assert!(!workspace.selected().is_bundled());
+        workspace
+            .selected_mut()
+            .set_draft_text("pending".to_string());
+        assert!(workspace.selected().is_dirty());
+        assert!(!workspace.selected().can_reset());
+    }
+
+    #[test]
+    fn reset_of_default_bundled_entry_discards_draft_and_disables_reset() {
+        let first = config_text("First", "F", 60.0);
+        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first.clone())]).unwrap();
+        workspace
+            .selected_mut()
+            .set_draft_text(first.replace("angle = 60", "angle = 45"));
+        assert!(workspace.selected().can_reset());
+
+        assert!(workspace.selected_mut().reset_to_default());
+
+        assert!(!workspace.selected().is_dirty());
+        assert_eq!(workspace.selected().draft_text(), first);
+        assert!(!workspace.selected().can_reset());
+    }
+
+    /// Bundled `A`, `B` followed by custom copies, so custom entries have neighbors on both
+    /// sides. Returns the workspace and the ids of the entries in workspace order.
+    fn workspace_with_copies() -> (ConfigWorkspace, Vec<ConfigEntryId>) {
+        let mut workspace = ConfigWorkspace::from_presets(vec![
+            ("A", config_text("A", "F", 60.0)),
+            ("B", config_text("B", "F+F", 90.0)),
+        ])
+        .unwrap();
+        workspace.copy().unwrap(); // "A copy"
+        workspace.import_toml(&config_text("C", "F", 30.0)).unwrap();
+        workspace.import_toml(&config_text("D", "F", 45.0)).unwrap();
+        let ids = workspace.entries().iter().map(ConfigEntry::id).collect();
+        (workspace, ids)
+    }
+
+    #[test]
+    fn copy_and_import_append_in_workspace_order() {
+        let (workspace, ids) = workspace_with_copies();
+
+        assert_eq!(
+            workspace.names().collect::<Vec<_>>(),
+            ["A", "B", "A copy", "C", "D"]
+        );
+        assert_eq!(workspace.selected_id(), ids[4]);
+    }
+
+    #[test]
+    fn remove_bundled_entry_is_rejected_without_changes() {
+        let (mut workspace, ids) = workspace_with_copies();
+        workspace.select_by_id(ids[1]).unwrap();
+        workspace
+            .selected_mut()
+            .set_draft_text("pending".to_string());
+        let names_before: Vec<String> = workspace.names().map(str::to_owned).collect();
+
+        let error = workspace.remove_selected().unwrap_err();
+
+        assert!(matches!(error, ConfigWorkspaceError::CannotRemoveBundled));
+        assert_eq!(workspace.names().collect::<Vec<_>>(), names_before);
+        assert_eq!(workspace.selected_id(), ids[1]);
+        assert_eq!(workspace.selected().draft_text(), "pending");
+    }
+
+    #[test]
+    fn remove_middle_custom_entry_selects_following_entry() {
+        let (mut workspace, ids) = workspace_with_copies();
+        workspace.select_by_id(ids[3]).unwrap(); // "C"
+
+        workspace.remove_selected().unwrap();
+
+        assert_eq!(
+            workspace.names().collect::<Vec<_>>(),
+            ["A", "B", "A copy", "D"]
+        );
+        assert_eq!(workspace.selected_id(), ids[4]);
+        assert_eq!(workspace.selected().name(), "D");
+        assert!(workspace.select_by_id(ids[3]).is_err());
+    }
+
+    #[test]
+    fn remove_last_entry_selects_preceding_entry() {
+        let (mut workspace, ids) = workspace_with_copies();
+        assert_eq!(workspace.selected_id(), ids[4]); // "D" is last and selected
+
+        workspace.remove_selected().unwrap();
+
+        assert_eq!(
+            workspace.names().collect::<Vec<_>>(),
+            ["A", "B", "A copy", "C"]
+        );
+        assert_eq!(workspace.selected_id(), ids[3]);
+    }
+
+    #[test]
+    fn remove_first_custom_entry_after_bundled_selects_following_entry() {
+        let (mut workspace, ids) = workspace_with_copies();
+        workspace.select_by_id(ids[2]).unwrap(); // "A copy"
+
+        workspace.remove_selected().unwrap();
+
+        assert_eq!(workspace.selected_id(), ids[3]);
+        assert_eq!(workspace.names().collect::<Vec<_>>(), ["A", "B", "C", "D"]);
+    }
+
+    #[test]
+    fn removing_all_custom_entries_leaves_last_bundled_entry_selected() {
+        let (mut workspace, _) = workspace_with_copies();
+
+        for _ in 0..3 {
+            workspace.remove_selected().unwrap();
+        }
+
+        assert_eq!(workspace.names().collect::<Vec<_>>(), ["A", "B"]);
+        assert_eq!(workspace.selected().name(), "B");
+        assert!(matches!(
+            workspace.remove_selected(),
+            Err(ConfigWorkspaceError::CannotRemoveBundled)
+        ));
+    }
+
+    #[test]
+    fn remove_dirty_custom_entry_discards_draft_and_keeps_neighbor_intact() {
+        let (mut workspace, ids) = workspace_with_copies();
+        workspace.select_by_id(ids[3]).unwrap(); // "C"
+        workspace
+            .selected_mut()
+            .set_draft_text("unapplied edit".to_string());
+        assert!(workspace.selected().is_dirty());
+        workspace.select_by_id(ids[4]).unwrap(); // "D"
+        let neighbor_applied = workspace.selected().applied_text();
+        workspace.select_by_id(ids[3]).unwrap();
+
+        workspace.remove_selected().unwrap();
+
+        assert_eq!(workspace.selected_id(), ids[4]);
+        assert!(!workspace.selected().is_dirty());
+        assert_eq!(workspace.selected().applied_text(), neighbor_applied);
+        assert!(workspace.entries().iter().all(|entry| !entry.is_dirty()));
+    }
+
+    #[test]
+    fn remove_recomputes_duplicate_display_suffixes() {
+        let mut workspace =
+            ConfigWorkspace::from_presets(vec![("A", config_text("A", "F", 60.0))]).unwrap();
+        workspace.import_toml(&config_text("A", "F", 30.0)).unwrap();
+        workspace.import_toml(&config_text("A", "F", 45.0)).unwrap();
+        let labels = |workspace: &ConfigWorkspace| -> Vec<String> {
+            workspace
+                .display_options()
+                .into_iter()
+                .map(|(_, label)| label)
+                .collect()
+        };
+        assert_eq!(labels(&workspace), ["A (1)", "A (2)", "A (3)"]);
+
+        // Remove the middle duplicate ("A (2)").
+        let middle = workspace.display_options()[1].0;
+        workspace.select_by_id(middle).unwrap();
+        workspace.remove_selected().unwrap();
+
+        assert_eq!(labels(&workspace), ["A (1)", "A (2)"]);
+
+        // Removing down to a single entry drops the suffix entirely.
+        workspace.remove_selected().unwrap();
+        assert_eq!(labels(&workspace), ["A"]);
+    }
+
+    #[test]
+    fn ids_are_not_reused_after_removal() {
+        let (mut workspace, ids) = workspace_with_copies();
+        let removed = ids[4];
+
+        workspace.remove_selected().unwrap();
+        let new_id = workspace.copy().unwrap().id();
+
+        assert!(!ids.contains(&new_id));
+        assert_ne!(new_id, removed);
     }
 
     #[test]

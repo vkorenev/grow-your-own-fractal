@@ -6,9 +6,10 @@ use lsystem_app_model::{
     CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND,
     CAMERA_AUTO_ROTATION_MAX_SPEED_DEGREES_PER_SECOND,
     CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, CAMERA_ROTATION_STEP_DEGREES, CleanMut,
-    ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, EditorConfig,
-    EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection, LineColorMode,
-    ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
+    ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, ConfigWorkspaceError,
+    EditorConfig, EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection,
+    LineColorMode, ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls,
+    load_presets,
 };
 use lsystem_core::{ColorConfig, Config, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
@@ -54,6 +55,9 @@ pub(super) enum Message {
     ApplyConfig,
     RevertConfig,
     ResetConfig,
+    BeginRemove,
+    ConfirmRemove,
+    CancelRemove,
     IterationsChanged(u16),
     AngleChanged(f32),
     BackgroundDefaultToggled(bool),
@@ -102,6 +106,9 @@ pub(super) struct FractalApp {
     pub(super) config_workspace: ConfigWorkspace,
     pub(super) toml: iced::widget::text_editor::Content,
     pub(super) rename_draft: Option<String>,
+    /// The custom entry awaiting removal confirmation. Bound to that entry: a
+    /// selection change dismisses it, and confirming removes only this id.
+    pub(super) pending_removal: Option<ConfigEntryId>,
     pub(super) iterations: u16,
     pub(super) max_iterations: u16,
     pub(super) png_width: u32,
@@ -136,6 +143,7 @@ impl FractalApp {
             config_workspace,
             toml: iced::widget::text_editor::Content::with_text(&toml_text),
             rename_draft: None,
+            pending_removal: None,
             iterations: 1,
             max_iterations: 1,
             png_width: 800,
@@ -166,16 +174,21 @@ impl FractalApp {
                     self.error = Some(error.to_string());
                     return Task::none();
                 }
+                self.pending_removal = None;
                 self.refresh_from_workspace()
             }
             Message::CopyConfig => match self.config_workspace.copy() {
-                Ok(_) => self.refresh_from_workspace(),
+                Ok(_) => {
+                    self.pending_removal = None;
+                    self.refresh_from_workspace()
+                }
                 Err(error) => {
                     self.error = Some(error.to_string());
                     Task::none()
                 }
             },
             Message::BeginRename => {
+                self.pending_removal = None;
                 self.rename_draft = Some(
                     self.config_workspace
                         .selected()
@@ -232,8 +245,11 @@ impl FractalApp {
                     Task::none()
                 }
             },
+            // Reset is a workspace action, not a direct control: it stays available while a
+            // raw TOML draft is pending (`can_reset`) and deliberately discards that draft.
             Message::ResetConfig => {
-                if self.config_workspace.selected().is_dirty() {
+                if !self.config_workspace.selected().can_reset() {
+                    log::error!("reset fired while it has no effect; UI guards bypassed");
                     return Task::none();
                 }
                 if self.config_workspace.selected_mut().reset_to_default() {
@@ -241,6 +257,21 @@ impl FractalApp {
                 } else {
                     Task::none()
                 }
+            }
+            Message::BeginRemove => {
+                if self.config_workspace.selected().is_bundled() {
+                    log::error!("remove begun for a bundled entry; UI guards bypassed");
+                    self.error = Some(ConfigWorkspaceError::CannotRemoveBundled.to_string());
+                    return Task::none();
+                }
+                self.rename_draft = None;
+                self.pending_removal = Some(self.config_workspace.selected_id());
+                Task::none()
+            }
+            Message::ConfirmRemove => self.confirm_remove(),
+            Message::CancelRemove => {
+                self.pending_removal = None;
+                Task::none()
             }
             Message::IterationsChanged(iterations) => {
                 let iterations = iterations.min(self.max_iterations);
@@ -523,6 +554,28 @@ impl FractalApp {
             Subscription::batch([key_sub, frames])
         } else {
             key_sub
+        }
+    }
+
+    /// Removes the entry recorded by [`Message::BeginRemove`], then resyncs everything to the
+    /// entry the workspace selected in its place. Only the recorded id may be removed: if the
+    /// selection moved since confirmation began, nothing is removed.
+    fn confirm_remove(&mut self) -> Task<Message> {
+        let Some(confirmed_id) = self.pending_removal.take() else {
+            log::error!("remove confirmed with no pending removal; UI guards bypassed");
+            return Task::none();
+        };
+        if confirmed_id != self.config_workspace.selected_id() {
+            log::error!("remove confirmed for {confirmed_id}, which is no longer selected");
+            self.error = Some("Internal error: could not remove config.".to_string());
+            return Task::none();
+        }
+        match self.config_workspace.remove_selected() {
+            Ok(()) => self.refresh_from_workspace(),
+            Err(error) => {
+                self.error = Some(error.to_string());
+                Task::none()
+            }
         }
     }
 
@@ -1075,6 +1128,203 @@ mod tests {
         let _ = app.update(Message::PresetSelected(first_id));
 
         assert_eq!(app.config_workspace.selected_id(), first_id);
+    }
+
+    fn scene_generation_count(app: &FractalApp) -> u64 {
+        app.scene_generation.load(Ordering::Acquire)
+    }
+
+    fn entry_count(app: &FractalApp) -> usize {
+        app.config_workspace.display_options().len()
+    }
+
+    #[test]
+    fn reset_clears_pending_draft_even_when_applied_document_is_default() {
+        let (mut app, _) = FractalApp::new();
+        make_dirty_with_draft(&mut app);
+        assert!(!app.config_workspace.selected().differs_from_default());
+        assert!(app.config_workspace.selected().can_reset());
+        let generation = scene_generation_count(&app);
+
+        let _ = app.update(Message::ResetConfig);
+
+        assert!(!app.config_workspace.selected().is_dirty());
+        assert!(!app.config_workspace.selected().can_reset());
+        assert!(!app.toml.text().contains("Draft Plant"));
+        assert!(scene_generation_count(&app) > generation);
+    }
+
+    #[test]
+    fn reset_with_nothing_to_reset_changes_nothing() {
+        let (mut app, _) = FractalApp::new();
+        assert!(!app.config_workspace.selected().can_reset());
+        let generation = scene_generation_count(&app);
+
+        let _ = app.update(Message::ResetConfig);
+
+        assert_eq!(scene_generation_count(&app), generation);
+    }
+
+    #[test]
+    fn beginning_and_cancelling_removal_keeps_entry_and_draft() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::CopyConfig);
+        let copied_id = app.config_workspace.selected_id();
+        let (_, draft) = make_dirty_with_draft(&mut app);
+        let entries = entry_count(&app);
+
+        let _ = app.update(Message::BeginRemove);
+        assert_eq!(app.pending_removal, Some(copied_id));
+        assert_eq!(entry_count(&app), entries);
+
+        let _ = app.update(Message::CancelRemove);
+
+        assert_eq!(app.pending_removal, None);
+        assert_eq!(entry_count(&app), entries);
+        assert_eq!(app.config_workspace.selected_id(), copied_id);
+        assert_eq!(app.config_workspace.selected().draft_text(), draft);
+    }
+
+    #[test]
+    fn confirmed_removal_of_last_entry_selects_preceding_entry_and_refreshes() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::CopyConfig);
+        let (_, _draft) = make_dirty_with_draft(&mut app);
+        // The copy was appended, so the entry before it in workspace order is the
+        // last bundled entry, whatever was selected when copying.
+        let ids: Vec<_> = app
+            .config_workspace
+            .display_options()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        let preceding_id = ids[ids.len() - 2];
+        assert_eq!(app.config_workspace.selected_id(), ids[ids.len() - 1]);
+        let entries = entry_count(&app);
+        let generation = scene_generation_count(&app);
+
+        let _ = app.update(Message::BeginRemove);
+        let _ = app.update(Message::ConfirmRemove);
+
+        assert_eq!(entry_count(&app), entries - 1);
+        assert_eq!(app.config_workspace.selected_id(), preceding_id);
+        assert_eq!(app.pending_removal, None);
+        assert!(!app.toml.text().contains("Draft Plant"));
+        assert_eq!(
+            app.toml.text().trim_end(),
+            app.config_workspace.selected().draft_text().trim_end()
+        );
+        assert!(scene_generation_count(&app) > generation);
+    }
+
+    #[test]
+    fn confirmed_removal_of_middle_entry_selects_following_entry() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::CopyConfig);
+        let first_copy_id = app.config_workspace.selected_id();
+        let _ = app.update(Message::CopyConfig);
+        let second_copy_id = app.config_workspace.selected_id();
+        let _ = app.update(Message::PresetSelected(first_copy_id));
+
+        let _ = app.update(Message::BeginRemove);
+        let _ = app.update(Message::ConfirmRemove);
+
+        assert_eq!(app.config_workspace.selected_id(), second_copy_id);
+        assert!(
+            app.config_workspace
+                .display_options()
+                .iter()
+                .all(|(id, _)| *id != first_copy_id)
+        );
+    }
+
+    #[test]
+    fn removal_of_bundled_entry_is_rejected() {
+        let (mut app, _) = FractalApp::new();
+        let bundled_id = app.config_workspace.selected_id();
+        let entries = entry_count(&app);
+
+        let _ = app.update(Message::BeginRemove);
+        assert_eq!(app.pending_removal, None);
+        assert!(app.error.is_some());
+
+        let _ = app.update(Message::ConfirmRemove);
+
+        assert_eq!(entry_count(&app), entries);
+        assert_eq!(app.config_workspace.selected_id(), bundled_id);
+    }
+
+    #[test]
+    fn stale_removal_confirmation_removes_nothing() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::CopyConfig);
+        let first_copy_id = app.config_workspace.selected_id();
+        let _ = app.update(Message::CopyConfig);
+        let _ = app.update(Message::BeginRemove); // pending on the second copy
+        let entries = entry_count(&app);
+        // Bypass the UI: move the selection to another *custom* entry without dismissing
+        // the confirmation. The model would happily remove it, so only the id check in
+        // `confirm_remove` stands between the stale confirmation and the wrong entry.
+        app.config_workspace.select_by_id(first_copy_id).unwrap();
+
+        let _ = app.update(Message::ConfirmRemove);
+
+        assert_eq!(entry_count(&app), entries);
+        assert_eq!(app.config_workspace.selected_id(), first_copy_id);
+        assert_eq!(app.pending_removal, None);
+        assert_eq!(
+            app.error.as_deref(),
+            Some("Internal error: could not remove config.")
+        );
+    }
+
+    #[test]
+    fn confirming_without_pending_removal_removes_nothing() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::CopyConfig);
+        let entries = entry_count(&app);
+
+        let _ = app.update(Message::ConfirmRemove);
+
+        assert_eq!(entry_count(&app), entries);
+    }
+
+    #[test]
+    fn selection_change_dismisses_removal_but_toml_edits_do_not() {
+        let (mut app, _) = FractalApp::new();
+        let bundled_id = app.config_workspace.selected_id();
+        let _ = app.update(Message::CopyConfig);
+        let copied_id = app.config_workspace.selected_id();
+        let _ = app.update(Message::BeginRemove);
+
+        let _ = app.update(Message::TomlEdited(
+            iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert(' ')),
+        ));
+        assert_eq!(app.pending_removal, Some(copied_id));
+        let _ = app.update(Message::ApplyConfig);
+        assert_eq!(app.pending_removal, Some(copied_id));
+
+        let _ = app.update(Message::PresetSelected(bundled_id));
+        assert_eq!(app.pending_removal, None);
+
+        // Reselecting the same entry must not resurrect the dismissed prompt.
+        let _ = app.update(Message::PresetSelected(copied_id));
+        assert_eq!(app.pending_removal, None);
+    }
+
+    #[test]
+    fn beginning_removal_closes_rename_and_beginning_rename_closes_removal() {
+        let (mut app, _) = FractalApp::new();
+        let _ = app.update(Message::CopyConfig);
+        let _ = app.update(Message::BeginRename);
+
+        let _ = app.update(Message::BeginRemove);
+        assert_eq!(app.rename_draft, None);
+        assert!(app.pending_removal.is_some());
+
+        let _ = app.update(Message::BeginRename);
+        assert_eq!(app.pending_removal, None);
+        assert!(app.rename_draft.is_some());
     }
 
     #[test]
