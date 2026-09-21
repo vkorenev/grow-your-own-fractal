@@ -162,9 +162,9 @@ pub(crate) fn AppRoot() -> impl IntoView {
     let init: RwSignal<Option<InitialState>, LocalStorage> = RwSignal::new_local(None);
 
     wasm_bindgen_futures::spawn_local(async move {
-        let db = crate::storage::open().await;
+        let db = crate::storage::open(|| {}).await;
         let stored_text = match &db {
-            Some(db) => crate::storage::load(db).await,
+            Some(db) => crate::storage::legacy_load(db).await,
             None => None,
         };
 
@@ -621,7 +621,7 @@ pub(crate) fn App(initial_workspace: ConfigWorkspace, db: Option<idb::Database>)
                 let Some(Some(handle)) = db.try_update_value(|opt| opt.take()) else {
                     break;
                 };
-                crate::storage::save(&handle, &current).await;
+                crate::storage::legacy_save(&handle, &current).await;
                 db.update_value(|opt| *opt = Some(handle));
                 match pending_save.try_update_value(|opt| opt.take()) {
                     Some(Some(next)) => current = next,
