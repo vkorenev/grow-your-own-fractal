@@ -185,9 +185,15 @@ fn upgrade(database: &Database) -> bool {
 ///
 /// The transaction is reached through the event's target — the open request,
 /// whose `transaction()` is the version-change transaction while it runs.
-/// `abort` is deliberately not awaited: its handlers are registered when the
-/// transaction is turned into a future, so an `abort` event that has already
-/// fired would never reach one, and waiting would hang the caller.
+/// `abort` itself is synchronous and hands the transaction back rather than
+/// returning a future; that result is deliberately dropped instead of awaited,
+/// for the same reason as in [`save`]: awaiting a transaction registers its
+/// completion handlers only at that moment, so an `abort` event that has
+/// already fired would never reach one and the wait would never end.
+///
+/// If the event's target cannot be reached at all there is no transaction to
+/// abort, and the half-built version commits; the `store_names` check in
+/// [`open`] is what keeps that from being used.
 fn abort_upgrade(event: &idb::event::VersionChangeEvent) {
     let transaction = match idb::Event::target(event) {
         Ok(request) => idb::Request::transaction(&request),
