@@ -29,7 +29,7 @@ pub use editor_config::{
 };
 pub use persistence::{
     CustomId, PersistedBaseline, PersistedEntry, PersistedKey, PersistedView, SaveDelta,
-    SelectionView, StoredState, UnmintedCustom, diff,
+    SelectionView, StoredState, UnmintedCustom, diff_baseline,
 };
 pub use presets::load_presets;
 pub use util::sanitize_filename;

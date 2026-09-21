@@ -76,39 +76,34 @@ pub struct PersistedView {
 impl ConfigWorkspace {
     /// The persisted view of this workspace.
     ///
-    /// A preset entry is included iff it differs from its bundled default, keyed by its
-    /// path. A custom entry with an id is always included; one without goes to
-    /// [`PersistedView::unminted`]. Only applied text is reported: unapplied drafts are
-    /// never persisted.
+    /// Each entry is read through the pair `ConfigEntry::persisted_key` and
+    /// `ConfigEntry::persisted_repr`, which together are the single statement of what an
+    /// entry is identified by and what it contributes: a keyed entry with a representation is
+    /// a row, a keyed entry without one (a preset at its bundled default) is absent, and a
+    /// custom with no id yet goes to [`PersistedView::unminted`]. Only applied text is
+    /// reported: unapplied drafts are never persisted.
     pub fn persisted_view(&self) -> PersistedView {
         let mut entries = Vec::new();
         let mut unminted = Vec::new();
         for entry in self.entries() {
-            if let Some(path) = entry.preset_path() {
-                if entry.differs_from_default() {
-                    entries.push(PersistedEntry {
-                        key: PersistedKey::Preset(path.to_string()),
-                        toml: entry.applied_text(),
-                    });
-                }
-            } else if let Some(id) = entry.custom_id() {
-                entries.push(PersistedEntry {
-                    key: PersistedKey::Custom(id),
-                    toml: entry.applied_text(),
-                });
-            } else {
-                unminted.push(UnmintedCustom {
+            match (entry.persisted_key(), entry.persisted_repr()) {
+                (Some(key), Some(toml)) => entries.push(PersistedEntry { key, toml }),
+                // A preset at its bundled default: storage treats it as absent.
+                (Some(_), None) => {}
+                (None, Some(toml)) => unminted.push(UnmintedCustom {
                     entry: entry.id(),
-                    toml: entry.applied_text(),
-                });
+                    toml,
+                }),
+                // Unreachable: only a preset has no representation, and every preset has a
+                // key. Nothing to persist either way, so there is no reason to panic.
+                (None, None) => {}
             }
         }
 
         let selected = self.selected();
-        let selected = match (selected.preset_path(), selected.custom_id()) {
-            (Some(path), _) => SelectionView::Key(PersistedKey::Preset(path.to_string())),
-            (None, Some(id)) => SelectionView::Key(PersistedKey::Custom(id)),
-            (None, None) => SelectionView::Unminted(selected.id()),
+        let selected = match selected.persisted_key() {
+            Some(key) => SelectionView::Key(key),
+            None => SelectionView::Unminted(selected.id()),
         };
 
         PersistedView {
@@ -130,9 +125,10 @@ impl ConfigWorkspace {
 /// Stored content this window could not parse or validate is noted separately, with its text,
 /// in the *ignored* map. The note is layered beside the recorded entries, not instead of them:
 /// a key may be in both, in which case the recorded entry still says what this window holds
-/// and the note says what storage holds that this window could not use. Neither `diff` nor
-/// the deletes it computes are affected by the notes: deletes come only from the recorded
-/// entries, so a key that is merely ignored is never put or deleted because of that.
+/// and the note says what storage holds that this window could not use. Neither
+/// [`diff_baseline`] nor the deletes it computes are affected by the notes: deletes come only
+/// from the recorded entries, so a key that is merely ignored is never put or deleted because
+/// of that.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PersistedBaseline {
     /// What this window last loaded or saved, by key.
@@ -215,9 +211,9 @@ impl PersistedBaseline {
     /// Applies `delta`'s puts and deletes (a put or a delete supersedes any ignored note for
     /// its key, since the stored row is now what this window wrote or removed), records each
     /// minted custom's written content under its new key (even if the entry has since been
-    /// removed locally, so the next diff deletes that row), and records the written selection, resolving an
-    /// [`SelectionView::Unminted`] selection through `minted`. An unresolvable selection
-    /// clears the recorded one, so the next diff writes it again.
+    /// removed locally, so the next diff deletes that row), and records the written
+    /// selection, resolving a [`SelectionView::Unminted`] selection through `minted`. An
+    /// unresolvable selection clears the recorded one, so the next diff writes it again.
     pub fn apply_saved(&mut self, delta: &SaveDelta, minted: &[(ConfigEntryId, CustomId)]) {
         for put in &delta.put {
             self.set(put.key.clone(), put.toml.clone());
@@ -273,7 +269,7 @@ impl SaveDelta {
 ///
 /// Deletes come only from `baseline`'s recorded entries, in [`PersistedKey`] order, never from
 /// a sweep of storage; ignored keys are not recorded and so are never deleted.
-pub fn diff(baseline: &PersistedBaseline, view: &PersistedView) -> SaveDelta {
+pub fn diff_baseline(baseline: &PersistedBaseline, view: &PersistedView) -> SaveDelta {
     let put = view
         .entries
         .iter()
@@ -365,7 +361,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&PersistedBaseline::default(), &view);
+        let delta = diff_baseline(&PersistedBaseline::default(), &view);
 
         assert_eq!(delta.put, view.entries);
         assert!(delta.delete.is_empty());
@@ -383,7 +379,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert!(delta.is_empty());
         assert_eq!(
@@ -409,7 +405,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(delta.put, vec![entry(preset("b"), "B2")]);
         assert!(delta.delete.is_empty());
@@ -422,7 +418,7 @@ mod tests {
         let baseline = baseline(&[(preset("a"), "A1")], Some(preset("a")));
         let view = view(vec![], vec![], SelectionView::Key(preset("a")));
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(delta.delete, vec![preset("a")]);
         assert!(delta.put.is_empty());
@@ -439,7 +435,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(delta.delete, vec![custom(3)]);
         assert!(delta.put.is_empty());
@@ -458,7 +454,7 @@ mod tests {
         );
         let view = view(vec![], vec![], SelectionView::Key(preset("z")));
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(
             delta.delete,
@@ -475,7 +471,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(delta.mint, vec![unminted(7, "N7")]);
         assert!(delta.put.is_empty());
@@ -492,7 +488,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(
             delta.mint,
@@ -509,7 +505,7 @@ mod tests {
             SelectionView::Key(preset("b")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert!(delta.put.is_empty());
         assert!(delta.delete.is_empty());
@@ -527,7 +523,7 @@ mod tests {
             SelectionView::Unminted(entry_id(7)),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert_eq!(delta.selected, Some(SelectionView::Unminted(entry_id(7))));
     }
@@ -543,7 +539,7 @@ mod tests {
             SelectionView::Key(preset("a")),
         );
 
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         assert!(delta.is_empty());
     }
@@ -554,7 +550,7 @@ mod tests {
         let baseline = baseline(&[], Some(preset("a")));
         let view = view(vec![], vec![], SelectionView::Key(preset("a")));
 
-        assert!(diff(&baseline, &view).is_empty());
+        assert!(diff_baseline(&baseline, &view).is_empty());
     }
 
     #[test]
@@ -568,7 +564,7 @@ mod tests {
             vec![unminted(7, "N7"), unminted(8, "N8")],
             SelectionView::Unminted(entry_id(8)),
         );
-        let delta = diff(&baseline, &before);
+        let delta = diff_baseline(&baseline, &before);
         let minted = [
             (entry_id(7), CustomId::new(10)),
             (entry_id(8), CustomId::new(11)),
@@ -587,7 +583,7 @@ mod tests {
             vec![],
             SelectionView::Key(custom(11)),
         );
-        assert!(diff(&baseline, &after).is_empty());
+        assert!(diff_baseline(&baseline, &after).is_empty());
         assert_eq!(baseline.get(&preset("gone")), None);
         assert_eq!(baseline.selected(), Some(&custom(11)));
     }
@@ -600,17 +596,46 @@ mod tests {
             vec![unminted(7, "N7")],
             SelectionView::Key(preset("a")),
         );
-        let delta = diff(&baseline, &before);
+        let delta = diff_baseline(&baseline, &before);
 
         baseline.apply_saved(&delta, &[(entry_id(7), CustomId::new(10))]);
 
         // The user removed the entry after the delta was computed; storage still has the row.
         let after = view(vec![], vec![], SelectionView::Key(preset("a")));
-        let next = diff(&baseline, &after);
+        let next = diff_baseline(&baseline, &after);
         assert_eq!(next.delete, vec![custom(10)]);
         assert!(next.put.is_empty());
         assert!(next.mint.is_empty());
         assert_eq!(next.selected, None);
+    }
+
+    #[test]
+    fn apply_saved_clears_a_selection_the_mints_cannot_name() {
+        let mut baseline = baseline(&[], Some(preset("a")));
+        let before = view(
+            vec![],
+            vec![unminted(7, "N7")],
+            SelectionView::Unminted(entry_id(7)),
+        );
+        let delta = diff_baseline(&baseline, &before);
+        assert_eq!(delta.selected, Some(SelectionView::Unminted(entry_id(7))));
+
+        // Storage minted no id for the selected entry, so the written selection names no
+        // stored key — which is also why storage skipped writing it.
+        baseline.apply_saved(&delta, &[]);
+
+        assert_eq!(baseline.selected(), None);
+        // Even the selection recorded before the save is now written again, so the stored
+        // selection cannot stay at a value this window no longer knows storage holds.
+        let after = view(
+            vec![],
+            vec![unminted(7, "N7")],
+            SelectionView::Key(preset("a")),
+        );
+        assert_eq!(
+            diff_baseline(&baseline, &after).selected,
+            Some(SelectionView::Key(preset("a")))
+        );
     }
 
     #[test]
@@ -621,7 +646,7 @@ mod tests {
             vec![],
             SelectionView::Key(preset("b")),
         );
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         baseline.apply_saved(&delta, &[]);
 
@@ -638,7 +663,7 @@ mod tests {
             vec![],
             SelectionView::Key(preset("a")),
         );
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
         assert_eq!(delta.selected, None);
 
         baseline.apply_saved(&delta, &[]);
@@ -655,7 +680,7 @@ mod tests {
             vec![],
             SelectionView::Key(preset("a")),
         );
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
 
         baseline.apply_saved(&delta, &[]);
 
@@ -725,7 +750,7 @@ mod tests {
 
         assert_eq!(baseline.get(&custom(3)), Some("C3"));
         assert!(baseline.is_ignored(&custom(3), "unparseable"));
-        assert!(diff(&baseline, &view).is_empty());
+        assert!(diff_baseline(&baseline, &view).is_empty());
     }
 
     #[test]
@@ -744,7 +769,7 @@ mod tests {
         let mut keys: Vec<_> = baseline.keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, vec![preset("a")]);
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
         assert!(delta.put.is_empty());
         assert!(delta.delete.is_empty());
     }
@@ -776,7 +801,7 @@ mod tests {
         let mut baseline = baseline(&[(custom(3), "C3")], Some(preset("a")));
         baseline.ignore(custom(3), "unparseable".to_string());
         let view = view(vec![], vec![], SelectionView::Key(preset("a")));
-        let delta = diff(&baseline, &view);
+        let delta = diff_baseline(&baseline, &view);
         assert_eq!(delta.delete, vec![custom(3)]);
 
         baseline.apply_saved(&delta, &[]);

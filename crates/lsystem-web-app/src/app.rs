@@ -288,7 +288,11 @@ pub(crate) fn AppRoot() -> impl IntoView {
     // Timer. A separate task, never a wrapper around a storage future.
     wasm_bindgen_futures::spawn_local(async move {
         gloo_timers::future::TimeoutFuture::new(STARTUP_LOAD_TIMEOUT_MS).await;
-        if settle_startup(init, InitialState::bundled()) {
+        // Checked before building the fallback, not only inside `settle_startup`:
+        // `InitialState::bundled()` parses every bundled preset, and in a healthy session
+        // the loader settled startup long ago, so that work would only be thrown away.
+        // First-writer-wins is unaffected — nothing awaits between the two checks.
+        if startup_pending(init) && settle_startup(init, InitialState::bundled()) {
             persistence_warning.set(true);
         }
     });
@@ -771,6 +775,16 @@ pub(crate) fn App(
             .with(|workspace| (workspace.selected_id(), workspace.selected().applied_text()))
     });
 
+    // This component's reactive owner, captured here rather than read inside
+    // the storage task: a spawned task is polled with whatever owner happens
+    // to be current then, normally none, and the owner current when a trigger
+    // fires could be an unrelated event handler's. It
+    // is held in a `StoredValue` because `Owner` is not `Copy` and the task
+    // closure must stay `Copy` to be shared by every trigger. See its one use
+    // below for what it is for and what it must not wrap.
+    let storage_owner: StoredValue<Option<Owner>, LocalStorage> =
+        StoredValue::new_local(Owner::current());
+
     // The one serialized storage task. The `idb::Database` handle is not
     // `Clone` and is leased out of `db_slot` for the duration of an
     // operation, so saves and refreshes share a single-flight loop driven by
@@ -830,13 +844,24 @@ pub(crate) fn App(
                             // await in between, so the decision is never
                             // carried across one.
                             let grammar_draft_pending = grammar_is_dirty.get_untracked();
+                            // Subscribers are notified only when the refresh
+                            // actually changed something: a healthy window
+                            // reloads periodically and almost always finds
+                            // exactly what it already holds, and re-running
+                            // every workspace memo for that is pure waste.
                             let outcome = config_workspace
-                                .try_update(|workspace| {
-                                    baseline.try_update_value(|baseline| {
-                                        workspace.refresh(&stored, baseline, grammar_draft_pending)
-                                    })
+                                .try_maybe_update(|workspace| {
+                                    let outcome = baseline
+                                        .try_update_value(|baseline| {
+                                            workspace.refresh(
+                                                &stored,
+                                                baseline,
+                                                grammar_draft_pending,
+                                            )
+                                        })
+                                        .unwrap_or_default();
+                                    (outcome.changed, outcome)
                                 })
-                                .flatten()
                                 .unwrap_or_default();
                             // A same-id content change does not move
                             // `selected_id`, so its watcher never sees it —
@@ -845,7 +870,23 @@ pub(crate) fn App(
                             // already brought the baseline in step, so the
                             // save this may start diffs to empty.
                             if outcome.selected_content_changed || outcome.selection_moved {
-                                select_current_config();
+                                // Run under the component's owner: this
+                                // rebuilds the grammar rows, whose `RwSignal`s
+                                // would otherwise belong to no owner and never
+                                // be registered for disposal. `Owner::with`
+                                // sets only the owner, not the observer, so it
+                                // creates no tracking subscription. It wraps
+                                // this synchronous call alone and must never
+                                // wrap a storage future: those stay awaited
+                                // directly in this task so their IndexedDB
+                                // transaction resumes from a microtask. The
+                                // owner is always present inside a component;
+                                // the fallback just keeps the resync happening
+                                // if that ever stops being true.
+                                match storage_owner.try_get_value().flatten() {
+                                    Some(owner) => owner.with(select_current_config),
+                                    None => select_current_config(),
+                                }
                             }
                         }
                     }
@@ -857,26 +898,42 @@ pub(crate) fn App(
                     // diffed against the baseline: once per save, off the
                     // live workspace read untracked.
                     let view = config_workspace.with_untracked(ConfigWorkspace::persisted_view);
-                    let delta =
-                        baseline.with_value(|baseline| lsystem_app_model::diff(baseline, &view));
+                    let delta = baseline
+                        .with_value(|baseline| lsystem_app_model::diff_baseline(baseline, &view));
                     if !delta.is_empty() {
                         match crate::storage::save(&handle, &delta).await {
                             Some(minted) => {
+                                // Every write from here on uses a `try_` form,
+                                // as the refresh above does: these run after
+                                // an await, so their target may already have
+                                // been disposed, and the fallible form says so
+                                // in its signature instead of hiding it. There
+                                // is nothing useful to do about a disposed
+                                // target here — the window is going away — so
+                                // the result is dropped.
                                 if !minted.is_empty() {
-                                    config_workspace.update(|workspace| {
+                                    config_workspace.try_update(|workspace| {
                                         for (entry, id) in &minted {
                                             if !workspace.assign_custom_id(*entry, *id) {
-                                                log::warn!(
-                                                    "autosave: no entry left to record minted \
-                                                     custom id {} on",
+                                                // The entry was removed while
+                                                // the save was in flight — a
+                                                // modelled race, not a fault.
+                                                // The baseline still records
+                                                // the minted key below, so the
+                                                // next save deletes the row.
+                                                log::debug!(
+                                                    "autosave: minted custom id {} has no entry \
+                                                     left to record it on; its row will be \
+                                                     deleted by the next save",
                                                     id.get()
                                                 );
                                             }
                                         }
                                     });
                                 }
-                                baseline
-                                    .update_value(|baseline| baseline.apply_saved(&delta, &minted));
+                                baseline.try_update_value(|baseline| {
+                                    baseline.apply_saved(&delta, &minted);
+                                });
                             }
                             // The baseline is deliberately left unchanged and
                             // `want_save` is *not* re-set: the next trigger
@@ -887,7 +944,7 @@ pub(crate) fn App(
                     }
                 }
 
-                db_slot.update_value(|opt| *opt = Some(handle));
+                db_slot.try_update_value(|opt| *opt = Some(handle));
             }
             // Reached only from the synchronous loop-condition check (or the
             // `break` above), with no await in between, so no trigger can
@@ -923,6 +980,18 @@ pub(crate) fn App(
     // renders, so this is a plain effect that also runs at mount rather than
     // a false->true watch. `AppRoot` fills `db_slot` before setting it, so
     // `run_storage_task` always finds the handle.
+    //
+    // This path reached `App` without a load, so `baseline` is empty and its
+    // recorded selection is `None`: the save it starts therefore always
+    // writes a selection, and at mount that is whichever entry the bundled
+    // workspace started on, overwriting the previous session's stored
+    // selection with one nobody chose. That is accepted. Storage was
+    // unreachable for the whole bounded startup wait, so this window has no
+    // way to know what was stored, and the alternative — leaving the stored
+    // selection alone — would mean a window that cannot write its own
+    // selection at all for the rest of the session. Entries are not lost the
+    // same way: puts only add or overwrite, and deletes come solely from an
+    // empty baseline, which has nothing to delete.
     Effect::new(move |_| {
         if storage_ready.get() {
             start_save();
