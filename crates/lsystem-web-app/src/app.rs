@@ -96,6 +96,10 @@ pub(crate) struct ConfigContext {
     pub(crate) toml_error: RwSignal<Option<String>>,
     pub(crate) workspace_error: RwSignal<Option<String>>,
     pub(crate) colors_error: RwSignal<Option<String>>,
+    /// Whether browser persistence has failed at any point this session. Read-only
+    /// here: only `AppRoot` and the storage tasks in `App` turn it on, and nothing
+    /// turns it off.
+    pub(crate) persistence_warning: ReadSignal<bool>,
     /// Clears panel errors and resyncs editors after the selected entry (or its
     /// applied config) changes.
     pub(crate) select_current_config: Callback<()>,
@@ -1019,6 +1023,7 @@ pub(crate) fn App(
         toml_error,
         workspace_error,
         colors_error,
+        persistence_warning: persistence_warning.read_only(),
         select_current_config: Callback::new(move |()| select_current_config()),
         clear_toml_revert_state: Callback::new(move |()| clear_toml_revert_state()),
     });

@@ -14,6 +14,7 @@ pub(crate) fn PresetPanel() -> impl IntoView {
         selected_is_bundled,
         can_reset,
         workspace_error,
+        persistence_warning,
         toml_text,
         select_current_config,
         ..
@@ -275,6 +276,19 @@ pub(crate) fn PresetPanel() -> impl IntoView {
         </div>
         {move || workspace_error.get().map(|msg| view! {
             <span class="inline-status error">{msg}</span>
+        })}
+        // Coarse, one-way persistence health notice. Mounted only once persistence has
+        // failed, so a healthy session reserves no space for it (`.inline-status` has a
+        // minimum height and the desktop container adds a flex gap per child). It is not
+        // interactive and never names the change that failed.
+        {move || persistence_warning.get().then(|| view! {
+            <span
+                class="inline-status warning"
+                role="status"
+                title="Browser storage is not fully working, so recent changes may not be saved."
+            >
+                "Changes may not be saved"
+            </span>
         })}
         <input
             type="file"
