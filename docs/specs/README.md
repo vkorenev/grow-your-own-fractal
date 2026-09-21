@@ -31,7 +31,8 @@ silently amend the specification.
 - [Configuration](configuration.md) defines the authored TOML schema,
   validation, defaults, resolution, and source-preserving edits.
 - [Application workspace](application-workspace.md) defines presets, custom
-  configurations, drafts, direct controls, and application variants.
+  configurations, drafts, direct controls, persistence, and application
+  variants.
 - [Rendering and interaction](rendering-and-interaction.md) defines color,
   framing, navigation, animation, empty scenes, and rendering failures.
 - [Exports](exports.md) defines SVG, PNG, and APNG output and the export
