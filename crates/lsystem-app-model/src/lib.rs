@@ -3,6 +3,7 @@ pub(crate) mod color;
 pub(crate) mod config_defaults;
 pub(crate) mod config_workspace;
 pub(crate) mod editor_config;
+pub(crate) mod persistence;
 pub(crate) mod presets;
 pub(crate) mod util;
 
@@ -20,11 +21,15 @@ pub use color::{
 pub use config_defaults::{ConfigDefaults, LSystemDefaults, ParseConfigError};
 pub use config_workspace::{
     CleanMut, ConfigEntry, ConfigEntryId, ConfigWorkspace, ConfigWorkspaceError, DirtyMut,
-    EntryViewMut,
+    EntryViewMut, RefreshOutcome,
 };
 pub use editor_config::{
     ConfigDocument, ConfigSource, EditorColorConfig, EditorConfig, EditorGenerationConfig,
     EditorLineColorConfig,
+};
+pub use persistence::{
+    CustomId, PersistedBaseline, PersistedEntry, PersistedKey, PersistedView, SaveDelta,
+    SelectionView, StoredState, UnmintedCustom, diff_baseline,
 };
 pub use presets::load_presets;
 pub use util::sanitize_filename;

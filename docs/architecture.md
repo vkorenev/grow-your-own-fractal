@@ -190,6 +190,14 @@ Authored grammar normalization and turtle behavior are defined in the
   re-anchors the selection to the following (or else preceding) entry and never
   reuses ids. Each UI owns only the removal confirmation and the editor and
   renderer resync.
+- `persistence.rs` defines the storage-independent persisted view of a
+  workspace: `PersistedKey` and `CustomId` identity, `StoredState`, the live
+  `PersistedView` (produced by `ConfigWorkspace::persisted_view`), a
+  `PersistedBaseline` of what one window last loaded or saved, and the pure
+  `diff_baseline` that yields a `SaveDelta`. `config_workspace.rs` adds
+  `restore`, `refresh`, and `assign_custom_id`. Neither depends on IndexedDB or
+  the browser, and the web app's `storage.rs` maps these types to its own
+  representation.
 - `presets.rs` embeds and sorts the `presets/` directory.
 - `color.rs` centralizes line-color mode selection and per-mode picker memory.
 - `animation.rs` contains hue-rotation state and phase advancement.
@@ -346,6 +354,99 @@ next submitted frame's GPU completion.
 
 Shared and platform-specific interaction behavior is defined in the
 [rendering specification](specs/rendering-and-interaction.md).
+
+### Web App Persistence
+
+`lsystem-web-app` persists the workspace to browser storage so that presets,
+custom entries, and the selection survive reloads and are shared coherently
+between windows. What persists and how restore, refresh, and failures behave
+is defined in the
+[application workspace specification](specs/application-workspace.md#persistence);
+this section covers the mechanism. The work is split along the crate boundary:
+`lsystem-app-model` describes storage in the app's own terms, with no
+dependency on IndexedDB or the browser and no tab or window identity in its
+types (the baseline is per-window state held by the caller), while
+`storage.rs` in the web app owns the whole representation (store names, key
+encodings, transactions). Its interface speaks in those types: `open` returns
+the `idb::Database`, `load` returns a `StoredState`, and `save` takes a
+`SaveDelta` and returns the minted (`ConfigEntryId`, `CustomId`) pairs. One
+IndexedDB database (`lsystem-autosave`, version 2) holds three object stores:
+`presets`, keyed by bundled file path; `customs`, an `autoIncrement` store
+whose integer key is the custom entry's identity; and `meta`, which holds the
+selection. The upgrade creates missing stores and deletes the legacy
+single-record store; if any of that fails it aborts the version-change
+transaction, so the version is rolled back and the next open retries the
+upgrade rather than committing a schema later transactions cannot use. A custom
+entry has no identity when it is created, which keeps Copy and Import
+synchronous and working with storage unavailable. Its id is the key of the
+first `customs` add inside the save that persists it, so ids are unique across
+windows without coordination and integer order is creation order; a later put
+under an explicit key brings a removed entry back under its original id.
+
+Each window keeps a `PersistedBaseline` of what it last loaded or saved, per
+key and in the same representation as the workspace's `PersistedView` (a
+preset only while it differs from its bundled default, a custom always). A
+save diffs the live view against the baseline and applies the resulting
+delta in one readwrite transaction: puts for changed entries, mints for
+custom entries without an id, the selection if it changed, and deletes only
+for keys the baseline holds that the view no longer has (a reset preset, a
+removed custom). Deletes are never derived by sweeping the store, so a window
+cannot remove rows it never held, and rows it could not parse are noted apart
+from the recorded entries and left as they are. Ids are assigned to
+workspace entries and the baseline advances only after the transaction
+commits; a failed save changes neither, and the next trigger re-diffs from the
+live workspace.
+
+Startup restore and live refresh are separate `ConfigWorkspace` operations
+because they answer different questions; the specification defines what each
+does. `restore` runs once on a workspace just seeded from bundled presets and
+returns the baseline for what it applied. An orphaned preset's edit becomes an
+id-less custom, and the orphan's old `preset:` key stays in the baseline, so
+the next save deletes the stale row and mints the converted custom in one
+transaction. `refresh` reconciles a live workspace with a fresh read and
+updates the baseline in step, so it never has to start a save. Whether an
+entry may be updated is expressed as baseline equality: it must have no raw
+draft, no grammar draft (a UI fact the caller passes in, and which only
+concerns the selected entry), and applied content equal to its baseline
+record, so anything not yet saved counts as pending. Eligibility is judged in
+the same synchronous step as the mutation, after the read resolves, and is
+never carried across an await.
+
+After startup, every read and write runs in one serialized storage task in
+`app.rs`. `idb::Database` is not `Clone`, so the task leases the handle out
+of a shared slot for each pass of a single-flight loop driven by `want_save`
+and `want_refresh` flags. A trigger publishes its flag and pokes the task, and
+the running task re-checks both flags after every pass, so triggers that
+arrive mid-operation coalesce into another pass instead of being lost. The
+in-flight check comes before the availability check because the handle is out
+of the slot while an operation runs, and an empty slot then must not be read as
+unavailable storage. The save trigger is only the selected entry's id and
+applied text, since every user-driven mutation goes through the selected entry
+or through add, remove, or select, so raw TOML keystrokes start nothing. The
+full `persisted_view` walk and the diff happen once per save inside the task.
+Page-visible and window-focus events start a refresh. `pagehide`, page-hidden,
+and window-blur events only request a save as a backstop, which writes
+nothing when nothing changed.
+
+`AppRoot` races opening and loading storage against a bounded timer, and
+whichever settles first decides startup: the loader with the restored
+workspace and its baseline, or with bundled presets and an empty baseline
+after an open or load failure, or the timer with bundled presets and an empty
+baseline. If the timer fires while `load` is in flight, the handle is still
+installed in the shared slot but the loaded state is dropped unread; a
+database that opens only after the timer has won is installed the same way and
+never loaded, so a late result can never be applied over what the user has
+already started doing. Installing a late handle sets `storage_ready`, whose
+effect starts a save so changes made in the meantime reach storage. A
+connection closes itself on `versionchange`, so an open window can never block
+another window's upgrade; a window that has stopped running scripts still can,
+which is why startup is bounded. One persistence-health signal is turned on by
+any open, load, save, or refresh failure, by the startup timeout, and by
+`versionchange`, and is never turned off. IndexedDB transactions stay alive
+only while their futures resume from the microtask queue, so `storage::`
+futures are awaited directly inside `spawn_local` tasks and must never be
+wrapped in anything polled from a timer, animation-frame callback, or reactive
+resource. The startup timer is a separate task for this reason.
 
 ## Export Behavior
 

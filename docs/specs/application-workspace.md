@@ -107,6 +107,125 @@ controls. Open imports one `.toml` file. Save downloads the currently displayed
 TOML, including an unapplied draft. The Iced app does not expose config-file
 Open or config-file Save.
 
+## Persistence
+
+**Platform variant:** The primary Leptos app persists workspace state to local
+browser storage across page reloads. The Iced app does not persist workspace
+state.
+
+### What persists
+
+Persisted state covers every entry whose applied configuration differs from
+its bundled default, plus every custom entry, together with which entry is
+selected. Unapplied drafts and non-configuration session state — such as
+camera position and rotation and animation or auto-rotation toggles — are
+never persisted.
+
+Persistence happens automatically as the workspace changes; no explicit save
+action is required, and it is independent of the Save control above, which
+downloads a file rather than persisting workspace state. Removing a custom
+entry also removes its persisted copy in browser storage, so it does not
+return on the next restore; resetting a bundled entry likewise removes its
+persisted edit. This concerns only browser storage — as described above,
+removal never modifies an imported file.
+
+### Restoring at startup
+
+On startup, the app defers its first render until any persisted state has
+been loaded and applied, so the initial render already reflects restored
+content rather than momentarily showing bundled defaults first — but only up
+to a bounded wait: if loading has not finished within that time, the app
+proceeds as if nothing had been persisted, the same as if no persisted state
+existed or it failed to load outright. A load that finishes after that point
+is discarded rather than retroactively applied, so it can never overwrite
+whatever the user has already started doing in the meantime.
+
+A persisted edit to a bundled preset is restored onto that same preset
+entry, matched by a stable identity independent of display name, so the
+entry's Reset control remains available after restore. A persisted custom
+entry keeps a stable identity of its own from creation onward: restoring it
+and then editing it further updates that same persisted entry rather than
+creating another. This identity is unique to that entry alone — two custom
+entries created independently, including in different tabs or windows with
+no coordination between them, never end up sharing one identity. Restored
+custom entries are independently selectable like any other custom entry and
+appear after the bundled presets in the order they were created.
+
+A persisted preset entry whose path no longer matches any currently bundled
+preset — for example, the preset was renamed or removed since the edit was
+saved — is not discarded: its saved edit is restored as a new custom entry
+instead, under the same name, placed after the other restored custom
+entries, so a change outside the user's control does not silently lose their
+work. Like any custom entry, it no longer has a Reset control, since the
+preset it once matched no longer exists to reset to. A persisted entry whose
+content fails to parse or validate, by contrast, has nothing salvageable to
+preserve and is skipped. Neither case prevents the rest of the persisted
+state from restoring or the application from starting.
+
+A persisted selection can fail to resolve only if it named a custom entry
+that no longer exists — for example, because it was removed from another
+window — or whose own content failed to parse or validate; that entry is
+never created, so there is nothing to select. When that happens, restoring
+leaves the selection as whatever the rest of the restore has already
+produced, falling back as far as the first bundled preset if nothing else
+was restored either; the workspace is never left without a selected entry. A
+persisted selection that named a preset always resolves — either onto that
+preset directly, or, if the preset no longer exists, onto the custom entry
+it was converted into as described above — since matching a preset by path
+never depends on whether its saved edit itself applied successfully.
+
+### Multiple tabs and windows
+
+The app can be open in several tabs or windows at once. Each entry is
+persisted independently, and windows share persisted state by entry identity
+rather than replacing one another's:
+
+1. **Saving.** A save adds or updates only the entries that window has
+   changed, so it never discards entries saved from another window. A
+   restore in any window reflects entries from all of them, including custom
+   entries that window never created.
+2. **Refreshing.** When a tab or window that was in the background becomes
+   active again, it re-reads persisted state and picks up changes saved
+   elsewhere in the meantime. An entry is updated only if this window has
+   nothing of its own pending in it — no unapplied raw TOML or grammar draft
+   and no change not yet saved. Any other entry is left as it is, and its own
+   changes persist through the normal save. An updated entry takes the
+   persisted content, reverting to its bundled default if it was reset
+   elsewhere or disappearing if it was removed elsewhere; entries created
+   elsewhere are added to the workspace. A refresh that fails leaves the
+   window unchanged.
+3. **Selection.** A refresh never changes the selection: the persisted
+   selection is used only at startup, and is otherwise whichever window
+   changed its selection last. The one exception is a selected entry that is
+   removed elsewhere and updated here, in which case the selection moves as
+   it would after removing that entry in this window. The displayed and
+   rendered configuration follow the selected entry whenever its content is
+   updated.
+4. **Conflicts.** When two windows change the same entry, whichever saves
+   last wins for that entry, and nothing else is affected. A reset or removal
+   stands until the entry is changed again: a later change to that entry in
+   any window brings it back, so a window that is mid-edit on an entry
+   removed elsewhere keeps its work. No prompt or indicator resolves a
+   conflict.
+
+### Failures
+
+**Non-normative:** persistence is a best-effort enhancement. The most recent
+change is always eventually persisted while the tab remains open, though a
+rapid sequence of changes is not guaranteed to persist every intermediate
+state, and a best-effort attempt is made to persist the latest change
+immediately if the tab is closed or navigated away from. Failures to load,
+save, or refresh persisted state do not block startup, editing, or any other
+workspace operation — including copying, importing, renaming, removing, and
+resetting.
+
+If browser storage fails to open at startup, or any save or refresh attempt
+fails, the app shows a small, non-blocking indicator for the remainder of the
+session, rather than staying silent about it. The indicator reports only that
+persistence is not fully working, never which specific change failed to save,
+and it does not reappear or clear itself if persistence starts working again
+later in the same session.
+
 ## Direct configuration controls
 
 Both applications expose direct controls for the effective iteration count,
@@ -234,3 +353,7 @@ Parse, validation, workspace, rendering, and export failures remain visible at
 the relevant application boundary. A failed draft apply or import preserves
 the previous valid workspace and rendered configuration. Rendering-specific
 recovery is defined in [Rendering and interaction](rendering-and-interaction.md#failures-and-recovery).
+Persistence failures are the one exception: as described above, they never
+block or interrupt anything, and are surfaced — if at all — only through the
+coarse, non-blocking indicator described above, never at the point of the
+specific action that failed to persist.
