@@ -20,11 +20,6 @@
 //! - `meta` — bookkeeping; the selection lives under `SELECTION_KEY` as
 //!   `"preset:<path>"` or `"custom:<id>"`.
 
-// The identity-keyed API below (`load`, `save`, and their helpers) is wired
-// into the app by Tasks 6 and 7; until then only `open` has a caller. Remove
-// this allow with the legacy functions at the bottom of the file.
-#![allow(dead_code)]
-
 use idb::{
     Database, DatabaseEvent, Error, Factory, ObjectStoreParams, Query, Transaction,
     TransactionMode, TransactionResult,
@@ -444,52 +439,6 @@ fn decode_selection(value: &str) -> Option<PersistedKey> {
             .map(|id| PersistedKey::Custom(CustomId::new(id))),
         _ => None,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Legacy single-record autosave.
-//
-// Task 7 deletes everything below together with its last caller in `app.rs`.
-// It reads and writes the legacy `config` store, which the version-2 upgrade
-// above deletes, so these calls fail at runtime until then — logged and
-// degraded like any other storage failure, as autosave is non-essential.
-// ---------------------------------------------------------------------------
-
-const RECORD_KEY: &str = "current";
-
-/// Loads the autosaved config text, if any.
-pub async fn legacy_load(db: &Database) -> Option<String> {
-    let value = match legacy_load_value(db).await {
-        Ok(value) => value,
-        Err(err) => {
-            log::warn!("failed to load autosaved config: {err}");
-            return None;
-        }
-    };
-    value.and_then(|value| value.as_string())
-}
-
-async fn legacy_load_value(db: &Database) -> Result<Option<JsValue>, Error> {
-    let transaction = db.transaction(&[LEGACY_STORE], TransactionMode::ReadOnly)?;
-    let store = transaction.object_store(LEGACY_STORE)?;
-    let query: Query = JsValue::from_str(RECORD_KEY).into();
-    store.get(query)?.await
-}
-
-/// Saves `text` as the autosaved config, overwriting any existing record.
-pub async fn legacy_save(db: &Database, text: &str) {
-    if let Err(err) = legacy_save_value(db, text).await {
-        log::warn!("failed to save autosaved config: {err}");
-    }
-}
-
-async fn legacy_save_value(db: &Database, text: &str) -> Result<(), Error> {
-    let transaction = db.transaction(&[LEGACY_STORE], TransactionMode::ReadWrite)?;
-    let store = transaction.object_store(LEGACY_STORE)?;
-    let key = JsValue::from_str(RECORD_KEY);
-    store.put(&JsValue::from_str(text), Some(&key))?.await?;
-    transaction.commit()?.await?;
-    Ok(())
 }
 
 #[cfg(test)]

@@ -318,9 +318,6 @@ pub(crate) fn AppRoot() -> impl IntoView {
     }
 }
 
-// `baseline`, `persistence_warning` and `storage_ready` are consumed by the
-// storage task and the indicator, which are added in Tasks 7 and 8.
-#[allow(unused_variables)] // removed in Task 7/8
 #[component]
 pub(crate) fn App(
     initial_workspace: ConfigWorkspace,
@@ -335,9 +332,13 @@ pub(crate) fn App(
         &ConfigDefaults::embedded().colors,
     ));
     let config_workspace = RwSignal::new(initial_workspace);
-    // Autosave single-flight queue bookkeeping; see the `try_save` closure below.
+    // Storage-task bookkeeping; see `run_storage_task` below. `baseline` is
+    // what this window believes storage holds, and the three flags drive the
+    // one single-flight loop that owns every read and write after startup.
+    let baseline: StoredValue<PersistedBaseline, LocalStorage> = StoredValue::new_local(baseline);
+    let want_save: StoredValue<bool, LocalStorage> = StoredValue::new_local(false);
+    let want_refresh: StoredValue<bool, LocalStorage> = StoredValue::new_local(false);
     let save_in_flight: StoredValue<bool, LocalStorage> = StoredValue::new_local(false);
-    let pending_save: StoredValue<Option<String>, LocalStorage> = StoredValue::new_local(None);
     let grammar_error = RwSignal::new(None::<String>);
     let toml_error = RwSignal::new(None::<String>);
     let workspace_error = RwSignal::new(None::<String>);
@@ -357,8 +358,6 @@ pub(crate) fn App(
 
     let toml_text =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().draft_text().into_owned()));
-    let applied_toml_text =
-        Memo::new(move |_| config_workspace.with(|ws| ws.selected().applied_text()));
     let selected_id = Memo::new(move |_| config_workspace.with(|ws| ws.selected_id()));
     let selected_name =
         Memo::new(move |_| config_workspace.with(|ws| ws.selected().name().to_string()));
@@ -713,82 +712,6 @@ pub(crate) fn App(
         false,
     );
 
-    // Leading-edge, single-flight autosave queue: a write begins immediately
-    // on the first change (nothing lost to an artificial delay), at most one
-    // IndexedDB transaction is in flight at a time (writes can't complete
-    // out of order), and the latest text is always the last one written even
-    // under several back-to-back changes (e.g. a dragged slider) — nothing
-    // is silently superseded by a stale in-flight write.
-    let try_save = move |text: String| {
-        // Check `save_in_flight` first, before ever looking at `db_slot`.
-        // The in-flight task below takes the `Database` handle out of
-        // `db_slot` for the entire duration of its save (see the comment at
-        // the take site), so `db_slot` reads as empty while a save is
-        // running — that must never be confused with "storage was never
-        // available." This branch doesn't touch `db_slot` at all: if a save
-        // is in flight, its spawned task already established availability
-        // when it started, so this call only needs to queue the latest value
-        // for it to pick up.
-        if save_in_flight.get_value() {
-            pending_save.set_value(Some(text));
-            return;
-        }
-        // No save in flight, so `db_slot` (if any) is currently held by
-        // nobody — safe to check availability here.
-        if db_slot.with_value(Option::is_none) {
-            // Storage unavailable (IndexedDB failed to open) — degrade silently.
-            return;
-        }
-        save_in_flight.set_value(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let mut current = text;
-            loop {
-                // Exclusively takes the handle out of `db_slot` for the
-                // duration of this save; `db_slot` reads as empty to any
-                // concurrent `try_save`/`pagehide` call until it's restored
-                // just below. That's fine: those callers gate on
-                // `save_in_flight` (set above, before this task ever runs),
-                // not on `db_slot`'s Some/None state, so a momentarily-empty
-                // `db_slot` here is never mistaken for "storage unavailable."
-                let Some(Some(handle)) = db_slot.try_update_value(|opt| opt.take()) else {
-                    break;
-                };
-                crate::storage::legacy_save(&handle, &current).await;
-                db_slot.update_value(|opt| *opt = Some(handle));
-                match pending_save.try_update_value(|opt| opt.take()) {
-                    Some(Some(next)) => current = next,
-                    _ => break,
-                }
-            }
-            save_in_flight.set_value(false);
-        });
-    };
-
-    // The handler first runs on the first genuine change after mount
-    // (immediate = false): `config_workspace` is seeded with the value
-    // already restored (or freshly bundled) by `AppRoot`, which is already
-    // correct in the DB — or doesn't need to be — so autosave must not fire
-    // on that initial value, only on subsequent edits.
-    Effect::watch(
-        move || applied_toml_text.get(),
-        move |current, _prev, _: Option<()>| try_save(current.clone()),
-        false,
-    );
-
-    // Best-effort defense against a reload/close landing exactly inside an
-    // in-flight write's brief async gap. Safe to call unconditionally, even
-    // when nothing changed since the last save: `try_save`'s own bookkeeping
-    // makes a redundant call a cheap no-op-equivalent (at worst one harmless
-    // extra write of an already-current value), not a correctness issue.
-    // This cannot guarantee completion if the browser terminates the page
-    // immediately, and is not a substitute for the immediate-write design
-    // above, which is what actually closes the race for the common
-    // reload/navigate case.
-    let pagehide_handle = window_event_listener(leptos::ev::pagehide, move |_| {
-        try_save(applied_toml_text.get_untracked());
-    });
-    on_cleanup(move || pagehide_handle.remove());
-
     let grammar_has_3d_symbols = Memo::new(move |_| {
         grammar_axiom.with(|a| contains_3d_symbols(a))
             || grammar_rows.with(|rows| {
@@ -820,6 +743,222 @@ pub(crate) fn App(
             }
         });
         set.into_iter().collect::<Vec<char>>()
+    });
+
+    // What starts a save: the selected entry's identity and its applied text.
+    //
+    // Invariant: user-driven mutations touch only the selected entry (plus
+    // adding, removing, and selecting). Do not add a public
+    // `ConfigWorkspace` method or UI action that mutates a non-selected entry
+    // without also making it start a save; the trigger would silently miss
+    // it. The `pagehide`/hidden flush (a full diff regardless of trigger) is
+    // only a backstop.
+    //
+    // This is deliberately *not* the persisted view: every user-driven
+    // mutation goes through `selected_mut()`, `select_by_id`, `copy`,
+    // `import_toml`, or `remove_selected`, all of which change this pair
+    // (a selection-only change moves its id half, and adding an entry
+    // auto-selects it), so walking every entry here would buy nothing.
+    // Raw-draft keystrokes change neither half, so they start nothing. The
+    // full `persisted_view()` walk and the baseline diff happen once per
+    // save, inside the storage task.
+    let save_trigger = Memo::new(move |_| {
+        config_workspace
+            .with(|workspace| (workspace.selected_id(), workspace.selected().applied_text()))
+    });
+
+    // The one serialized storage task. The `idb::Database` handle is not
+    // `Clone` and is leased out of `db_slot` for the duration of an
+    // operation, so saves and refreshes share a single-flight loop driven by
+    // the `want_save` and `want_refresh` flags: a trigger publishes its flag
+    // and then calls this, and whichever task is running drains both.
+    let run_storage_task = move || {
+        // Check `save_in_flight` first, before ever looking at `db_slot`.
+        // The in-flight task below takes the `Database` handle out of
+        // `db_slot` for the duration of each pass (see the comment at the
+        // take site), so `db_slot` reads as empty while an operation is
+        // running — that must never be confused with "storage was never
+        // available." This branch doesn't touch `db_slot` at all: if a task
+        // is in flight, it already established availability when it started,
+        // and it re-checks both flags after every pass, so the flag the
+        // caller just set is picked up there.
+        if save_in_flight.get_value() {
+            return;
+        }
+        // No task in flight, so `db_slot` (if any) is currently held by
+        // nobody — safe to check availability here.
+        if db_slot.with_value(Option::is_none) {
+            // Storage is unavailable, or has not finished opening. Degrade
+            // silently; the flags stay set, so the `storage_ready` flush
+            // below picks the work up if a handle arrives later.
+            return;
+        }
+        // Set synchronously, before spawning and never inside the task: a
+        // trigger that arrives before the task body first runs must see "in
+        // flight" and leave its flag for the loop, not start a second task.
+        save_in_flight.set_value(true);
+        wasm_bindgen_futures::spawn_local(async move {
+            while want_refresh.get_value() || want_save.get_value() {
+                // Exclusively takes the handle out of `db_slot` for this
+                // pass; `db_slot` reads as empty to any concurrent trigger
+                // until it is restored at the bottom of the loop. That's
+                // fine: those callers gate on `save_in_flight` (set above,
+                // before this task ever ran), not on `db_slot`'s Some/None
+                // state, so a momentarily-empty `db_slot` is never mistaken
+                // for "storage unavailable." There is deliberately no early
+                // exit between here and the restore, so the handle always
+                // goes back.
+                let Some(Some(handle)) = db_slot.try_update_value(|opt| opt.take()) else {
+                    break;
+                };
+
+                if want_refresh.get_value() {
+                    // Cleared before the work, so a refresh trigger arriving
+                    // during it schedules another pass instead of being lost.
+                    want_refresh.set_value(false);
+                    match crate::storage::load(&handle).await {
+                        // A failed refresh leaves this window unchanged.
+                        None => persistence_warning.set(true),
+                        Some(stored) => {
+                            // Eligibility must be judged at call time: the
+                            // grammar-draft state is read untracked here and
+                            // applied in the same synchronous step, with no
+                            // await in between, so the decision is never
+                            // carried across one.
+                            let grammar_draft_pending = grammar_is_dirty.get_untracked();
+                            let outcome = config_workspace
+                                .try_update(|workspace| {
+                                    baseline.try_update_value(|baseline| {
+                                        workspace.refresh(&stored, baseline, grammar_draft_pending)
+                                    })
+                                })
+                                .flatten()
+                                .unwrap_or_default();
+                            // A same-id content change does not move
+                            // `selected_id`, so its watcher never sees it —
+                            // exactly as for a raw TOML apply and a reset,
+                            // which also resync explicitly. `refresh` has
+                            // already brought the baseline in step, so the
+                            // save this may start diffs to empty.
+                            if outcome.selected_content_changed || outcome.selection_moved {
+                                select_current_config();
+                            }
+                        }
+                    }
+                }
+
+                if want_save.get_value() {
+                    want_save.set_value(false);
+                    // The only place the full persisted view is walked and
+                    // diffed against the baseline: once per save, off the
+                    // live workspace read untracked.
+                    let view = config_workspace.with_untracked(ConfigWorkspace::persisted_view);
+                    let delta =
+                        baseline.with_value(|baseline| lsystem_app_model::diff(baseline, &view));
+                    if !delta.is_empty() {
+                        match crate::storage::save(&handle, &delta).await {
+                            Some(minted) => {
+                                if !minted.is_empty() {
+                                    config_workspace.update(|workspace| {
+                                        for (entry, id) in &minted {
+                                            if !workspace.assign_custom_id(*entry, *id) {
+                                                log::warn!(
+                                                    "autosave: no entry left to record minted \
+                                                     custom id {} on",
+                                                    id.get()
+                                                );
+                                            }
+                                        }
+                                    });
+                                }
+                                baseline
+                                    .update_value(|baseline| baseline.apply_saved(&delta, &minted));
+                            }
+                            // The baseline is deliberately left unchanged and
+                            // `want_save` is *not* re-set: the next trigger
+                            // re-diffs from the live workspace. Replaying
+                            // this delta would re-mint without re-reading.
+                            None => persistence_warning.set(true),
+                        }
+                    }
+                }
+
+                db_slot.update_value(|opt| *opt = Some(handle));
+            }
+            // Reached only from the synchronous loop-condition check (or the
+            // `break` above), with no await in between, so no trigger can
+            // slip in between the last check of the flags and this clear.
+            save_in_flight.set_value(false);
+        });
+    };
+
+    // Both helpers publish the flag *before* poking the task, so a task that
+    // is already running picks the work up on its next pass.
+    let start_save = move || {
+        want_save.set_value(true);
+        run_storage_task();
+    };
+    let start_refresh = move || {
+        want_refresh.set_value(true);
+        run_storage_task();
+    };
+
+    // The handler first runs on the first genuine change after mount
+    // (immediate = false): `config_workspace` is seeded with the value
+    // already restored (or freshly bundled) by `AppRoot`, which `baseline`
+    // already describes, so mounting must not start a save by itself.
+    Effect::watch(
+        move || save_trigger.get(),
+        move |_, _, _: Option<()>| start_save(),
+        false,
+    );
+
+    // `storage_ready` means `AppRoot` installed the handle *after* startup
+    // had already been decided without it, so whatever changed in the
+    // meantime is still unsaved. It can already be `true` when `App` first
+    // renders, so this is a plain effect that also runs at mount rather than
+    // a false->true watch. `AppRoot` fills `db_slot` before setting it, so
+    // `run_storage_task` always finds the handle.
+    Effect::new(move |_| {
+        if storage_ready.get() {
+            start_save();
+        }
+    });
+
+    // Flush backstops, each only setting `want_save`: the full diff writes
+    // nothing when nothing changed. Saves stay immediate; these exist for a
+    // reload/close landing in an in-flight write's async gap (`pagehide`),
+    // for mobile, where the page being hidden is the more reliable signal,
+    // and for a switch to another window that leaves this page visible
+    // (`blur`). None of them can guarantee completion if the browser
+    // terminates the page immediately.
+    let pagehide_handle = window_event_listener(leptos::ev::pagehide, move |_| start_save());
+    let blur_handle = window_event_listener(leptos::ev::blur, move |_| start_save());
+    // `visibilitychange` is a document event, but it bubbles up to the
+    // window, so one window-level listener sees it. Becoming visible again
+    // is a refresh trigger — this is where a backgrounded window picks up
+    // what other windows saved.
+    let visibility_handle = window_event_listener(leptos::ev::visibilitychange, move |_| {
+        if document().hidden() {
+            start_save();
+        } else {
+            start_refresh();
+        }
+    });
+    // Window focus overlaps with becoming visible. `want_refresh` coalesces
+    // triggers that arrive while a load is already in flight, but these two
+    // usually straddle the microtask checkpoint that first polls the spawned
+    // task (`spawn_local` schedules through `queueMicrotask`), so activating a
+    // tab typically costs two loads — the second finding nothing to change and
+    // writing nothing. That is the right trade: clearing `want_refresh` after
+    // the load instead of before it would coalesce them, but would then drop a
+    // trigger that arrives mid-load.
+    let focus_handle = window_event_listener(leptos::ev::focus, move |_| start_refresh());
+    on_cleanup(move || {
+        pagehide_handle.remove();
+        blur_handle.remove();
+        visibility_handle.remove();
+        focus_handle.remove();
     });
 
     let apply_hue_rotation = move |dir: Option<HueRotationDirection>| match dir {
