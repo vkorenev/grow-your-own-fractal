@@ -28,8 +28,8 @@ pub use editor_config::{
     EditorLineColorConfig,
 };
 pub use persistence::{
-    CustomId, PersistedEntry, PersistedKey, PersistedView, SelectionView, StoredState,
-    UnmintedCustom,
+    CustomId, PersistedBaseline, PersistedEntry, PersistedKey, PersistedView, SaveDelta,
+    SelectionView, StoredState, UnmintedCustom, diff,
 };
 pub use presets::load_presets;
 pub use util::sanitize_filename;
