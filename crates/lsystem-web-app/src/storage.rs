@@ -74,14 +74,16 @@ pub async fn open(on_version_change: impl Fn() + 'static) -> Option<Database> {
     };
 
     open_request.on_upgrade_needed(|event| {
-        let database = match event.database() {
-            Ok(database) => database,
+        let upgraded = match event.database() {
+            Ok(database) => upgrade(&database),
             Err(err) => {
                 log::warn!("failed to access database during upgrade: {err}");
-                return;
+                false
             }
         };
-        upgrade(&database);
+        if !upgraded {
+            abort_upgrade(&event);
+        }
     });
 
     // Another window holding a connection at an older version blocks this
@@ -100,6 +102,21 @@ pub async fn open(on_version_change: impl Fn() + 'static) -> Option<Database> {
             return None;
         }
     };
+
+    // Cheap belt over the upgrade path: a connection missing a store would
+    // fail every later transaction. `upgrade` aborts rather than leave one
+    // behind, so this should never fire; if it does, this session simply has
+    // no autosave. The connection is closed so it cannot block the next
+    // window's upgrade attempt.
+    let present = database.store_names();
+    if let Some(missing) = [PRESETS_STORE, CUSTOMS_STORE, META_STORE]
+        .into_iter()
+        .find(|name| !present.iter().any(|store| store == name))
+    {
+        log::warn!("the autosave database has no {missing} object store; autosave is unavailable");
+        database.close();
+        return None;
+    }
 
     database.on_version_change(move |event| {
         log::info!("closing the autosave connection for another window's upgrade");
@@ -121,12 +138,14 @@ pub async fn open(on_version_change: impl Fn() + 'static) -> Option<Database> {
 }
 
 /// Brings the database up to version 2: creates any store that is missing
-/// and drops the legacy single-record store.
+/// and drops the legacy single-record store. Returns whether every step
+/// succeeded; a `false` return must abort the version-change transaction.
 ///
 /// Must be called only inside an `upgradeneeded` handler.
-fn upgrade(database: &Database) {
+fn upgrade(database: &Database) -> bool {
     let existing = database.store_names();
     let has = |name: &str| existing.iter().any(|store| store == name);
+    let mut upgraded = true;
 
     let mut customs_params = ObjectStoreParams::new();
     customs_params.auto_increment(true);
@@ -141,6 +160,7 @@ fn upgrade(database: &Database) {
         }
         if let Err(err) = database.create_object_store(name, params) {
             log::warn!("failed to create IndexedDB object store {name}: {err}");
+            upgraded = false;
         }
     }
 
@@ -148,6 +168,42 @@ fn upgrade(database: &Database) {
         && let Err(err) = database.delete_object_store(LEGACY_STORE)
     {
         log::warn!("failed to delete legacy IndexedDB object store {LEGACY_STORE}: {err}");
+        upgraded = false;
+    }
+
+    upgraded
+}
+
+/// Aborts the running version-change transaction, so a partial upgrade is
+/// rolled back together with the version number.
+///
+/// Without this, a half-built schema would commit as version 2: `upgradeneeded`
+/// would never fire again and every later transaction would fail on a missing
+/// store, for this session and every future one, with no way back. Aborting
+/// leaves the stored version as it was, so the next `open` retries the upgrade;
+/// this open itself then fails and this session has no autosave.
+///
+/// The transaction is reached through the event's target — the open request,
+/// whose `transaction()` is the version-change transaction while it runs.
+/// `abort` is deliberately not awaited: its handlers are registered when the
+/// transaction is turned into a future, so an `abort` event that has already
+/// fired would never reach one, and waiting would hang the caller.
+fn abort_upgrade(event: &idb::event::VersionChangeEvent) {
+    let transaction = match idb::Event::target(event) {
+        Ok(request) => idb::Request::transaction(&request),
+        Err(err) => {
+            log::warn!("failed to reach the IndexedDB upgrade request: {err}");
+            return;
+        }
+    };
+    match transaction {
+        Some(transaction) => {
+            log::warn!("aborting the incomplete IndexedDB upgrade so the next open can retry it");
+            if let Err(err) = transaction.abort() {
+                log::warn!("failed to abort the IndexedDB upgrade transaction: {err}");
+            }
+        }
+        None => log::warn!("the IndexedDB upgrade transaction is already gone; cannot abort it"),
     }
 }
 
@@ -375,8 +431,8 @@ async fn write_delta(
             SelectionView::Key(key) => Some(key.clone()),
             SelectionView::Unminted(entry) => minted
                 .iter()
-                .find(|(id, _)| id == entry)
-                .map(|(_, id)| PersistedKey::Custom(*id)),
+                .find(|(entry_id, _)| entry_id == entry)
+                .map(|(_, custom_id)| PersistedKey::Custom(*custom_id)),
         };
         match key {
             Some(key) => {
