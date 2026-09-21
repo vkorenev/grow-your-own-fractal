@@ -7,6 +7,7 @@ use lsystem_core::{Dimensions, Rgb};
 
 use crate::config_defaults::ParseConfigError;
 use crate::editor_config::{ConfigDocument, ConfigSource, EditorConfig, EditorLineColorConfig};
+use crate::persistence::CustomId;
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -23,6 +24,12 @@ pub enum ConfigWorkspaceError {
     ParseConfig(#[from] ParseConfigError),
 }
 
+/// The set of config entries a user can select, edit, copy, import and remove.
+///
+/// Only the selected entry is edited by the user. Non-selected entries are mutated solely
+/// by [`ConfigWorkspace::assign_custom_id`], which does not change the entry's applied
+/// text. Anything that persists the workspace may therefore skip re-serializing
+/// non-selected entries until the selection, the entry set, or an assigned id changes.
 #[derive(Debug, Clone)]
 pub struct ConfigWorkspace {
     entries: Vec<ConfigEntry>,
@@ -44,6 +51,12 @@ pub struct ConfigEntry {
     default: Option<ConfigDocument>,
     draft: Option<String>,
     last_applied: ConfigDocument,
+    /// The path a bundled preset was loaded from; `None` for custom entries. Preset
+    /// entries are matched to persisted state by this path, never by name or position.
+    origin_path: Option<String>,
+    /// Storage-minted identity of a custom entry; `None` for presets and for customs that
+    /// storage has not yet assigned an id.
+    custom_id: Option<CustomId>,
 }
 
 /// Opaque, stable identifier for a `ConfigEntry` within a `ConfigWorkspace`.
@@ -92,7 +105,10 @@ pub struct DirtyMut<'a>(&'a mut ConfigEntry);
 impl ConfigWorkspace {
     /// Build a workspace from a collection of `(label, text)` preset pairs.
     ///
-    /// `label` is a display name used only in log warnings (typically the file path).
+    /// `label` is the preset's path (its file path). It appears in log warnings and is also
+    /// the preset's persistence identity: it is stored as the entry's origin path and
+    /// persisted state is matched to the preset by it.
+    ///
     /// Presets that fail to parse or fail config validation are skipped with a `log::warn!`
     /// naming the offending label — they do not cause an error. Returns
     /// [`ConfigWorkspaceError::Empty`] only if every preset is invalid (or the iterator is
@@ -106,7 +122,7 @@ impl ConfigWorkspace {
         let mut next_id = 0u64;
 
         for (label, text) in presets {
-            let entry = match ConfigEntry::preset(text, ConfigEntryId(next_id)) {
+            let entry = match ConfigEntry::preset(text, label.to_string(), ConfigEntryId(next_id)) {
                 Ok(entry) => entry,
                 Err(err) => {
                     log::warn!("Skipping invalid preset {label}: {err}");
@@ -127,8 +143,7 @@ impl ConfigWorkspace {
         })
     }
 
-    #[cfg(test)]
-    fn entries(&self) -> &[ConfigEntry] {
+    pub fn entries(&self) -> &[ConfigEntry] {
         &self.entries
     }
 
@@ -211,10 +226,34 @@ impl ConfigWorkspace {
     pub fn import_toml(&mut self, text: &str) -> Result<&ConfigEntry, ConfigWorkspaceError> {
         let source = ConfigSource::parse(text)?;
         let doc = ConfigDocument::try_from(source)?;
-        let id = self.allocate_id();
-        self.entries.push(ConfigEntry::custom(doc, id));
+        self.push_custom(doc, None);
         self.selected = self.entries.len() - 1;
         Ok(&self.entries[self.selected])
+    }
+
+    /// Appends a custom entry for `doc` and returns its id, without changing the selection.
+    fn push_custom(&mut self, doc: ConfigDocument, custom_id: Option<CustomId>) -> ConfigEntryId {
+        let id = self.allocate_id();
+        let mut entry = ConfigEntry::custom(doc, id);
+        entry.custom_id = custom_id;
+        self.entries.push(entry);
+        id
+    }
+
+    /// Records the storage-minted `id` on the custom entry `entry`. Returns `false`, changing
+    /// nothing, if no entry has that id or the entry already has a custom id.
+    pub fn assign_custom_id(&mut self, entry: ConfigEntryId, id: CustomId) -> bool {
+        match self
+            .entries
+            .iter_mut()
+            .find(|candidate| candidate.id() == entry)
+        {
+            Some(candidate) if candidate.custom_id.is_none() => {
+                candidate.custom_id = Some(id);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Removes the selected custom entry, together with its pending draft, and selects a
@@ -259,7 +298,7 @@ impl ConfigWorkspace {
 }
 
 impl ConfigEntry {
-    fn preset(text: String, id: ConfigEntryId) -> Result<Self, ConfigWorkspaceError> {
+    fn preset(text: String, path: String, id: ConfigEntryId) -> Result<Self, ConfigWorkspaceError> {
         let source = ConfigSource::parse(&text)?;
         let doc = ConfigDocument::try_from(source)?;
         Ok(Self {
@@ -267,6 +306,8 @@ impl ConfigEntry {
             default: Some(doc.clone()),
             draft: None,
             last_applied: doc,
+            origin_path: Some(path),
+            custom_id: None,
         })
     }
 
@@ -276,12 +317,24 @@ impl ConfigEntry {
             default: None,
             draft: None,
             last_applied,
+            origin_path: None,
+            custom_id: None,
         }
     }
 
     /// This entry's stable identity. See [`ConfigEntryId`] for its guarantees.
     pub fn id(&self) -> ConfigEntryId {
         self.id
+    }
+
+    /// The path of the bundled preset this entry came from, or `None` for a custom entry.
+    pub fn preset_path(&self) -> Option<&str> {
+        self.origin_path.as_deref()
+    }
+
+    /// The storage-minted id of this custom entry, if it has one yet.
+    pub fn custom_id(&self) -> Option<CustomId> {
+        self.custom_id
     }
 
     pub fn name(&self) -> &str {
@@ -355,6 +408,9 @@ impl ConfigEntry {
             default: None,
             draft,
             last_applied,
+            // A copy is a new custom entry: it never inherits the source's identity.
+            origin_path: None,
+            custom_id: None,
         })
     }
 
@@ -505,6 +561,7 @@ mod tests {
     use lsystem_core::{ConfigError, LineColorConfig};
 
     use crate::config_defaults::ConfigDefaults;
+    use crate::persistence::{PersistedEntry, PersistedKey, PersistedView, SelectionView};
 
     fn config_text(name: &str, axiom: &str, angle: f32) -> String {
         format!(
@@ -2056,5 +2113,292 @@ end = "#ffffff"
 
         assert_eq!(workspace.selected().name(), "Renamed Plant");
         assert!(!workspace.selected().is_dirty());
+    }
+
+    fn preset_key(path: &str) -> PersistedKey {
+        PersistedKey::Preset(path.to_string())
+    }
+
+    /// Two presets labelled by path, so persistence identity is distinguishable from the
+    /// authored names.
+    fn workspace_with_paths() -> ConfigWorkspace {
+        ConfigWorkspace::from_presets(vec![
+            ("presets/a.toml", config_text("A", "F", 60.0)),
+            ("presets/b.toml", config_text("B", "F+F", 90.0)),
+        ])
+        .unwrap()
+    }
+
+    fn unminted_entry_ids(view: &PersistedView) -> Vec<ConfigEntryId> {
+        view.unminted.iter().map(|custom| custom.entry).collect()
+    }
+
+    #[test]
+    fn preset_entries_record_their_path_and_customs_have_none() {
+        let (workspace, ids) = workspace_with_copies();
+        let entries = workspace.entries();
+
+        assert_eq!(entries[0].preset_path(), Some("A"));
+        assert_eq!(entries[1].preset_path(), Some("B"));
+        assert!(
+            entries[2..]
+                .iter()
+                .all(|entry| entry.preset_path().is_none())
+        );
+        assert!(entries.iter().all(|entry| entry.custom_id().is_none()));
+        assert_eq!(entries.len(), ids.len());
+    }
+
+    #[test]
+    fn unedited_workspace_persists_no_entries_and_selects_first_preset_path() {
+        let workspace = workspace_with_paths();
+
+        let view = workspace.persisted_view();
+
+        assert!(view.entries.is_empty());
+        assert!(view.unminted.is_empty());
+        assert_eq!(
+            view.selected,
+            SelectionView::Key(preset_key("presets/a.toml"))
+        );
+    }
+
+    #[test]
+    fn editing_a_preset_persists_it_by_path_and_leaves_untouched_sibling_out() {
+        let mut workspace = workspace_with_paths();
+        let second_id = workspace.entries()[1].id();
+        workspace.select_by_id(second_id).unwrap();
+        clean_mut(&mut workspace).set_iterations(5).unwrap();
+
+        let view = workspace.persisted_view();
+
+        assert_eq!(
+            view.entries,
+            [PersistedEntry {
+                key: preset_key("presets/b.toml"),
+                toml: workspace.selected().applied_text(),
+            }]
+        );
+        assert!(view.unminted.is_empty());
+        assert_eq!(
+            view.selected,
+            SelectionView::Key(preset_key("presets/b.toml"))
+        );
+    }
+
+    #[test]
+    fn preset_is_matched_by_path_not_by_name() {
+        // Renaming the preset (or giving it the sibling's name) must not change its key.
+        let mut workspace = workspace_with_paths();
+        workspace.selected_mut().rename("B").unwrap();
+
+        let view = workspace.persisted_view();
+
+        assert_eq!(view.entries.len(), 1);
+        assert_eq!(view.entries[0].key, preset_key("presets/a.toml"));
+    }
+
+    #[test]
+    fn resetting_an_edited_preset_drops_it_from_the_view() {
+        let mut workspace = workspace_with_paths();
+        clean_mut(&mut workspace).set_iterations(5).unwrap();
+        assert_eq!(workspace.persisted_view().entries.len(), 1);
+
+        assert!(workspace.selected_mut().reset_to_default());
+
+        assert!(workspace.persisted_view().entries.is_empty());
+    }
+
+    #[test]
+    fn pending_draft_is_not_reflected_in_the_view() {
+        let mut workspace = workspace_with_paths();
+        let text = workspace.selected().draft_text().into_owned();
+        workspace
+            .selected_mut()
+            .set_draft_text(text.replace("angle = 60", "angle = 45"));
+        assert!(workspace.selected().is_dirty());
+
+        assert!(workspace.persisted_view().entries.is_empty());
+
+        // Once the preset is applied-changed, a further unapplied draft still does not
+        // leak: the entry carries its applied text.
+        workspace.selected_mut().apply_draft().unwrap();
+        let applied = workspace.selected().applied_text();
+        workspace
+            .selected_mut()
+            .set_draft_text("unapplied edit".to_string());
+
+        let view = workspace.persisted_view();
+
+        assert_eq!(view.entries.len(), 1);
+        assert_eq!(view.entries[0].toml, applied);
+    }
+
+    #[test]
+    fn pending_draft_on_a_custom_is_not_reflected_in_the_view() {
+        let (mut workspace, _) = workspace_with_copies();
+        let applied = workspace.selected().applied_text();
+        workspace
+            .selected_mut()
+            .set_draft_text("unapplied edit".to_string());
+
+        let view = workspace.persisted_view();
+
+        assert_eq!(view.unminted.last().unwrap().toml, applied);
+    }
+
+    #[test]
+    fn copy_and_import_are_unminted_until_a_custom_id_is_assigned() {
+        let (mut workspace, ids) = workspace_with_copies();
+
+        let view = workspace.persisted_view();
+        assert!(view.entries.is_empty());
+        assert_eq!(unminted_entry_ids(&view), ids[2..]);
+        assert_eq!(view.selected, SelectionView::Unminted(ids[4]));
+
+        // Assign an id to the middle custom: only it moves into `entries`.
+        assert!(workspace.assign_custom_id(ids[3], CustomId::new(7)));
+        let view = workspace.persisted_view();
+        assert_eq!(
+            view.entries,
+            [PersistedEntry {
+                key: PersistedKey::Custom(CustomId::new(7)),
+                toml: workspace.entries()[3].applied_text(),
+            }]
+        );
+        assert_eq!(unminted_entry_ids(&view), [ids[2], ids[4]]);
+
+        assert!(workspace.assign_custom_id(ids[2], CustomId::new(8)));
+        assert!(workspace.assign_custom_id(ids[4], CustomId::new(9)));
+        let view = workspace.persisted_view();
+        assert!(view.unminted.is_empty());
+        let keys: Vec<_> = view.entries.iter().map(|entry| entry.key.clone()).collect();
+        assert_eq!(
+            keys,
+            [
+                PersistedKey::Custom(CustomId::new(8)),
+                PersistedKey::Custom(CustomId::new(7)),
+                PersistedKey::Custom(CustomId::new(9)),
+            ]
+        );
+        assert_eq!(workspace.entries()[3].custom_id(), Some(CustomId::new(7)));
+    }
+
+    #[test]
+    fn unminted_customs_carry_their_applied_text() {
+        let (workspace, _) = workspace_with_copies();
+
+        let view = workspace.persisted_view();
+
+        let texts: Vec<_> = view
+            .unminted
+            .iter()
+            .map(|custom| custom.toml.clone())
+            .collect();
+        let expected: Vec<_> = workspace.entries()[2..]
+            .iter()
+            .map(ConfigEntry::applied_text)
+            .collect();
+        assert_eq!(texts, expected);
+    }
+
+    #[test]
+    fn assign_custom_id_refuses_unknown_entry_or_second_id() {
+        let (mut workspace, ids) = workspace_with_copies();
+        let removed = ids[4];
+        workspace.remove_selected().unwrap();
+
+        assert!(!workspace.assign_custom_id(removed, CustomId::new(1)));
+
+        assert!(workspace.assign_custom_id(ids[2], CustomId::new(2)));
+        assert!(!workspace.assign_custom_id(ids[2], CustomId::new(3)));
+        assert_eq!(workspace.entries()[2].custom_id(), Some(CustomId::new(2)));
+    }
+
+    #[test]
+    fn selecting_an_unminted_custom_yields_unminted_selection_until_minted() {
+        let (mut workspace, ids) = workspace_with_copies();
+        workspace.select_by_id(ids[2]).unwrap();
+
+        assert_eq!(
+            workspace.persisted_view().selected,
+            SelectionView::Unminted(ids[2])
+        );
+
+        assert!(workspace.assign_custom_id(ids[2], CustomId::new(4)));
+        assert_eq!(
+            workspace.persisted_view().selected,
+            SelectionView::Key(PersistedKey::Custom(CustomId::new(4)))
+        );
+    }
+
+    #[test]
+    fn copy_of_a_custom_with_an_id_does_not_inherit_the_id() {
+        let (mut workspace, ids) = workspace_with_copies();
+        assert!(workspace.assign_custom_id(ids[4], CustomId::new(5)));
+        assert_eq!(workspace.selected_id(), ids[4]);
+
+        let copy_id = workspace.copy().unwrap().id();
+
+        assert!(workspace.selected().custom_id().is_none());
+        let view = workspace.persisted_view();
+        assert!(unminted_entry_ids(&view).contains(&copy_id));
+        assert!(
+            view.entries
+                .iter()
+                .any(|entry| entry.key == PersistedKey::Custom(CustomId::new(5)))
+        );
+        assert_eq!(view.selected, SelectionView::Unminted(copy_id));
+    }
+
+    #[test]
+    fn copy_of_a_preset_has_no_path_and_is_unminted() {
+        let mut workspace = workspace_with_paths();
+
+        let copy = workspace.copy().unwrap();
+
+        assert!(copy.preset_path().is_none());
+        assert!(copy.custom_id().is_none());
+    }
+
+    #[test]
+    fn push_custom_appends_without_changing_the_selection() {
+        let (mut workspace, ids) = workspace_with_copies();
+        workspace.select_by_id(ids[1]).unwrap();
+        let source = ConfigSource::parse(&config_text("Pushed", "F", 15.0)).unwrap();
+        let doc = ConfigDocument::try_from(source).unwrap();
+
+        let pushed = workspace.push_custom(doc, Some(CustomId::new(11)));
+
+        assert!(!ids.contains(&pushed));
+        assert_eq!(workspace.selected_id(), ids[1]);
+        let last = workspace.entries().last().unwrap();
+        assert_eq!(last.id(), pushed);
+        assert_eq!(last.name(), "Pushed");
+        assert_eq!(last.custom_id(), Some(CustomId::new(11)));
+        assert!(last.preset_path().is_none());
+    }
+
+    #[test]
+    fn import_toml_still_appends_and_selects_the_new_entry() {
+        let mut workspace = workspace_with_paths();
+        let first_id = workspace.selected_id();
+
+        let imported_id = workspace
+            .import_toml(&config_text("Imported", "F", 30.0))
+            .unwrap()
+            .id();
+
+        assert_ne!(imported_id, first_id);
+        assert_eq!(workspace.selected_id(), imported_id);
+        assert_eq!(workspace.entries().last().unwrap().id(), imported_id);
+        assert_eq!(workspace.entries().len(), 3);
+        assert!(workspace.selected().custom_id().is_none());
+        assert!(workspace.selected().preset_path().is_none());
+
+        // A failed import leaves both the entries and the selection alone.
+        assert!(workspace.import_toml("not valid toml").is_err());
+        assert_eq!(workspace.entries().len(), 3);
+        assert_eq!(workspace.selected_id(), imported_id);
     }
 }
