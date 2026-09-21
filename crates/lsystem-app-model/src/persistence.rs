@@ -127,9 +127,12 @@ impl ConfigWorkspace {
 /// treated as absent locally, so it must not be recorded), because comparing different
 /// representations would leave the entry permanently out of step with the live view.
 ///
-/// Stored content this window could not parse or validate is remembered separately, with its
-/// text, in the *ignored* map. A key is in at most one of the two maps. Deletes are computed
-/// only from the recorded entries, so ignored rows are never deleted.
+/// Stored content this window could not parse or validate is noted separately, with its text,
+/// in the *ignored* map. The note is layered beside the recorded entries, not instead of them:
+/// a key may be in both, in which case the recorded entry still says what this window holds
+/// and the note says what storage holds that this window could not use. Neither `diff` nor
+/// the deletes it computes are affected by the notes: deletes come only from the recorded
+/// entries, so a key that is merely ignored is never put or deleted because of that.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PersistedBaseline {
     /// What this window last loaded or saved, by key.
@@ -146,8 +149,9 @@ impl PersistedBaseline {
         self.entries.get(key).map(String::as_str)
     }
 
-    /// Records `toml` as the content of `key`, replacing any earlier record and forgetting
-    /// any ignored content for the same key.
+    /// Records `toml` as the content of `key`, replacing any earlier record. A real adoption
+    /// or write supersedes the note about content this window could not use, so any ignored
+    /// note for the same key is cleared.
     ///
     /// For a preset key the text must differ from the bundled default; see the type docs.
     pub fn set(&mut self, key: PersistedKey, toml: String) {
@@ -155,7 +159,8 @@ impl PersistedBaseline {
         self.entries.insert(key, toml);
     }
 
-    /// Forgets the recorded content for `key`, returning it.
+    /// Forgets the recorded content for `key`, returning it. Any ignored note for the key is
+    /// left alone; use [`clear_ignored`](Self::clear_ignored) to drop it.
     pub fn remove(&mut self, key: &PersistedKey) -> Option<String> {
         self.entries.remove(key)
     }
@@ -174,12 +179,19 @@ impl PersistedBaseline {
         self.selected = selected;
     }
 
-    /// Remembers stored `toml` for `key` as content this window cannot apply, replacing any
-    /// earlier ignored content and dropping the recorded entry for the key (if any), so no
-    /// later diff deletes the stored row.
+    /// Notes stored `toml` for `key` as content this window cannot apply, replacing any
+    /// earlier note for the key.
+    ///
+    /// Only the note is recorded; the recorded entry for the key, if any, is untouched, since
+    /// it still describes what this window holds. A key that is only ignored has no recorded
+    /// entry, so no diff deletes its stored row.
     pub fn ignore(&mut self, key: PersistedKey, toml: String) {
-        self.entries.remove(&key);
         self.ignored.insert(key, toml);
+    }
+
+    /// The keys that currently carry an ignored note, in no particular order.
+    pub fn ignored_keys(&self) -> impl Iterator<Item = &PersistedKey> {
+        self.ignored.keys()
     }
 
     /// The ignored content for `key`, if any.
@@ -200,9 +212,10 @@ impl PersistedBaseline {
 
     /// Updates the baseline to reflect a save that has been committed.
     ///
-    /// Applies `delta`'s puts and deletes, records each minted custom's written content under
-    /// its new key (even if the entry has since been removed locally, so the next diff
-    /// deletes that row), and records the written selection, resolving an
+    /// Applies `delta`'s puts and deletes (a put or a delete supersedes any ignored note for
+    /// its key, since the stored row is now what this window wrote or removed), records each
+    /// minted custom's written content under its new key (even if the entry has since been
+    /// removed locally, so the next diff deletes that row), and records the written selection, resolving an
     /// [`SelectionView::Unminted`] selection through `minted`. An unresolvable selection
     /// clears the recorded one, so the next diff writes it again.
     pub fn apply_saved(&mut self, delta: &SaveDelta, minted: &[(ConfigEntryId, CustomId)]) {
@@ -211,6 +224,7 @@ impl PersistedBaseline {
         }
         for key in &delta.delete {
             self.remove(key);
+            self.clear_ignored(key);
         }
         let minted_key = |entry: ConfigEntryId| {
             minted
@@ -700,16 +714,89 @@ mod tests {
     }
 
     #[test]
-    fn a_key_is_either_recorded_or_ignored_never_both() {
-        let mut baseline = PersistedBaseline::default();
-        baseline.set(preset("a"), "A1".to_string());
+    fn ignoring_a_recorded_key_keeps_the_entry_and_an_unchanged_view_diffs_empty() {
+        let mut baseline = baseline(&[(custom(3), "C3")], Some(custom(3)));
+        baseline.ignore(custom(3), "unparseable".to_string());
+        let view = view(
+            vec![entry(custom(3), "C3")],
+            vec![],
+            SelectionView::Key(custom(3)),
+        );
 
+        assert_eq!(baseline.get(&custom(3)), Some("C3"));
+        assert!(baseline.is_ignored(&custom(3), "unparseable"));
+        assert!(diff(&baseline, &view).is_empty());
+    }
+
+    #[test]
+    fn ignoring_a_never_recorded_key_does_not_record_it_and_never_deletes_it() {
+        let mut baseline = baseline(&[(preset("a"), "A1")], Some(preset("a")));
+        baseline.ignore(preset("bad"), "unparseable".to_string());
+        baseline.ignore(custom(5), "unparseable".to_string());
+        let view = view(
+            vec![entry(preset("a"), "A1")],
+            vec![],
+            SelectionView::Key(preset("a")),
+        );
+
+        assert_eq!(baseline.get(&preset("bad")), None);
+        assert_eq!(baseline.get(&custom(5)), None);
+        let mut keys: Vec<_> = baseline.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, vec![preset("a")]);
+        let delta = diff(&baseline, &view);
+        assert!(delta.put.is_empty());
+        assert!(delta.delete.is_empty());
+    }
+
+    #[test]
+    fn set_after_ignore_clears_the_note() {
+        let mut baseline = PersistedBaseline::default();
         baseline.ignore(preset("a"), "bad".to_string());
-        assert_eq!(baseline.get(&preset("a")), None);
-        assert!(baseline.is_ignored(&preset("a"), "bad"));
 
         baseline.set(preset("a"), "A2".to_string());
+
         assert_eq!(baseline.get(&preset("a")), Some("A2"));
         assert_eq!(baseline.ignored(&preset("a")), None);
+    }
+
+    #[test]
+    fn remove_leaves_the_ignored_note_alone() {
+        let mut baseline = baseline(&[(preset("a"), "A1")], None);
+        baseline.ignore(preset("a"), "bad".to_string());
+
+        assert_eq!(baseline.remove(&preset("a")), Some("A1".to_string()));
+
+        assert_eq!(baseline.get(&preset("a")), None);
+        assert!(baseline.is_ignored(&preset("a"), "bad"));
+    }
+
+    #[test]
+    fn apply_saved_forgets_an_ignored_note_for_a_row_it_deleted() {
+        let mut baseline = baseline(&[(custom(3), "C3")], Some(preset("a")));
+        baseline.ignore(custom(3), "unparseable".to_string());
+        let view = view(vec![], vec![], SelectionView::Key(preset("a")));
+        let delta = diff(&baseline, &view);
+        assert_eq!(delta.delete, vec![custom(3)]);
+
+        baseline.apply_saved(&delta, &[]);
+
+        assert_eq!(baseline.get(&custom(3)), None);
+        assert_eq!(baseline.ignored(&custom(3)), None);
+    }
+
+    #[test]
+    fn ignored_keys_lists_exactly_the_ignored_keys() {
+        let mut baseline = baseline(&[(preset("a"), "A1")], None);
+        assert_eq!(baseline.ignored_keys().count(), 0);
+
+        baseline.ignore(preset("a"), "bad".to_string());
+        baseline.ignore(custom(5), "bad".to_string());
+        baseline.ignore(preset("z"), "bad".to_string());
+        baseline.clear_ignored(&preset("z"));
+
+        let mut keys: Vec<_> = baseline.ignored_keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, vec![preset("a"), custom(5)]);
     }
 }
