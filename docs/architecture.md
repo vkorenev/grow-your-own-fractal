@@ -194,9 +194,9 @@ Authored grammar normalization and turtle behavior are defined in the
   workspace: `PersistedKey` and `CustomId` identity, `StoredState`, the live
   `PersistedView` (produced by `ConfigWorkspace::persisted_view`), a
   `PersistedBaseline` of what one window last loaded or saved, and the pure
-  `diff` that yields a `SaveDelta`. `config_workspace.rs` adds `restore`,
-  `refresh`, and `assign_custom_id`. Neither depends on IndexedDB or the
-  browser, and the web app's `storage.rs` maps these types to its own
+  `diff_baseline` that yields a `SaveDelta`. `config_workspace.rs` adds
+  `restore`, `refresh`, and `assign_custom_id`. Neither depends on IndexedDB or
+  the browser, and the web app's `storage.rs` maps these types to its own
   representation.
 - `presets.rs` embeds and sorts the `presets/` directory.
 - `color.rs` centralizes line-color mode selection and per-mode picker memory.
@@ -355,6 +355,8 @@ next submitted frame's GPU completion.
 Shared and platform-specific interaction behavior is defined in the
 [rendering specification](specs/rendering-and-interaction.md).
 
+### Web App Persistence
+
 `lsystem-web-app` persists the workspace to browser storage so that presets,
 custom entries, and the selection survive reloads and are shared coherently
 between windows. What persists and how restore, refresh, and failures behave
@@ -372,12 +374,14 @@ IndexedDB database (`lsystem-autosave`, version 2) holds three object stores:
 `presets`, keyed by bundled file path; `customs`, an `autoIncrement` store
 whose integer key is the custom entry's identity; and `meta`, which holds the
 selection. The upgrade creates missing stores and deletes the legacy
-single-record store. A custom entry has no identity when it is created, which
-keeps Copy and Import synchronous and working with storage unavailable. Its
-id is the key of the first `customs` add inside the save that persists it, so
-ids are unique across windows without coordination and integer order is
-creation order; a later put under an explicit key brings a removed entry back
-under its original id.
+single-record store; if any of that fails it aborts the version-change
+transaction, so the version is rolled back and the next open retries the
+upgrade rather than committing a schema later transactions cannot use. A custom
+entry has no identity when it is created, which keeps Copy and Import
+synchronous and working with storage unavailable. Its id is the key of the
+first `customs` add inside the save that persists it, so ids are unique across
+windows without coordination and integer order is creation order; a later put
+under an explicit key brings a removed entry back under its original id.
 
 Each window keeps a `PersistedBaseline` of what it last loaded or saved, per
 key and in the same representation as the workspace's `PersistedView` (a
