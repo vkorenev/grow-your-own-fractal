@@ -1,6 +1,6 @@
 use glam::Vec2;
 use iced::keyboard;
-use iced::widget::row;
+use iced::widget::{Widget, row};
 use iced::{Element, Event, Length, Point, Size, Subscription, Task, event, window};
 use lsystem_app_model::{
     CAMERA_AUTO_ROTATION_DEFAULT_SPEED_DEGREES_PER_SECOND,
@@ -495,7 +495,7 @@ impl FractalApp {
     pub(super) fn view(&self) -> Element<'_, Message> {
         row![self.controls(), self.fractal_view()]
             .height(Length::Fill)
-            .into()
+            .boxed()
     }
 
     pub(super) fn subscription(&self) -> Subscription<Message> {

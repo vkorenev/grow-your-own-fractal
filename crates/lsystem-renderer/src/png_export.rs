@@ -38,6 +38,7 @@ pub enum ExportError {
     NoAdapter,
     RequestDevice(wgpu::RequestDeviceError),
     Map(wgpu::BufferAsyncError),
+    MapRange(wgpu::MapRangeError),
     MapChannelClosed,
     Poll(wgpu::PollError),
     Encode(png::EncodingError),
@@ -62,6 +63,9 @@ impl Display for ExportError {
             Self::NoAdapter => write!(f, "no GPU adapter available for export"),
             Self::RequestDevice(err) => write!(f, "failed to create export GPU device: {err}"),
             Self::Map(err) => write!(f, "failed to map export readback buffer: {err}"),
+            Self::MapRange(err) => {
+                write!(f, "failed to access mapped export readback buffer: {err}")
+            }
             Self::MapChannelClosed => write!(f, "export readback callback was dropped"),
             Self::Poll(err) => write!(f, "failed to poll GPU device for export readback: {err}"),
             Self::Encode(err) => write!(f, "failed to encode PNG: {err}"),
@@ -75,6 +79,7 @@ impl Error for ExportError {
         match self {
             Self::RequestDevice(err) => Some(err),
             Self::Map(err) => Some(err),
+            Self::MapRange(err) => Some(err),
             Self::Poll(err) => Some(err),
             Self::Encode(err) => Some(err),
             Self::SceneUpload(err) => Some(err),
@@ -93,6 +98,7 @@ impl From<ReadbackError> for ExportError {
     fn from(e: ReadbackError) -> Self {
         match e {
             ReadbackError::Map(e) => Self::Map(e),
+            ReadbackError::MapRange(e) => Self::MapRange(e),
             ReadbackError::ChannelClosed => Self::MapChannelClosed,
             ReadbackError::Poll(e) => Self::Poll(e),
         }

@@ -20,6 +20,7 @@ const BYTES_PER_PIXEL: u32 = 4;
 #[derive(Debug)]
 pub(crate) enum ReadbackError {
     Map(wgpu::BufferAsyncError),
+    MapRange(wgpu::MapRangeError),
     ChannelClosed,
     // Only constructed on non-wasm; wasm uses a polling loop that doesn't return PollError
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -30,6 +31,7 @@ impl Display for ReadbackError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Map(e) => write!(f, "failed to map readback buffer: {e}"),
+            Self::MapRange(e) => write!(f, "failed to access mapped readback buffer: {e}"),
             Self::ChannelClosed => write!(f, "readback callback was dropped"),
             Self::Poll(e) => write!(f, "failed to poll GPU device: {e}"),
         }
@@ -328,12 +330,14 @@ impl RenderTarget {
                 }
             }
         }
-        let rgba = {
-            let mapped = self.readback.slice(..).get_mapped_range();
-            self.layout.strip_padding(&mapped)
-        };
+        let rgba = self
+            .readback
+            .slice(..)
+            .get_mapped_range()
+            .map(|mapped| self.layout.strip_padding(&mapped))
+            .map_err(ReadbackError::MapRange);
         self.readback.unmap();
-        Ok(rgba)
+        rgba
     }
 }
 

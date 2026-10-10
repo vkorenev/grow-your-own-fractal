@@ -448,7 +448,10 @@ mod gpu_tests {
             .await
             .expect("map callback runs")
             .expect("readback maps");
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped readback range is accessible");
         let mut rgba = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
         for row in mapped
             .chunks(padded_bytes_per_row as usize)
