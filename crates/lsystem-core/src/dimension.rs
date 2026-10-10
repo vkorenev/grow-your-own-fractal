@@ -7,6 +7,7 @@ use crate::bounds::{
     BoundsAccumulator3D,
 };
 use crate::config::Dimensions;
+use crate::template::{Summary2D, Summary3D};
 
 mod sealed {
     pub trait Sealed {}
@@ -31,6 +32,8 @@ pub trait Dimension: sealed::Sealed + Copy + Debug + 'static {
     type Bounds: Copy + Debug;
     /// Incremental bounds accumulator paired with this dimension.
     type BoundsAccumulator: BoundsAccumulatorTrait<Point = Self::Point, Bounds = Self::Bounds>;
+    /// Conservative local-frame bounds summary stored per template.
+    type Summary: Clone + Debug + PartialEq;
 
     const RUNTIME: Dimensions;
 
@@ -67,6 +70,7 @@ impl Dimension for D2 {
     type Rotation = Vec2;
     type Bounds = Bounds2D;
     type BoundsAccumulator = BoundsAccumulator2D;
+    type Summary = Summary2D;
 
     const RUNTIME: Dimensions = Dimensions::TwoD;
 
@@ -89,6 +93,7 @@ impl Dimension for D3 {
     type Rotation = Quat;
     type Bounds = BoundingCylinder3D;
     type BoundsAccumulator = BoundsAccumulator3D;
+    type Summary = Summary3D;
 
     const RUNTIME: Dimensions = Dimensions::ThreeD;
 
