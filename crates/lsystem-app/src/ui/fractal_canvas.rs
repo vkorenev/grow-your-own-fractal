@@ -1,6 +1,6 @@
 use glam::Vec2;
 use iced::mouse;
-use iced::widget::{container, shader};
+use iced::widget::{Widget, container, shader};
 use iced::{Background, Color, Element, Event, Length, Point, Rectangle, Size, Theme, window};
 use lsystem_app_model::ConfigDefaults;
 use lsystem_core::{
@@ -455,7 +455,7 @@ impl FractalApp {
             background: Some(Background::Color(background)),
             ..Default::default()
         })
-        .into()
+        .boxed()
     }
 }
 
@@ -592,7 +592,7 @@ fn cursor_over(cursor: mouse::Cursor, bounds: Rectangle) -> Option<Point> {
 fn cursor_position(cursor: mouse::Cursor) -> Option<Point> {
     match cursor {
         mouse::Cursor::Available(position) | mouse::Cursor::Levitating(position) => Some(position),
-        mouse::Cursor::Unavailable => None,
+        mouse::Cursor::Obstructed(_) | mouse::Cursor::Unavailable => None,
     }
 }
 

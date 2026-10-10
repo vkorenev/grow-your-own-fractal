@@ -865,6 +865,7 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(GpuInitError::RequestAdapter)?;
@@ -900,6 +901,7 @@ impl GpuContext {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: width.max(1),
             height: height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
@@ -1000,7 +1002,7 @@ impl GpuContext {
         reconfigure_after: bool,
     ) {
         self.queue.submit([encoder.finish()]);
-        frame.present();
+        self.queue.present(frame);
         if reconfigure_after {
             self.surface.configure(&self.device, &self.surface_config);
         }

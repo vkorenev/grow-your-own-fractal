@@ -23,7 +23,7 @@ wgpu.workspace = true
 
 [build-dependencies]
 wesl = "0.4"
-wgsl_to_wgpu = "0.18"
+wgsl_to_wgpu = "0.19"
 
 [dev-dependencies]
 criterion = "0.8.2"

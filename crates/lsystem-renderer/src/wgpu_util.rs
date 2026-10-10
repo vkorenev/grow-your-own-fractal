@@ -73,6 +73,7 @@ pub async fn create_headless_device(
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
         .map_err(|_| CreateDeviceError::NoAdapter)?;

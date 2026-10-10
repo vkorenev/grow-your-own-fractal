@@ -1,6 +1,6 @@
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, slider, text, text_editor,
-    text_input,
+    Widget, button, checkbox, column, container, pick_list, row, scrollable, slider, text,
+    text_editor, text_input,
 };
 use iced::{Color, Element, Length, Theme};
 use lsystem_app_model::{
@@ -110,34 +110,39 @@ impl FractalApp {
             controls = controls.push(
                 text("Editing these controls will discard your unapplied TOML changes.")
                     .size(13)
-                    .style(text::warning),
+                    .style(text::warning)
+                    .boxed(),
             );
         }
 
         let editor_config = self.selected_editor_config();
         let editor_colors = &editor_config.colors;
         controls = controls
-            .push(text("Overrides").size(13))
-            .push(text(format!(
-                "Iterations (max {}): {}",
-                self.max_iterations, self.iterations
-            )))
-            .push(slider(
-                0..=self.max_iterations,
-                self.iterations,
-                Message::IterationsChanged,
-            ))
-            .push(text(format!(
-                "Angle: {:.1}",
-                editor_config.generation.angle
-            )))
+            .push(text("Overrides").size(13).boxed())
+            .push(
+                text(format!(
+                    "Iterations (max {}): {}",
+                    self.max_iterations, self.iterations
+                ))
+                .boxed(),
+            )
+            .push(
+                slider(
+                    0..=self.max_iterations,
+                    self.iterations,
+                    Message::IterationsChanged,
+                )
+                .boxed(),
+            )
+            .push(text(format!("Angle: {:.1}", editor_config.generation.angle)).boxed())
             .push(
                 slider(
                     1.0..=180.0,
                     editor_config.generation.angle,
                     Message::AngleChanged,
                 )
-                .step(0.5_f32),
+                .step(0.5_f32)
+                .boxed(),
             );
 
         controls = push_color_controls(controls, editor_colors, &self.hue_rotation);
@@ -145,9 +150,11 @@ impl FractalApp {
         // `Message::Fit` has no guard of its own (`self.scene.reset_camera()` always
         // succeeds), and matches its keyboard equivalent `F`, which is likewise
         // unconditional — so Reset view is never disabled.
-        controls = controls
-            .push(text("Camera").size(13))
-            .push(row![button("Reset view").on_press(Message::Fit)].spacing(8));
+        controls = controls.push(text("Camera").size(13).boxed()).push(
+            row![button("Reset view").on_press(Message::Fit)]
+                .spacing(8)
+                .boxed(),
+        );
 
         if is_3d {
             // We're inside `if is_3d`, so `effective_is_3d()` (the document) is
@@ -180,7 +187,8 @@ impl FractalApp {
                             d_el: -CAMERA_ROTATION_STEP_DEGREES,
                         })),
                     ]
-                    .spacing(8),
+                    .spacing(8)
+                    .boxed(),
                 )
                 .push(
                     row![
@@ -191,27 +199,31 @@ impl FractalApp {
                             orbit_ready.then_some(Message::RollBy(CAMERA_ROTATION_STEP_DEGREES))
                         ),
                     ]
-                    .spacing(8),
+                    .spacing(8)
+                    .boxed(),
                 );
         }
 
         if !is_dirty {
-            controls = controls.push(text("PNG width").size(13)).push(
+            controls = controls.push(text("PNG width").size(13).boxed()).push(
                 text_input("800", &self.png_width_text)
                     .on_input(Message::PngWidthChanged)
-                    .width(Length::Fill),
+                    .width(Length::Fill)
+                    .boxed(),
             );
-            controls = controls.push(text("PNG height").size(13)).push(
+            controls = controls.push(text("PNG height").size(13).boxed()).push(
                 text_input("800", &self.png_height_text)
                     .on_input(Message::PngHeightChanged)
-                    .width(Length::Fill),
+                    .width(Length::Fill)
+                    .boxed(),
             );
 
             let mut export_row = row![button("Export PNG").on_press(Message::ExportPng)].spacing(8);
             if !is_3d {
-                export_row = export_row.push(button("Export SVG").on_press(Message::ExportSvg));
+                export_row =
+                    export_row.push(button("Export SVG").on_press(Message::ExportSvg).boxed());
             }
-            controls = controls.push(export_row);
+            controls = controls.push(export_row.boxed());
 
             if is_3d {
                 let auto_rotate_label = if self.auto_rotate {
@@ -220,8 +232,16 @@ impl FractalApp {
                     "Auto-rotate: Off"
                 };
                 controls = controls
-                    .push(button(auto_rotate_label).on_press(Message::ToggleAutoRotate))
-                    .push(text(format!("Speed: {:.0} °/s", self.auto_rotate_speed)).size(13))
+                    .push(
+                        button(auto_rotate_label)
+                            .on_press(Message::ToggleAutoRotate)
+                            .boxed(),
+                    )
+                    .push(
+                        text(format!("Speed: {:.0} °/s", self.auto_rotate_speed))
+                            .size(13)
+                            .boxed(),
+                    )
                     .push(
                         slider(
                             CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND
@@ -229,17 +249,18 @@ impl FractalApp {
                             self.auto_rotate_speed,
                             Message::SetAutoRotateSpeed,
                         )
-                        .step(CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND),
+                        .step(CAMERA_AUTO_ROTATION_SPEED_STEP_DEGREES_PER_SECOND)
+                        .boxed(),
                     );
             }
         }
 
         if let Some(status) = &self.export_status {
-            controls = controls.push(text(status).size(13));
+            controls = controls.push(text(status).size(13).boxed());
         }
 
         if self.scene_pending {
-            controls = controls.push(text("Rendering...").size(13));
+            controls = controls.push(text("Rendering...").size(13).boxed());
         }
 
         let hint = if is_3d {
@@ -247,7 +268,7 @@ impl FractalApp {
         } else {
             "Drag to pan · Scroll to zoom · F to fit"
         };
-        controls = controls.push(text(hint).size(12));
+        controls = controls.push(text(hint).size(12).boxed());
 
         container(scrollable(controls.padding(16).spacing(12)))
             .width(CONTROL_WIDTH)
@@ -256,7 +277,7 @@ impl FractalApp {
                 background: Some(theme.palette().background.base.color.into()),
                 ..Default::default()
             })
-            .into()
+            .boxed()
     }
 
     fn status_text(&self) -> Element<'_, Message> {
@@ -264,20 +285,20 @@ impl FractalApp {
             Some(error) => text(error)
                 .size(13)
                 .color(Color::from_rgb(0.9, 0.2, 0.2))
-                .into(),
+                .boxed(),
             None => text("OK")
                 .size(13)
                 .color(Color::from_rgb(0.2, 0.65, 0.25))
-                .into(),
+                .boxed(),
         }
     }
 }
 
 fn push_color_controls<'a>(
-    mut controls: iced::widget::Column<'a, Message>,
+    mut controls: iced::widget::Column<Element<'a, Message>>,
     editor_colors: &'a EditorColorConfig,
     hue_rotation: &HueRotation,
-) -> iced::widget::Column<'a, Message> {
+) -> iced::widget::Column<Element<'a, Message>> {
     let color_defaults = ConfigDefaults::embedded().colors;
     let has_authored_background = editor_colors.background.is_some();
     let background = editor_colors
@@ -287,7 +308,8 @@ fn push_color_controls<'a>(
         .push(
             checkbox(!has_authored_background)
                 .label("Background: use default")
-                .on_toggle(Message::BackgroundDefaultToggled),
+                .on_toggle(Message::BackgroundDefaultToggled)
+                .boxed(),
         )
         .push(rgb_controls(
             "Background RGB",
@@ -297,12 +319,13 @@ fn push_color_controls<'a>(
 
     let line_color = line_color_for_controls(editor_colors, &color_defaults.line);
     let selected_mode = Some(selected_line_color_mode(editor_colors));
-    controls = controls.push(text("Line color").size(13)).push(
+    controls = controls.push(text("Line color").size(13).boxed()).push(
         pick_list(selected_mode, LineColorMode::ALL, |choice| {
             choice.to_string()
         })
         .on_select(Message::LineColorModeSelected)
-        .width(Length::Fill),
+        .width(Length::Fill)
+        .boxed(),
     );
 
     match line_color {
@@ -315,7 +338,8 @@ fn push_color_controls<'a>(
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
                             field: ColorDefaultField::SolidLine,
                             use_default,
-                        }),
+                        })
+                        .boxed(),
                 )
                 .push(rgb_controls("Line RGB", color, |hex| {
                     Message::LineColorChanged(Some(EditorLineColorConfig::Solid(hex)))
@@ -337,7 +361,8 @@ fn push_color_controls<'a>(
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
                             field: ColorDefaultField::GradientStart,
                             use_default,
-                        }),
+                        })
+                        .boxed(),
                 )
                 .push(rgb_controls("Gradient start", start, move |hex| {
                     Message::LineColorChanged(Some(EditorLineColorConfig::Gradient {
@@ -352,7 +377,8 @@ fn push_color_controls<'a>(
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
                             field: ColorDefaultField::GradientEnd,
                             use_default,
-                        }),
+                        })
+                        .boxed(),
                 )
                 .push(rgb_controls("Gradient end", end, move |hex| {
                     Message::LineColorChanged(Some(EditorLineColorConfig::Gradient {
@@ -370,7 +396,8 @@ fn push_color_controls<'a>(
                                 end: editor_end,
                                 topological_depth: Some(enabled),
                             }))
-                        }),
+                        })
+                        .boxed(),
                 )
         }
         LineColorConfig::HueCycle { initial } => {
@@ -390,14 +417,19 @@ fn push_color_controls<'a>(
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
                             field: ColorDefaultField::HueCycleInitial,
                             use_default,
-                        }),
+                        })
+                        .boxed(),
                 )
                 .push(rgb_controls("Initial RGB", initial, |hex| {
                     Message::LineColorChanged(Some(EditorLineColorConfig::HueCycle {
                         initial: Some(hex),
                     }))
                 }))
-                .push(button(rotation_label).on_press(Message::ToggleHueRotation))
+                .push(
+                    button(rotation_label)
+                        .on_press(Message::ToggleHueRotation)
+                        .boxed(),
+                )
                 .push(
                     pick_list(
                         Some(hue_rotation.direction()),
@@ -405,14 +437,16 @@ fn push_color_controls<'a>(
                         |choice| choice.to_string(),
                     )
                     .on_select(Message::SetHueRotationDirection)
-                    .width(Length::Fill),
+                    .width(Length::Fill)
+                    .boxed(),
                 )
                 .push(
                     text(format!(
                         "Rotation speed: {:.0} °/s",
                         hue_rotation.speed_degrees_per_second()
                     ))
-                    .size(13),
+                    .size(13)
+                    .boxed(),
                 )
                 .push(
                     slider(
@@ -421,7 +455,8 @@ fn push_color_controls<'a>(
                         hue_rotation.speed_degrees_per_second(),
                         Message::SetHueRotationSpeed,
                     )
-                    .step(1.0_f32),
+                    .step(1.0_f32)
+                    .boxed(),
                 )
         }
     }
@@ -440,7 +475,7 @@ fn rgb_controls<'a>(
         color_slider("B", components, 2, message),
     ]
     .spacing(6)
-    .into()
+    .boxed()
 }
 
 fn color_slider<'a>(
@@ -463,7 +498,7 @@ fn color_slider<'a>(
     ]
     .spacing(6)
     .align_y(iced::alignment::Vertical::Center)
-    .into()
+    .boxed()
 }
 
 fn color_swatch(color: Rgb) -> Element<'static, Message> {
@@ -480,7 +515,7 @@ fn color_swatch(color: Rgb) -> Element<'static, Message> {
             },
             ..Default::default()
         })
-        .into()
+        .boxed()
 }
 
 fn rgb_from_f32_array([r, g, b]: [f32; 3]) -> Rgb {

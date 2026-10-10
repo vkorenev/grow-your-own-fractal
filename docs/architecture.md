@@ -277,6 +277,9 @@ offscreen exports.
 - `offscreen.rs`, `png_export.rs`, and `animation_export.rs` render PNG/APNG
   output with an offscreen target behind the `png` feature. Segment-limit and
   staging failures surface as typed export errors instead of empty images.
+  GPU readback errors include both asynchronous buffer mapping and access to
+  the mapped range; the readback buffer is unmapped after range access even
+  when that access fails.
 - `wgpu_util.rs` centralizes instance/device setup and error logging for native
   and browser targets.
 
@@ -362,8 +365,9 @@ exported 3D images are depth-tested the same way the live web canvas is.
 
 ## Dependency Coupling
 
-The workspace `wgpu` dependency is pinned to major version 29. Iced is pinned to
-an upstream git revision that uses the same wgpu major version. Iced's shader
+The workspace `wgpu` dependency and the pinned Iced git revision must use the
+same wgpu major version. Dependency versions and revisions are defined in the
+Cargo manifests and resolved in `Cargo.lock`. Iced's shader
 widget passes `wgpu` types (device, queue, render pass) to the custom primitive
 at the crate boundary; mismatched major versions produce a compile-time type
 error. Update those two dependencies together and verify native plus wasm
