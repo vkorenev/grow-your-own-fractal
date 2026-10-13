@@ -13,8 +13,8 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 console_error_panic_hook = "0.1"
-gloo-file = "0.3"
-gloo-timers = "0.3"
+gloo-file = "0.4"
+gloo-timers = "0.4"
 console_log = "1"
 glam = "0.33"
 iced = { git = "https://github.com/iced-rs/iced", rev = "a8231fd9ddf3570f95affba2d45a9be092007f71", default-features = false }

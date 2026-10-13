@@ -2,8 +2,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shaders_dir = "src/shaders";
     println!("cargo:rerun-if-changed={shaders_dir}");
 
-    let mut compiler = wesl::Wesl::new(shaders_dir);
-    compiler.set_mangler(wesl::ManglerKind::None);
+    let compiler = wesl::Compiler::new(wesl::CompileOptions {
+        mangler: wesl::ManglerKind::None,
+        ..Default::default()
+    });
 
     let options = wgsl_to_wgpu::WriteOptions {
         derive_bytemuck_vertex: true,
@@ -20,7 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("package::shader_2d", "shader_2d"),
         ("package::shader_3d", "shader_3d"),
     ] {
-        let wgsl = compiler.compile(&module.parse()?)?.to_string();
+        let wgsl = compiler
+            .compile_module(shaders_dir, &module.parse()?)?
+            .to_string();
 
         let wgsl_path = out_dir.join(format!("{name}.wgsl"));
         std::fs::write(&wgsl_path, &wgsl)?;
