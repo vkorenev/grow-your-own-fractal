@@ -286,9 +286,12 @@ pub(super) async fn build_scene(
     generation_revision: u64,
     current_generation: Arc<AtomicU64>,
     prev_camera: Camera,
+    reset_view: bool,
 ) -> SceneBuildResult {
     let mut camera = prev_camera;
-    camera.reset_position();
+    if reset_view {
+        camera.reset_position();
+    }
     let colors = config.colors;
     let started = Instant::now();
     match config.generation.compile() {

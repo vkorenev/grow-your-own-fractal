@@ -126,6 +126,12 @@ pub(super) struct FractalApp {
     pub(super) hue_rotation_phase_degrees: f32,
     color_memory: ColorControlMemory,
     scene_generation: Arc<AtomicU64>,
+    /// Entry and dimensionality of the last scheduled scene; a change means a
+    /// different fractal, so the view is refit instead of preserved.
+    scene_view_key: Option<(ConfigEntryId, bool)>,
+    /// Set when the view key changed and cleared once the scene built with a
+    /// view reset is applied, so a superseded build can't lose the reset.
+    view_reset_pending: bool,
 }
 
 impl FractalApp {
@@ -161,6 +167,8 @@ impl FractalApp {
             hue_rotation_phase_degrees: 0.0,
             color_memory,
             scene_generation: Arc::new(AtomicU64::new(0)),
+            scene_view_key: None,
+            view_reset_pending: false,
         };
         app.sync_controls_from_workspace();
         let task = app.schedule_scene_generation();
@@ -396,8 +404,16 @@ impl FractalApp {
                     && self.is_current_generation(generation)
                 {
                     scene.update_colors(&self.render_colors());
+                    // Camera edits (pan, zoom, Fit, auto-rotate) made while the build
+                    // ran must survive, so carry over the live camera, not the snapshot.
+                    let mut camera = self.scene.camera.clone();
+                    if self.view_reset_pending {
+                        camera.reset_position();
+                    }
+                    scene.camera = camera;
                     self.scene = scene;
                     self.scene_pending = false;
+                    self.view_reset_pending = false;
                 }
                 Task::none()
             }
@@ -777,9 +793,16 @@ impl FractalApp {
         self.scene_pending = true;
         self.export_status = None;
 
+        let key = (self.config_workspace.selected_id(), self.effective_is_3d());
+        if self.scene_view_key != Some(key) {
+            self.scene_view_key = Some(key);
+            self.view_reset_pending = true;
+        }
+        let reset_view = self.view_reset_pending;
+
         let prev_camera = self.scene.camera.clone();
         Task::perform(
-            build_scene(config, generation, token, prev_camera),
+            build_scene(config, generation, token, prev_camera, reset_view),
             Message::SceneGenerated,
         )
     }
@@ -1115,6 +1138,20 @@ mod tests {
         assert!(app.config_workspace.selected().is_dirty());
         assert_eq!(app.config_workspace.selected().draft_text(), draft);
         assert!(app.error.is_some());
+    }
+
+    #[test]
+    fn parameter_edit_keeps_view_but_entry_change_resets_it() {
+        let (mut app, _) = FractalApp::new();
+        assert!(app.view_reset_pending, "initial scene fits the view");
+        app.view_reset_pending = false; // as when the first scene is applied
+
+        let angle = app.selected_editor_config().generation.angle;
+        let _ = app.update(Message::AngleChanged(angle + 1.0));
+        assert!(!app.view_reset_pending, "parameter edit must keep the view");
+
+        let _ = app.update(Message::CopyConfig);
+        assert!(app.view_reset_pending, "entry change must refit the view");
     }
 
     #[test]
