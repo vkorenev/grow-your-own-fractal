@@ -162,6 +162,10 @@ introduces no separate targeting behavior of its own. These are discrete
 actions, not a pointer drag, so pane buttons do not suspend camera
 auto-rotation, the same as their keyboard equivalents.
 
+Editing the selected entry's parameters (angle, iterations, grammar, TOML
+apply, colors) keeps the current camera position and zoom. Selecting, copying,
+importing or removing an entry, or changing between 2D and 3D, refits the view.
+
 Orbit and roll buttons are 3D-only and are not shown in 2D, where those
 actions have no camera effect. Reset view is available in both dimensions.
 

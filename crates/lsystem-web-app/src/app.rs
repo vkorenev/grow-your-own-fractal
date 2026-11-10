@@ -431,20 +431,35 @@ pub(crate) fn App() -> impl IntoView {
     // receiving prev = Some(initial deps); the initial render is done by
     // canvas_ref.on_load.
     Effect::watch(
-        move || (generation_config.get(), color_config.get()),
+        move || {
+            (
+                generation_config.get(),
+                color_config.get(),
+                (selected_id.get(), is_3d.get()),
+            )
+        },
         move |current, prev, _: Option<()>| {
             let Some(canvas) = canvas_ref.get_untracked() else {
                 return;
             };
-            let generation_changed = prev.is_none_or(|p| p.0 != current.0);
+            let reset_camera = prev.is_none_or(|p| p.2 != current.2);
+            let generation_changed = reset_camera || prev.is_none_or(|p| p.0 != current.0);
             let config = config_for_render();
-            if generation_changed {
+            if reset_camera {
                 with_renderer_for_rebuild(
                     canvas,
                     renderer,
                     recover_after_render,
                     viewport_error,
                     |r, c| r.set_config_and_render(c, &config),
+                );
+            } else if generation_changed {
+                with_renderer_for_rebuild(
+                    canvas,
+                    renderer,
+                    recover_after_render,
+                    viewport_error,
+                    |r, c| r.set_config_preserving_camera_and_render(c, &config),
                 );
             } else {
                 with_renderer(canvas, renderer, recover_after_render, |r, c| {
