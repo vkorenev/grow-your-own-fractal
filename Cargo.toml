@@ -17,7 +17,7 @@ gloo-file = "0.4"
 gloo-timers = "0.4"
 console_log = "1"
 glam = "0.33"
-iced = { git = "https://github.com/iced-rs/iced", rev = "a8231fd9ddf3570f95affba2d45a9be092007f71", default-features = false }
+iced = { git = "https://github.com/iced-rs/iced", rev = "8ff48c42b0d5188223501ea1ccc506fd5beaf36a", default-features = false }
 include_dir = "0.7"
 js-sys = "0.3"
 log = "0.4"
