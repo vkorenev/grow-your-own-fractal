@@ -27,7 +27,7 @@ wgsl_to_wgpu = "0.19"
 
 [dev-dependencies]
 criterion = "0.8.2"
-pollster = "0.4"
+pollster = "1.0"
 
 [[bench]]
 name = "offscreen_render"

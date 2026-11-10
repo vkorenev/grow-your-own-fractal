@@ -19,7 +19,7 @@ wgpu.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 iced = { workspace = true, features = ["advanced", "wgpu", "web-colors", "crisp", "thread-pool", "linux-theme-detection", "x11", "wayland"] }
 env_logger = "0.11"
-rfd = "0.17"
+rfd = "0.18"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 iced = { workspace = true, features = ["advanced", "wgpu", "webgl", "web-colors", "fira-sans", "crisp"] }
