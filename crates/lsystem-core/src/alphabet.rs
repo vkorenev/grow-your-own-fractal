@@ -9,7 +9,7 @@ pub fn validate_symbols(
     dimensions: Dimensions,
 ) -> Result<(), ConfigError> {
     for (position, ch) in chars.chars().enumerate() {
-        if ch.is_ascii_alphabetic() {
+        if ch.is_alphabetic() {
             continue;
         }
         if TERMINALS_UNIVERSAL.contains(ch) {

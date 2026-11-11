@@ -27,7 +27,7 @@ other optimizations instead of materializing the expanded string.
 ## Alphabet
 
 Every non-whitespace character in the axiom and rule right-hand sides is an
-ASCII letter or a reserved turtle symbol.
+letter (any Unicode alphabetic character) or a reserved turtle symbol.
 
 The following symbols are valid in both dimensions:
 
@@ -40,7 +40,7 @@ The following symbols are valid in both dimensions:
 | `\|` | Turn 180 degrees around the current up axis. |
 | `[` | Push the current turtle state. |
 | `]` | Restore the most recently pushed turtle state. |
-| `A`–`Z`, `a`–`z` | A letter available as a production-rule symbol or non-terminal. |
+| `A`–`Z`, `a`–`z`, other Unicode letters | A letter available as a production-rule symbol or non-terminal. |
 
 The following symbols are valid only in 3D:
 
@@ -54,7 +54,7 @@ The following symbols are valid only in 3D:
 A 2D axiom or rule containing `&`, `^`, `/`, or `\` is invalid. Any character
 outside the dimension’s alphabet is invalid.
 
-Rule keys are single ASCII letters. Reserved turtle punctuation cannot be a
+Rule keys are single letters. Reserved turtle punctuation cannot be a
 rule key, so rewriting cannot remove or introduce imbalance by replacing a
 bracket itself.
 

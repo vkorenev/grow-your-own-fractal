@@ -261,7 +261,7 @@ impl TryFrom<RawConfig> for EditorConfig {
             let mut key_chars = key.chars();
             let rule_key = key_chars
                 .next()
-                .filter(|c| c.is_ascii_alphabetic())
+                .filter(|c| c.is_alphabetic())
                 .ok_or_else(|| ConfigError::InvalidRuleKey { key: key.clone() })?;
             if key_chars.next().is_some() {
                 return Err(ConfigError::InvalidRuleKey { key });
@@ -1781,6 +1781,28 @@ solid = "#00e680"
             ),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn accepts_non_ascii_letter_rule_keys_and_symbols() {
+        let toml = test_toml(
+            Dimensions::TwoD,
+            "ä",
+            1,
+            "90.0",
+            "1.0",
+            "0.0",
+            r#""ä" = "Fä+β""#,
+        );
+        let cfg = parse_config(&toml).unwrap();
+        assert_eq!(cfg.generation.axiom(), "ä");
+        assert_eq!(cfg.generation.rules()[&'ä'], "Fä+β");
+
+        // Round-trips through `set_grammar`, which must quote the non-ASCII key.
+        let mut source = ConfigSource::parse(&toml).unwrap();
+        source.set_grammar("ä", &[('ä', "Fä".to_string())]);
+        let doc = ConfigDocument::try_from(source).unwrap();
+        assert_eq!(resolve_doc(&doc).generation.rules()[&'ä'], "Fä");
     }
 
     #[test]

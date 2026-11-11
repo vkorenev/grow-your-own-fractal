@@ -564,11 +564,11 @@ pub(crate) fn App() -> impl IntoView {
     });
     let grammar_symbols = Memo::new(move |_| {
         let mut set = std::collections::BTreeSet::new();
-        grammar_axiom.with(|a| set.extend(a.chars().filter(|c| c.is_ascii_alphabetic())));
+        grammar_axiom.with(|a| set.extend(a.chars().filter(|c| c.is_alphabetic())));
         grammar_rows.with(|rows| {
             for row in rows {
                 row.symbol
-                    .with(|s| set.extend(s.chars().filter(|c| c.is_ascii_alphabetic())));
+                    .with(|s| set.extend(s.chars().filter(|c| c.is_alphabetic())));
             }
         });
         set.into_iter().collect::<Vec<char>>()

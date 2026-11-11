@@ -7,7 +7,7 @@ use crate::grammar;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("rule key {key:?} must be a single ASCII letter")]
+    #[error("rule key {key:?} must be a single letter")]
     InvalidRuleKey { key: String },
 
     #[error("invalid symbol {ch:?} at position {position} in `{field}`")]
