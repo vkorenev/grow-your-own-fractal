@@ -261,8 +261,7 @@ impl GenerationConfig {
     }
 
     /// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
-    ///
-    /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
+    /// See [`has_stack_directives`].
     pub fn has_stack_directives(&self) -> bool {
         has_stack_directives(&self.axiom, &self.rules)
     }
@@ -273,7 +272,10 @@ impl GenerationConfig {
     }
 }
 
-pub(crate) fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) -> bool {
+/// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
+///
+/// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
+pub fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) -> bool {
     axiom.contains('[') || rules.values().any(|rhs| rhs.contains('['))
 }
 
