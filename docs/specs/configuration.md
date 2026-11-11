@@ -32,7 +32,7 @@ Names do not identify workspace entries and do not need to be unique.
 | `l-system.initial_heading` | integer or float | Optional. Finite. Expressed in degrees. |
 | `l-system.rules` | table | Required. Keys and values follow the L-system rules below. |
 
-Each `l-system.rules` key is exactly one ASCII letter. Each value is a string.
+Each `l-system.rules` key is exactly one letter (ASCII or other Unicode alphabetic). Each value is a string.
 The axiom and rule strings have whitespace removed before symbol and bracket
 validation.
 
