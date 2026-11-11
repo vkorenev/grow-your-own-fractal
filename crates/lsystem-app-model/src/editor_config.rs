@@ -355,12 +355,6 @@ pub struct ConfigSource {
 }
 
 impl ConfigSource {
-    pub fn parse(toml_str: &str) -> Result<Self, ParseConfigError> {
-        Ok(Self {
-            document: toml_str.parse()?,
-        })
-    }
-
     pub fn to_toml_string(&self) -> String {
         self.document.to_string()
     }
@@ -480,6 +474,16 @@ impl ConfigSource {
     }
 }
 
+impl std::str::FromStr for ConfigSource {
+    type Err = ParseConfigError;
+
+    fn from_str(toml_str: &str) -> Result<Self, Self::Err> {
+        Ok(Self {
+            document: toml_str.parse()?,
+        })
+    }
+}
+
 impl std::fmt::Display for ConfigSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.to_toml_string())
@@ -488,7 +492,7 @@ impl std::fmt::Display for ConfigSource {
 
 /// A [`ConfigSource`] paired with the validated editor config it produces.
 ///
-/// The only constructor is `TryFrom<ConfigSource>`, which validates the document and rejects
+/// The only constructors are `TryFrom<ConfigSource>` and `FromStr`, which validate the document and reject
 /// invalid ones. Holding a `ConfigDocument` is a runtime invariant: the document was validated
 /// at construction time, so `editor_config()` always returns the value derived then.
 #[derive(Debug, Clone)]
@@ -507,6 +511,16 @@ impl TryFrom<ConfigSource> for ConfigDocument {
             source,
             editor_config,
         })
+    }
+}
+
+/// Parses and validates TOML text, equivalent to parsing a [`ConfigSource`] and
+/// converting it with `TryFrom`.
+impl std::str::FromStr for ConfigDocument {
+    type Err = ParseConfigError;
+
+    fn from_str(toml_str: &str) -> Result<Self, Self::Err> {
+        toml_str.parse::<ConfigSource>()?.try_into()
     }
 }
 
@@ -616,7 +630,8 @@ mod tests {
     use crate::config_defaults::{GradientDefaults, HueCycleDefaults, LSystemDefaults};
 
     fn parse_config(toml_str: &str) -> Result<Config, ParseConfigError> {
-        Ok(ConfigDocument::try_from(ConfigSource::parse(toml_str)?)?
+        Ok(toml_str
+            .parse::<ConfigDocument>()?
             .editor_config()
             .resolve(ConfigDefaults::embedded(), u16::MAX))
     }
@@ -801,7 +816,7 @@ F = "F"
 [colors.line.hue_cycle]
 initial = "#e60000"
 "##;
-        let mut source = ConfigSource::parse(toml).unwrap();
+        let mut source = toml.parse::<ConfigSource>().unwrap();
         source.set_line_color(None);
         let out = source.to_toml_string();
         assert!(!out.contains("hue_cycle"), "colors.line must be removed");
@@ -810,7 +825,7 @@ initial = "#e60000"
     #[test]
     fn set_line_color_gradient_omits_none_fields() {
         let toml = minimal_toml("t");
-        let mut source = ConfigSource::parse(&toml).unwrap();
+        let mut source = toml.parse::<ConfigSource>().unwrap();
         source.set_line_color(Some(&EditorLineColorConfig::Gradient {
             start: Some(Rgb::new(0x11, 0x22, 0x33)),
             end: None,
@@ -828,7 +843,7 @@ initial = "#e60000"
     #[test]
     fn set_line_color_hue_cycle_omits_none_initial() {
         let toml = minimal_toml("t");
-        let mut source = ConfigSource::parse(&toml).unwrap();
+        let mut source = toml.parse::<ConfigSource>().unwrap();
         source.set_line_color(Some(&EditorLineColorConfig::HueCycle { initial: None }));
         let out = source.to_toml_string();
         assert!(
@@ -866,7 +881,7 @@ start = "#1a334d"
 end = "#b3cce6"
 "##;
 
-        let doc = ConfigSource::parse(original).unwrap();
+        let doc = original.parse::<ConfigSource>().unwrap();
 
         assert_eq!(doc.to_string(), original);
         assert!(ConfigDocument::try_from(doc).is_ok());
@@ -892,7 +907,7 @@ background = "#000000"
 [colors.line]
 solid = "#00e680"
 "##;
-        let mut source = ConfigSource::parse(original).unwrap();
+        let mut source = original.parse::<ConfigSource>().unwrap();
 
         source.set_name("New");
 
@@ -908,7 +923,7 @@ solid = "#00e680"
 
     #[test]
     fn config_document_name_comes_from_editor_config() {
-        let doc = ConfigDocument::try_from(ConfigSource::parse(NESTED_KOCH_TOML).unwrap()).unwrap();
+        let doc = NESTED_KOCH_TOML.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(doc.name(), doc.editor_config().name);
         assert_eq!(doc.name(), "Koch Snowflake");
@@ -933,7 +948,7 @@ solid = "#00e680"
         for iterations in [0, u16::MAX] {
             let toml =
                 NESTED_KOCH_TOML.replace("iterations = 4", &format!("iterations = {iterations}"));
-            let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+            let doc = toml.parse::<ConfigDocument>().unwrap();
 
             assert_eq!(doc.editor_config().generation.iterations, iterations);
             assert_eq!(
@@ -949,14 +964,14 @@ solid = "#00e680"
     #[test]
     fn iteration_above_u16_max_is_rejected_during_deserialization() {
         let toml = NESTED_KOCH_TOML.replace("iterations = 4", "iterations = 65536");
-        let error = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap_err();
+        let error = toml.parse::<ConfigDocument>().unwrap_err();
 
         assert!(matches!(error, ParseConfigError::TomlDeserialize(_)));
     }
 
     #[test]
     fn set_iterations_round_trips_u16_max() {
-        let mut source = ConfigSource::parse(NESTED_KOCH_TOML).unwrap();
+        let mut source = NESTED_KOCH_TOML.parse::<ConfigSource>().unwrap();
         source.set_iterations(u16::MAX);
         let doc = ConfigDocument::try_from(source).unwrap();
 
@@ -975,7 +990,7 @@ solid = "#00e680"
                 "",
             );
 
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(doc.editor_config().generation.step, None);
         assert_eq!(doc.editor_config().generation.initial_heading, None);
@@ -1006,7 +1021,7 @@ solid = "#00e680"
             "[colors.line.gradient]",
         );
 
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(
             doc.editor_config().colors.line,
@@ -1075,7 +1090,7 @@ solid = "#00e680"
             );
         let editor = EditorConfig::try_from(
             toml_edit::de::from_document::<RawConfig>(
-                ConfigSource::parse(&toml).unwrap().document.clone(),
+                toml.parse::<ConfigSource>().unwrap().document.clone(),
             )
             .unwrap(),
         )
@@ -1095,7 +1110,7 @@ solid = "#00e680"
             .replace("step = 1.0", "step = 3.7")
             .replace("initial_heading = 0.0", "initial_heading = 45.0");
 
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(doc.editor_config().generation.step, Some(3.7));
         assert_eq!(doc.editor_config().generation.initial_heading, Some(45.0));
@@ -1124,7 +1139,7 @@ solid = "#00e680"
     #[test]
     fn parses_missing_background_as_none() {
         let toml = NESTED_KOCH_TOML.replace("background = \"#000000\"\n\n", "");
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(doc.editor_config().colors.background, None);
         assert_eq!(
@@ -1136,7 +1151,7 @@ solid = "#00e680"
     #[test]
     fn parses_present_background_as_some_hex() {
         let toml = NESTED_KOCH_TOML.replace("background = \"#000000\"", "background = \"#334d66\"");
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(doc.editor_config().colors.background, Some(hex("#334d66")));
         assert_eq!(resolve_doc(&doc).colors.background, hex("#334d66"));
@@ -1264,7 +1279,7 @@ solid = "#00e680"
             "[colors.line.gradient]\nstart = \"#1a334d\"\nend = \"#b3cce6\"\ntopological_depth = true",
         );
 
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
 
         assert_eq!(
             doc.editor_config().colors.line,
@@ -1457,7 +1472,7 @@ background = "#000000"
 solid = "#1a334d"
 "##;
 
-        let source = ConfigSource::parse(toml).unwrap();
+        let source = toml.parse::<ConfigSource>().unwrap();
 
         assert_eq!(source.to_toml_string(), toml);
         let doc = ConfigDocument::try_from(source).unwrap();
@@ -1794,7 +1809,7 @@ solid = "#00e680"
         assert_eq!(cfg.generation.rules()[&'ä'], "Fä+β");
 
         // Round-trips through `set_grammar`, which must quote the non-ASCII key.
-        let mut source = ConfigSource::parse(&toml).unwrap();
+        let mut source = toml.parse::<ConfigSource>().unwrap();
         source.set_grammar("ä", &[('ä', "Fä".to_string())]);
         let doc = ConfigDocument::try_from(source).unwrap();
         assert_eq!(resolve_doc(&doc).generation.rules()[&'ä'], "Fä");
@@ -1990,7 +2005,7 @@ solid = "#00e680"
             "0.0",
             "F = \"F-F++F-F\"",
         );
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
         assert_eq!(
             doc.editor_config().generation.unused_rules(),
             Vec::<char>::new()
@@ -2008,7 +2023,7 @@ solid = "#00e680"
             "0.0",
             "F = \"F-F\"\nX = \"FF\"",
         );
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
         assert_eq!(doc.editor_config().generation.unused_rules(), vec!['X']);
     }
 
@@ -2036,7 +2051,7 @@ solid = "#00e680"
             "[colors.line]\nsolid = \"#00e680\"",
             "[colors.line.gradient]\nstart = \"#1a334d\"\nend = \"#b3cce6\"\ntopological_depth = true",
         );
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&toml).unwrap()).unwrap();
+        let doc = toml.parse::<ConfigDocument>().unwrap();
         let start = hex("#1a334d");
         let end = hex("#b3cce6");
         assert_eq!(
@@ -2131,7 +2146,7 @@ solid = "#00e680"
     #[test]
     fn set_background_writes_hex_string() {
         let toml = test_toml(Dimensions::TwoD, "F", 1, "90.0", "1.0", "0.0", "");
-        let mut source = ConfigSource::parse(&toml).unwrap();
+        let mut source = toml.parse::<ConfigSource>().unwrap();
         source.set_background(Some(Rgb::new(0xff, 0x80, 0x00)));
         let result = source.to_toml_string();
         assert!(
@@ -2139,7 +2154,7 @@ solid = "#00e680"
             "expected hex string, got: {result}"
         );
         // Verify it round-trips: re-parsing produces the same Rgb
-        let doc = ConfigDocument::try_from(ConfigSource::parse(&result).unwrap()).unwrap();
+        let doc = result.parse::<ConfigDocument>().unwrap();
         assert_eq!(
             resolve_doc(&doc).colors.background,
             Rgb::new(0xff, 0x80, 0x00)

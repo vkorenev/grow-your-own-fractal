@@ -209,8 +209,7 @@ impl ConfigWorkspace {
     /// [`ConfigWorkspaceError::ParseConfig`] if `text` fails to parse or validate. On error
     /// the workspace state is unchanged: no entry is added and the selection is not moved.
     pub fn import_toml(&mut self, text: &str) -> Result<&ConfigEntry, ConfigWorkspaceError> {
-        let source = ConfigSource::parse(text)?;
-        let doc = ConfigDocument::try_from(source)?;
+        let doc: ConfigDocument = text.parse()?;
         let id = self.allocate_id();
         self.entries.push(ConfigEntry::custom(doc, id));
         self.selected = self.entries.len() - 1;
@@ -260,8 +259,7 @@ impl ConfigWorkspace {
 
 impl ConfigEntry {
     fn preset(text: String, id: ConfigEntryId) -> Result<Self, ConfigWorkspaceError> {
-        let source = ConfigSource::parse(&text)?;
-        let doc = ConfigDocument::try_from(source)?;
+        let doc: ConfigDocument = text.parse()?;
         Ok(Self {
             id,
             default: Some(doc.clone()),
@@ -297,7 +295,7 @@ impl ConfigEntry {
     pub fn name_for_rename(&self) -> Cow<'_, str> {
         self.draft
             .as_deref()
-            .and_then(|draft| ConfigSource::parse(draft).ok())
+            .and_then(|draft| draft.parse::<ConfigSource>().ok())
             .and_then(|source| source.authored_name().map(str::to_owned))
             .map_or_else(|| Cow::Borrowed(self.name()), Cow::Owned)
     }
@@ -336,7 +334,7 @@ impl ConfigEntry {
 
     fn copy_as(&self, name: &str, id: ConfigEntryId) -> Result<Self, ConfigWorkspaceError> {
         let draft = self.draft.as_ref().map(|draft_text| {
-            ConfigSource::parse(draft_text).map_or_else(
+            draft_text.parse::<ConfigSource>().map_or_else(
                 |_| draft_text.clone(), // draft is unparseable TOML; keep verbatim so the user can fix it
                 |mut source| {
                     source.set_name(name);
@@ -365,8 +363,7 @@ impl ConfigEntry {
         let Some(draft) = &self.draft else {
             return Ok(());
         };
-        let source = ConfigSource::parse(draft)?;
-        let doc = ConfigDocument::try_from(source)?;
+        let doc: ConfigDocument = draft.parse()?;
         self.last_applied = doc;
         self.draft = None;
         Ok(())
@@ -412,7 +409,7 @@ impl ConfigEntry {
         // to exactly the applied text (e.g. the draft already had this name), in which
         // case the entry should become clean rather than staying spuriously dirty.
         if let Some(draft_text) = &self.draft
-            && let Ok(mut draft_source) = ConfigSource::parse(draft_text)
+            && let Ok(mut draft_source) = draft_text.parse::<ConfigSource>()
         {
             draft_source.set_name(new_name);
             let rewritten = draft_source.to_toml_string();
@@ -530,7 +527,7 @@ solid = "#00e680"
     }
 
     fn config_text_renamed(text: &str, name: &str) -> String {
-        let mut source = ConfigSource::parse(text).unwrap();
+        let mut source = text.parse::<ConfigSource>().unwrap();
         source.set_name(name);
         source.to_toml_string()
     }
@@ -613,7 +610,14 @@ solid = "#00e680"
 
         workspace.select_by_id(first_id).unwrap();
         assert_eq!(workspace.selected().draft_text(), "edited first");
-        assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_err());
+        assert!(
+            workspace
+                .selected()
+                .draft_text()
+                .as_ref()
+                .parse::<ConfigSource>()
+                .is_err()
+        );
         assert!(workspace.selected().is_dirty());
         workspace.select_by_id(second_id).unwrap();
         assert_eq!(workspace.selected().draft_text(), "edited second");
@@ -721,7 +725,11 @@ solid = "#00e680"
 
         assert!(!reverted.is_dirty());
         assert_eq!(reverted.draft_text(), applied.as_str());
-        let draft_document = ConfigSource::parse(reverted.draft_text().as_ref()).unwrap();
+        let draft_document = reverted
+            .draft_text()
+            .as_ref()
+            .parse::<ConfigSource>()
+            .unwrap();
         assert_eq!(draft_document.to_string(), applied);
     }
 
@@ -1078,7 +1086,14 @@ solid = "#00e680"
         assert_eq!(workspace.selected().applied_text(), expected_applied);
         assert_eq!(workspace.selected().editor_config().name, "Plant copy");
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
-        assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_ok());
+        assert!(
+            workspace
+                .selected()
+                .draft_text()
+                .as_ref()
+                .parse::<ConfigSource>()
+                .is_ok()
+        );
         assert!(matches!(
             workspace.selected_mut().apply_draft(),
             Err(ParseConfigError::Validation(
@@ -1108,7 +1123,14 @@ solid = "#00e680"
         assert_eq!(workspace.selected().applied_text(), expected_applied);
         assert_eq!(workspace.selected().editor_config().name, "Plant copy");
         assert_eq!(workspace.selected().editor_config().generation.angle, 60.0);
-        assert!(ConfigSource::parse(workspace.selected().draft_text().as_ref()).is_err());
+        assert!(
+            workspace
+                .selected()
+                .draft_text()
+                .as_ref()
+                .parse::<ConfigSource>()
+                .is_err()
+        );
         assert!(workspace.selected().is_dirty());
         assert!(!workspace.selected().differs_from_default());
     }

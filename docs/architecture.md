@@ -58,7 +58,7 @@ geometry, or vertices to either path.
 Config editing has a separate parse/validate/resolve pipeline.
 
 ```text
-ConfigSource::parse
+str::parse::<ConfigSource>
   -> RawConfig
   -> EditorConfig
   -> ConfigDocument
