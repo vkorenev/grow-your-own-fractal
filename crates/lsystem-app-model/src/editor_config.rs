@@ -50,10 +50,9 @@ pub struct EditorGenerationConfig {
 
 impl EditorGenerationConfig {
     /// Returns `true` if the axiom or any rule RHS contains a `[` push directive.
-    ///
-    /// Only `[` needs checking; bracket balance is validated, so `]` cannot appear alone.
+    /// See [`lsystem_core::has_stack_directives`].
     pub fn has_stack_directives(&self) -> bool {
-        has_stack_directives(&self.axiom, &self.rules)
+        lsystem_core::has_stack_directives(&self.axiom, &self.rules)
     }
 
     /// Returns the symbols of rules that are never reached during expansion.
@@ -336,10 +335,6 @@ pub(crate) fn validate_angle(angle: f32) -> Result<f32, ConfigError> {
         return Err(ConfigError::InvalidAngle(angle));
     }
     Ok(angle)
-}
-
-fn has_stack_directives(axiom: &str, rules: &BTreeMap<char, String>) -> bool {
-    axiom.contains('[') || rules.values().any(|rhs| rhs.contains('['))
 }
 
 // --- Custom number deserializers ---

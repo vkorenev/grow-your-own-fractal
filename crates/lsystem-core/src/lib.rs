@@ -23,6 +23,7 @@ pub use compiled_generation::{
 };
 pub use config::{
     ColorConfig, Config, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb, RgbError,
+    has_stack_directives,
 };
 pub use dimension::{D2, D3, Dimension};
 pub use grammar::{max_safe_iterations, unused_rules};
