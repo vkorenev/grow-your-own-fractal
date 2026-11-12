@@ -7,8 +7,8 @@ use lsystem_core::{ConfigError, Rgb};
 /// Error type for TOML parse and validation failures.
 ///
 /// This wraps TOML-layer errors (parse, deserialization) as well as domain-validation
-/// errors from `lsystem-core`. It is the error type returned by `ConfigSource::parse`
-/// and `TryFrom<ConfigSource> for ConfigDocument`.
+/// errors from `lsystem-core`. It is the error type of `ConfigSource` and `ConfigDocument`
+/// parsing (`FromStr`) and of `TryFrom<ConfigSource> for ConfigDocument`.
 #[derive(Debug, Error)]
 pub enum ParseConfigError {
     #[error("TOML parse error: {0}")]
