@@ -2,7 +2,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 
-use lsystem_core::{ConfigError, Rgb};
+use lsystem_core::{ConfigError, Rgb, validate_initial_heading, validate_step};
 
 /// Error type for TOML parse and validation failures.
 ///
@@ -172,22 +172,6 @@ impl TryFrom<RawDefaults> for ConfigDefaults {
             },
         })
     }
-}
-
-// --- Shared validation helpers (used by editor_config.rs as well) ---
-
-pub(crate) fn validate_step(step: f32) -> Result<f32, ConfigError> {
-    if !step.is_finite() || step <= 0.0 {
-        return Err(ConfigError::InvalidStep(step));
-    }
-    Ok(step)
-}
-
-pub(crate) fn validate_initial_heading(initial_heading: f32) -> Result<f32, ConfigError> {
-    if !initial_heading.is_finite() {
-        return Err(ConfigError::InvalidInitialHeading(initial_heading));
-    }
-    Ok(initial_heading)
 }
 
 // --- Shared helpers (also used by editor_config.rs) ---

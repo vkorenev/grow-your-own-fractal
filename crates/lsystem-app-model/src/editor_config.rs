@@ -5,12 +5,13 @@ use toml_edit::{DocumentMut, Item, Table, Value, value};
 
 use lsystem_core::{
     ColorConfig, Config, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb,
-    validate_bracket_balance, validate_symbols,
+    validate_angle, validate_bracket_balance, validate_initial_heading, validate_step,
+    validate_symbols,
 };
 
 use crate::config_defaults::{
     ColorDefaults, ConfigDefaults, LineColorDefaults, ParseConfigError, TomlNumber,
-    deserialize_number, parse_rgb, validate_initial_heading, validate_step,
+    deserialize_number, parse_rgb,
 };
 
 /// Validated L-system configuration exactly as authored, before defaults are applied.
@@ -326,15 +327,6 @@ impl TryFrom<RawLineColor> for EditorLineColorConfig {
             },
         })
     }
-}
-
-// --- Validation helpers ---
-
-pub(crate) fn validate_angle(angle: f32) -> Result<f32, ConfigError> {
-    if !angle.is_finite() {
-        return Err(ConfigError::InvalidAngle(angle));
-    }
-    Ok(angle)
 }
 
 // --- Custom number deserializers ---
