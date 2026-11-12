@@ -191,8 +191,9 @@ pub struct Config {
 /// Validated inputs needed to expand an L-system and run the turtle.
 ///
 /// Construction goes through [`GenerationConfig::new`], which enforces
-/// single-letter rule keys and bracket balance on the axiom and every rule
-/// RHS — together these guarantee every expansion is balanced.
+/// finite turtle parameters (positive step), single-letter rule keys and
+/// bracket balance on the axiom and every rule RHS — together the last two
+/// guarantee every expansion is balanced.
 /// Everything downstream (expansion, turtle stack handling, templates)
 /// relies on that invariant, so `axiom` and `rules` are read-only after
 /// construction.
@@ -217,8 +218,9 @@ pub struct GenerationConfig {
 }
 
 impl GenerationConfig {
-    /// Creates a generation config, rejecting an unbalanced axiom or rule RHS
-    /// and rule keys that are not letters.
+    /// Creates a generation config, rejecting non-finite angle or initial
+    /// heading, a non-positive or non-finite step, an unbalanced axiom or rule
+    /// RHS, and rule keys that are not letters.
     ///
     /// Restricting rule keys to letters is part of the balance invariant: a
     /// rule keyed on `[` or `]` could rewrite a bracket away and unbalance
@@ -232,6 +234,9 @@ impl GenerationConfig {
         initial_heading: f32,
         rules: BTreeMap<char, String>,
     ) -> Result<Self, ConfigError> {
+        validate_angle(angle)?;
+        validate_step(step)?;
+        validate_initial_heading(initial_heading)?;
         validate_bracket_balance(&axiom, "axiom")?;
         for (key, rhs) in &rules {
             if !key.is_alphabetic() {
@@ -269,6 +274,33 @@ impl GenerationConfig {
     /// Returns the symbols of rules that are never reached during expansion.
     pub fn unused_rules(&self) -> Vec<char> {
         grammar::unused_rules(&self.axiom, &self.rules)
+    }
+}
+
+/// Checks that a forward-step length is finite and positive.
+pub fn validate_step(step: f32) -> Result<f32, ConfigError> {
+    if step.is_finite() && step > 0.0 {
+        Ok(step)
+    } else {
+        Err(ConfigError::InvalidStep(step))
+    }
+}
+
+/// Checks that a turn angle, in degrees, is finite.
+pub fn validate_angle(angle: f32) -> Result<f32, ConfigError> {
+    if angle.is_finite() {
+        Ok(angle)
+    } else {
+        Err(ConfigError::InvalidAngle(angle))
+    }
+}
+
+/// Checks that an initial heading, in degrees, is finite.
+pub fn validate_initial_heading(initial_heading: f32) -> Result<f32, ConfigError> {
+    if initial_heading.is_finite() {
+        Ok(initial_heading)
+    } else {
+        Err(ConfigError::InvalidInitialHeading(initial_heading))
     }
 }
 
@@ -352,6 +384,42 @@ mod generation_config {
         assert!(matches!(
             new("F", BTreeMap::from([('+', "F".to_string())])),
             Err(ConfigError::InvalidRuleKey { key }) if key == "+"
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_turtle_parameters() {
+        let make = |angle, step, heading| {
+            GenerationConfig::new(
+                Dimensions::TwoD,
+                "F".to_string(),
+                1,
+                angle,
+                step,
+                heading,
+                BTreeMap::new(),
+            )
+        };
+        assert!(make(90.0, 1.0, 0.0).is_ok());
+        assert!(matches!(
+            make(f32::NAN, 1.0, 0.0),
+            Err(ConfigError::InvalidAngle(_))
+        ));
+        assert!(matches!(
+            make(90.0, 0.0, 0.0),
+            Err(ConfigError::InvalidStep(_))
+        ));
+        assert!(matches!(
+            make(90.0, -1.0, 0.0),
+            Err(ConfigError::InvalidStep(_))
+        ));
+        assert!(matches!(
+            make(90.0, f32::INFINITY, 0.0),
+            Err(ConfigError::InvalidStep(_))
+        ));
+        assert!(matches!(
+            make(90.0, 1.0, f32::INFINITY),
+            Err(ConfigError::InvalidInitialHeading(_))
         ));
     }
 
