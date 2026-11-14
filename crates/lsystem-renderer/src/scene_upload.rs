@@ -483,12 +483,7 @@ mod gpu_tests {
     #[test]
     fn uploads_report_truthful_layout_method_bounds_and_zero_metadata() {
         pollster::block_on(async {
-            let (device, queue) = crate::wgpu_util::create_headless_device(
-                "scene_upload_metadata_device",
-                "scene upload metadata test",
-            )
-            .await
-            .expect("headless device");
+            let (device, queue) = crate::test_gpu::shared_device();
             let mut pipeline_2d = LinePipeline2D::new(&device, FORMAT);
             let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT, None);
 
@@ -655,12 +650,7 @@ mod gpu_tests {
     #[test]
     fn cap_errors_cover_stamped_and_interpreter_configs_in_both_dimensions() {
         pollster::block_on(async {
-            let (device, queue) = crate::wgpu_util::create_headless_device(
-                "scene_upload_cap_device",
-                "scene upload cap test",
-            )
-            .await
-            .expect("headless device");
+            let (device, queue) = crate::test_gpu::shared_device();
             let mut pipeline_2d = LinePipeline2D::new(&device, FORMAT);
             let mut pipeline_3d = LinePipeline3D::new(&device, FORMAT, None);
             let line = line_color();
@@ -706,12 +696,7 @@ mod gpu_tests {
     #[test]
     fn cap_rejection_preserves_pixels_and_staging_failure_draws_only_background() {
         pollster::block_on(async {
-            let (device, queue) = crate::wgpu_util::create_headless_device(
-                "scene_upload_transaction_device",
-                "scene upload transaction test",
-            )
-            .await
-            .expect("headless device");
+            let (device, queue) = crate::test_gpu::shared_device();
             let mut pipeline = LinePipeline2D::new(&device, FORMAT);
             let valid = generation(Dimensions::TwoD, "F", 1, [('F', "F".to_string())].into());
             let scene = upload_scene(
@@ -802,12 +787,7 @@ mod gpu_tests {
     #[test]
     fn renders_3d_scene_with_non_background_pixels_in_both_layouts() {
         pollster::block_on(async {
-            let (device, queue) = crate::wgpu_util::create_headless_device(
-                "scene_upload_3d_smoke_device",
-                "scene upload 3D smoke test",
-            )
-            .await
-            .expect("headless device");
+            let (device, queue) = crate::test_gpu::shared_device();
             let mut pipeline = LinePipeline3D::new(&device, FORMAT, None);
 
             // `Mvp::default()` is the identity matrix: clip space equals

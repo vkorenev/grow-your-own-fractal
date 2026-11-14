@@ -16,4 +16,6 @@ mod offscreen;
 #[cfg(feature = "png")]
 pub mod png_export;
 pub mod scene_upload;
+#[cfg(all(test, feature = "png", not(target_arch = "wasm32")))]
+mod test_gpu;
 pub mod wgpu_util;
