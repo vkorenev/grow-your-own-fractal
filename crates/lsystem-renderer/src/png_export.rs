@@ -248,17 +248,13 @@ mod gpu_tests {
         }
     }
 
-    /// Creates a headless device, runs `render` on it with wgpu validation
+    /// Runs `render` on the shared test device with wgpu validation
     /// enabled, and asserts no validation error was raised.
     fn render_with_validation_check<T>(
-        device_label: &'static str,
         render: impl AsyncFnOnce(&wgpu::Device, &wgpu::Queue) -> Result<T, ExportError>,
     ) -> T {
         let (render_result, validation_error) = pollster::block_on(async {
-            let (device, queue) =
-                crate::wgpu_util::create_headless_device(device_label, device_label)
-                    .await
-                    .expect("failed to create headless test device");
+            let (device, queue) = crate::test_gpu::shared_device();
 
             let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let render_result = render(&device, &queue).await;
@@ -273,18 +269,17 @@ mod gpu_tests {
     }
 
     fn assert_png_renders(config: lsystem_core::Config) {
-        let export =
-            render_with_validation_check("png_export_test_device", async |device, queue| {
-                render_png(
-                    device,
-                    queue,
-                    &config,
-                    256,
-                    128,
-                    &crate::camera::Camera::default(),
-                )
-                .await
-            });
+        let export = render_with_validation_check(async |device, queue| {
+            render_png(
+                device,
+                queue,
+                &config,
+                256,
+                128,
+                &crate::camera::Camera::default(),
+            )
+            .await
+        });
 
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);
@@ -295,18 +290,17 @@ mod gpu_tests {
     }
 
     fn assert_rgba_renders_without_png_encoding(config: lsystem_core::Config) {
-        let export =
-            render_with_validation_check("rgba_export_test_device", async |device, queue| {
-                render_rgba(
-                    device,
-                    queue,
-                    &config,
-                    64,
-                    32,
-                    &crate::camera::Camera::default(),
-                )
-                .await
-            });
+        let export = render_with_validation_check(async |device, queue| {
+            render_rgba(
+                device,
+                queue,
+                &config,
+                64,
+                32,
+                &crate::camera::Camera::default(),
+            )
+            .await
+        });
 
         assert_eq!(export.width, 64);
         assert_eq!(export.height, 32);
@@ -344,7 +338,7 @@ mod gpu_tests {
     }
 
     #[test]
-    fn png_standalone_non_square_dimensions() {
+    fn png_export_non_square_dimensions() {
         assert_png_renders(trivial_config());
     }
 
@@ -360,11 +354,7 @@ mod gpu_tests {
 
     #[test]
     fn over_cap_export_returns_scene_upload_error() {
-        let (device, queue) = pollster::block_on(crate::wgpu_util::create_headless_device(
-            "over_cap_export_device",
-            "over-cap export test",
-        ))
-        .expect("headless device");
+        let (device, queue) = crate::test_gpu::shared_device();
         let mut config = trivial_config();
         config.generation = GenerationConfig::new(
             Dimensions::TwoD,
@@ -395,19 +385,19 @@ mod gpu_tests {
     }
 
     #[test]
-    fn png_standalone_compiles_3d_solid_shader() {
+    fn png_export_compiles_3d_solid_shader() {
         let mut config = trivial_config();
         config.generation.dimensions = Dimensions::ThreeD;
         assert_png_renders(config);
     }
 
     #[test]
-    fn png_standalone_compiles_2d_depth_shader() {
+    fn png_export_compiles_2d_depth_shader() {
         assert_png_renders(depth_gradient_config(Dimensions::TwoD));
     }
 
     #[test]
-    fn png_standalone_compiles_3d_depth_shader() {
+    fn png_export_compiles_3d_depth_shader() {
         assert_png_renders(depth_gradient_config(Dimensions::ThreeD));
     }
 }

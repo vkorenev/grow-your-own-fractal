@@ -332,7 +332,10 @@ mod gpu_tests {
             hue_rotation_dps: 0.0,
             auto_rotate_dps: 0.0,
         };
-        let export = pollster::block_on(render_animation_standalone(
+        let (device, queue) = crate::test_gpu::shared_device();
+        let export = pollster::block_on(render_animation(
+            &device,
+            &queue,
             &trivial_config(),
             256,
             128,
@@ -340,7 +343,7 @@ mod gpu_tests {
             &params,
             |_, _| {},
         ))
-        .expect("render_animation_standalone failed");
+        .expect("render_animation failed");
 
         assert_eq!(export.width, 256);
         assert_eq!(export.height, 128);
