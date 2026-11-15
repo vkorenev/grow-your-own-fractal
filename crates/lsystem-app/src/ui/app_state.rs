@@ -8,8 +8,8 @@ use lsystem_app_model::{
     CAMERA_AUTO_ROTATION_MIN_SPEED_DEGREES_PER_SECOND, CAMERA_ROTATION_STEP_DEGREES, CleanMut,
     ColorControlMemory, ConfigDefaults, ConfigEntryId, ConfigWorkspace, ConfigWorkspaceError,
     EditorConfig, EditorLineColorConfig, EntryViewMut, HueRotation, HueRotationDirection,
-    LineColorMode, ParseConfigError, advance_hue_rotation_phase_degrees, line_color_for_controls,
-    load_presets,
+    LineColorDefaultField, LineColorMode, ParseConfigError, advance_hue_rotation_phase_degrees,
+    line_color_for_controls, load_presets,
 };
 use lsystem_core::{ColorConfig, Config, Dimensions, LineColorConfig, Rgb};
 use std::sync::{
@@ -35,14 +35,6 @@ pub(super) fn normalized_rename_name(name: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ColorDefaultField {
-    SolidLine,
-    GradientStart,
-    GradientEnd,
-    HueCycleInitial,
-}
-
 #[derive(Debug, Clone)]
 pub(super) enum Message {
     PresetSelected(ConfigEntryId),
@@ -65,7 +57,7 @@ pub(super) enum Message {
     LineColorModeSelected(LineColorMode),
     LineColorChanged(Option<EditorLineColorConfig>),
     LineColorDefaultToggled {
-        field: ColorDefaultField,
+        field: LineColorDefaultField,
         use_default: bool,
     },
     PngWidthChanged(String),
@@ -290,16 +282,11 @@ impl FractalApp {
             Message::AngleChanged(angle) => {
                 self.update_clean_config("angle slider", |clean| clean.set_angle(angle))
             }
-            Message::BackgroundDefaultToggled(is_default) => {
-                if is_default {
-                    self.color_memory
-                        .remember_background(self.render_colors().background);
-                }
-                let background = if is_default {
-                    None
-                } else {
-                    Some(self.color_memory.background())
-                };
+            Message::BackgroundDefaultToggled(use_default) => {
+                let current = self.render_colors().background;
+                let background = self
+                    .color_memory
+                    .toggle_background_default(current, use_default);
                 self.update_clean_color_config("background", |clean| {
                     clean.set_background(background)
                 })
@@ -321,46 +308,10 @@ impl FractalApp {
             Message::LineColorChanged(line_color) => self
                 .update_clean_color_config("line color", |clean| clean.set_line_color(line_color)),
             Message::LineColorDefaultToggled { field, use_default } => {
-                use ColorDefaultField::*;
                 let editor_line = self.config_workspace.selected().editor_config().colors.line;
-                if use_default {
-                    self.color_memory.remember_line(editor_line);
-                }
-                let (editor_start, editor_end, editor_td) =
-                    editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
-                let (mem_start, mem_end, _) = self.color_memory.gradient_fields();
-                let new_line = match (field, use_default) {
-                    (SolidLine, true) => None,
-                    (SolidLine, false) => Some(EditorLineColorConfig::Solid(
-                        self.color_memory.solid_color(),
-                    )),
-                    (GradientStart, true) => Some(EditorLineColorConfig::Gradient {
-                        start: None,
-                        end: editor_end,
-                        topological_depth: editor_td,
-                    }),
-                    (GradientStart, false) => Some(EditorLineColorConfig::Gradient {
-                        start: Some(mem_start),
-                        end: editor_end,
-                        topological_depth: editor_td,
-                    }),
-                    (GradientEnd, true) => Some(EditorLineColorConfig::Gradient {
-                        start: editor_start,
-                        end: None,
-                        topological_depth: editor_td,
-                    }),
-                    (GradientEnd, false) => Some(EditorLineColorConfig::Gradient {
-                        start: editor_start,
-                        end: Some(mem_end),
-                        topological_depth: editor_td,
-                    }),
-                    (HueCycleInitial, true) => {
-                        Some(EditorLineColorConfig::HueCycle { initial: None })
-                    }
-                    (HueCycleInitial, false) => Some(EditorLineColorConfig::HueCycle {
-                        initial: Some(self.color_memory.hue_cycle_initial()),
-                    }),
-                };
+                let new_line =
+                    self.color_memory
+                        .toggle_line_default(editor_line, field, use_default);
                 self.update_clean_color_config("line color default", |clean| {
                     clean.set_line_color(new_line)
                 })

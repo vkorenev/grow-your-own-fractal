@@ -11,10 +11,12 @@ use lsystem_app_model::{
     HueRotation, HueRotationDirection, LineColorMode, line_color_for_controls,
     selected_line_color_mode,
 };
-use lsystem_app_model::{ConfigDefaults, EditorColorConfig, EditorLineColorConfig};
+use lsystem_app_model::{
+    ConfigDefaults, EditorColorConfig, EditorLineColorConfig, LineColorDefaultField,
+};
 use lsystem_core::{LineColorConfig, Rgb};
 
-use super::app_state::{ColorDefaultField, FractalApp, Message, normalized_rename_name};
+use super::app_state::{FractalApp, Message, normalized_rename_name};
 use super::{CONTROL_WIDTH, TITLE};
 
 impl FractalApp {
@@ -336,7 +338,7 @@ fn push_color_controls<'a>(
                     checkbox(is_default_solid)
                         .label("Solid: use default")
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
-                            field: ColorDefaultField::SolidLine,
+                            field: LineColorDefaultField::Solid,
                             use_default,
                         })
                         .boxed(),
@@ -359,7 +361,7 @@ fn push_color_controls<'a>(
                     checkbox(editor_start.is_none())
                         .label("Gradient start: use default")
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
-                            field: ColorDefaultField::GradientStart,
+                            field: LineColorDefaultField::GradientStart,
                             use_default,
                         })
                         .boxed(),
@@ -375,7 +377,7 @@ fn push_color_controls<'a>(
                     checkbox(editor_end.is_none())
                         .label("Gradient end: use default")
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
-                            field: ColorDefaultField::GradientEnd,
+                            field: LineColorDefaultField::GradientEnd,
                             use_default,
                         })
                         .boxed(),
@@ -415,7 +417,7 @@ fn push_color_controls<'a>(
                     checkbox(editor_initial.is_none())
                         .label("Initial: use default")
                         .on_toggle(|use_default| Message::LineColorDefaultToggled {
-                            field: ColorDefaultField::HueCycleInitial,
+                            field: LineColorDefaultField::HueCycleInitial,
                             use_default,
                         })
                         .boxed(),
