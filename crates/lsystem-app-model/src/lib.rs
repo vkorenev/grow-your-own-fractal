@@ -15,7 +15,8 @@ pub use animation::{
     HueRotation, HueRotationDirection, advance_hue_rotation_phase_degrees,
 };
 pub use color::{
-    ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
+    ColorControlMemory, LineColorDefaultField, LineColorMode, line_color_for_controls,
+    selected_line_color_mode,
 };
 pub use config_defaults::{ConfigDefaults, LSystemDefaults, ParseConfigError};
 pub use config_workspace::{

@@ -1,8 +1,8 @@
 use crate::app::{ConfigContext, update_clean_config};
 use leptos::prelude::*;
 use lsystem_app_model::{
-    ColorControlMemory, ConfigDefaults, EditorLineColorConfig, LineColorMode,
-    selected_line_color_mode,
+    ColorControlMemory, ConfigDefaults, EditorLineColorConfig, LineColorDefaultField,
+    LineColorMode, selected_line_color_mode,
 };
 use lsystem_core::{LineColorConfig, Rgb};
 
@@ -61,6 +61,20 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
         ..
     } = expect_context();
 
+    // Builds the "Default" checkbox callback for one line-color field.
+    let toggle_line_default = move |field: LineColorDefaultField, event: &'static str| {
+        Callback::new(move |use_default: bool| {
+            let editor_line = editor_color_config.with_untracked(|editor| editor.line);
+            let line_color =
+                color_memory
+                    .write()
+                    .toggle_line_default(editor_line, field, use_default);
+            update_clean_config(config_workspace, colors_error, event, move |clean| {
+                clean.set_line_color(line_color)
+            });
+        })
+    };
+
     view! {
         <crate::ui::Disclosure title="Colors">
             <crate::ui::DirtyDraftWarning is_dirty=is_dirty />
@@ -78,21 +92,12 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                     })
                 })
                 on_default_change=Callback::new(move |use_default: bool| {
-                    if use_default {
-                        let current_bg = editor_color_config.with_untracked(|editor| {
-                            editor.background.unwrap_or(
-                                ConfigDefaults::embedded().colors.background,
-                            )
-                        });
-                        color_memory.update(|memory| {
-                            memory.remember_background(current_bg);
-                        });
-                    }
-                    let background = if use_default {
-                        None
-                    } else {
-                        Some(color_memory.get_untracked().background())
-                    };
+                    let current = editor_color_config.with_untracked(|editor| {
+                        editor.background.unwrap_or(ConfigDefaults::embedded().colors.background)
+                    });
+                    let background = color_memory
+                        .write()
+                        .toggle_background_default(current, use_default);
                     update_clean_config(
                         config_workspace,
                         colors_error,
@@ -181,25 +186,7 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                     color=Signal::derive(move || {
                         solid_color_for_mode(control_line_color, color_memory)
                     })
-                    on_default_change=Callback::new(move |use_default: bool| {
-                        if use_default {
-                            let editor_line = editor_color_config.with_untracked(|e| e.line);
-                            color_memory.update(|m| m.remember_line(editor_line));
-                        }
-                        let line_color = if use_default {
-                            None
-                        } else {
-                            Some(EditorLineColorConfig::Solid(
-                                color_memory.get_untracked().solid_color(),
-                            ))
-                        };
-                        update_clean_config(
-                            config_workspace,
-                            colors_error,
-                            "solid use-default checkbox",
-                            move |clean| clean.set_line_color(line_color),
-                        );
-                    })
+                    on_default_change=toggle_line_default(LineColorDefaultField::Solid, "solid use-default checkbox")
                     on_color_change=Callback::new(move |color: Rgb| {
                         let line_color = Some(EditorLineColorConfig::Solid(color));
                         if update_clean_config(
@@ -242,31 +229,7 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                         );
                         start
                     })
-                    on_default_change=Callback::new(move |use_default: bool| {
-                        let editor_line = editor_color_config.with_untracked(|e| e.line);
-                        if use_default {
-                            color_memory.update(|m| m.remember_line(editor_line));
-                        }
-                        let (_, editor_end, editor_td) =
-                            editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
-                        let start = if use_default {
-                            None
-                        } else {
-                            Some(color_memory.get_untracked().gradient_fields().0)
-                        };
-                        let line_color =
-                            Some(EditorLineColorConfig::Gradient {
-                                start,
-                                end: editor_end,
-                                topological_depth: editor_td,
-                            });
-                        update_clean_config(
-                            config_workspace,
-                            colors_error,
-                            "gradient start use-default",
-                            move |clean| clean.set_line_color(line_color),
-                        );
-                    })
+                    on_default_change=toggle_line_default(LineColorDefaultField::GradientStart, "gradient start use-default")
                     on_color_change=Callback::new(move |start: Rgb| {
                         let editor_line = editor_color_config.get_untracked().line;
                         let (_, editor_end, editor_td) =
@@ -307,31 +270,7 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                         );
                         end
                     })
-                    on_default_change=Callback::new(move |use_default: bool| {
-                        let editor_line = editor_color_config.with_untracked(|e| e.line);
-                        if use_default {
-                            color_memory.update(|m| m.remember_line(editor_line));
-                        }
-                        let (editor_start, _, editor_td) =
-                            editor_line.map(|l| l.gradient_fields()).unwrap_or_default();
-                        let end = if use_default {
-                            None
-                        } else {
-                            Some(color_memory.get_untracked().gradient_fields().1)
-                        };
-                        let line_color =
-                            Some(EditorLineColorConfig::Gradient {
-                                start: editor_start,
-                                end,
-                                topological_depth: editor_td,
-                            });
-                        update_clean_config(
-                            config_workspace,
-                            colors_error,
-                            "gradient end use-default",
-                            move |clean| clean.set_line_color(line_color),
-                        );
-                    })
+                    on_default_change=toggle_line_default(LineColorDefaultField::GradientEnd, "gradient end use-default")
                     on_color_change=Callback::new(move |end: Rgb| {
                         let editor_line = editor_color_config.get_untracked().line;
                         let (editor_start, _, editor_td) =
@@ -417,27 +356,7 @@ pub(crate) fn ColorsPanel() -> impl IntoView {
                     color=Signal::derive(move || {
                         hue_cycle_initial_for_mode(control_line_color, color_memory)
                     })
-                    on_default_change=Callback::new(move |use_default: bool| {
-                        if use_default {
-                            let editor_line = editor_color_config.with_untracked(|e| e.line);
-                            color_memory.update(|m| m.remember_line(editor_line));
-                        }
-                        let line_color = if use_default {
-                            Some(EditorLineColorConfig::HueCycle { initial: None })
-                        } else {
-                            Some(EditorLineColorConfig::HueCycle {
-                                initial: Some(
-                                    color_memory.get_untracked().hue_cycle_initial(),
-                                ),
-                            })
-                        };
-                        update_clean_config(
-                            config_workspace,
-                            colors_error,
-                            "hue-cycle use-default checkbox",
-                            move |clean| clean.set_line_color(line_color),
-                        );
-                    })
+                    on_default_change=toggle_line_default(LineColorDefaultField::HueCycleInitial, "hue-cycle use-default checkbox")
                     on_color_change=Callback::new(move |initial: Rgb| {
                         let line_color =
                             Some(EditorLineColorConfig::HueCycle { initial: Some(initial) });

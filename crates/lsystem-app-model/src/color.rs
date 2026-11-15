@@ -49,6 +49,16 @@ impl std::fmt::Display for LineColorMode {
     }
 }
 
+/// A line-color parameter that has a "use default" control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineColorDefaultField {
+    /// The solid color; its default is an absent `colors.line`.
+    Solid,
+    GradientStart,
+    GradientEnd,
+    HueCycleInitial,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ColorControlMemory {
     background: Rgb,
@@ -129,6 +139,60 @@ impl ColorControlMemory {
         }
     }
 
+    /// Handles a background "use default" toggle and returns the authored
+    /// background to apply.
+    ///
+    /// Switching to the default remembers `current` (the displayed color) so
+    /// that switching back restores it.
+    pub fn toggle_background_default(&mut self, current: Rgb, use_default: bool) -> Option<Rgb> {
+        if use_default {
+            self.remember_background(current);
+            None
+        } else {
+            Some(self.background)
+        }
+    }
+
+    /// Handles a line-color "use default" toggle for `field` and returns the
+    /// authored line color to apply.
+    ///
+    /// Switching to the default remembers `editor_line` first so that switching
+    /// back restores the authored value. Switching away from the default fills
+    /// `field` from memory. Other gradient fields keep their authored values.
+    pub fn toggle_line_default(
+        &mut self,
+        editor_line: Option<EditorLineColorConfig>,
+        field: LineColorDefaultField,
+        use_default: bool,
+    ) -> Option<EditorLineColorConfig> {
+        if use_default {
+            self.remember_line(editor_line);
+        }
+        let explicit = |color: Rgb| (!use_default).then_some(color);
+        let (start, end, topological_depth) = editor_line
+            .map(EditorLineColorConfig::gradient_fields)
+            .unwrap_or_default();
+        let (remembered_start, remembered_end, _) = self.gradient_fields();
+        match field {
+            LineColorDefaultField::Solid => {
+                explicit(self.solid_color()).map(EditorLineColorConfig::Solid)
+            }
+            LineColorDefaultField::GradientStart => Some(EditorLineColorConfig::Gradient {
+                start: explicit(remembered_start),
+                end,
+                topological_depth,
+            }),
+            LineColorDefaultField::GradientEnd => Some(EditorLineColorConfig::Gradient {
+                start,
+                end: explicit(remembered_end),
+                topological_depth,
+            }),
+            LineColorDefaultField::HueCycleInitial => Some(EditorLineColorConfig::HueCycle {
+                initial: explicit(self.hue_cycle_initial()),
+            }),
+        }
+    }
+
     pub fn line_for(&self, mode: LineColorMode) -> Option<EditorLineColorConfig> {
         match mode {
             LineColorMode::Solid => self.solid.map(EditorLineColorConfig::Solid),
@@ -182,7 +246,8 @@ mod tests {
     use crate::editor_config::{EditorColorConfig, EditorLineColorConfig};
 
     use super::{
-        ColorControlMemory, LineColorMode, line_color_for_controls, selected_line_color_mode,
+        ColorControlMemory, LineColorDefaultField, LineColorMode, line_color_for_controls,
+        selected_line_color_mode,
     };
 
     fn custom_color_defaults() -> ColorDefaults {
@@ -439,5 +504,106 @@ mod tests {
         let new_bg = Rgb::new(0xe5, 0xcc, 0xb3);
         memory.remember_background(new_bg);
         assert_eq!(memory.background(), new_bg);
+    }
+
+    #[test]
+    fn background_default_toggle_round_trips_displayed_color() {
+        let defaults = custom_color_defaults();
+        let mut memory =
+            ColorControlMemory::from_editor_config(&EditorColorConfig::default(), &defaults);
+        let shown = Rgb::new(0x12, 0x34, 0x56);
+
+        assert_eq!(memory.toggle_background_default(shown, true), None);
+        assert_eq!(
+            memory.toggle_background_default(defaults.background, false),
+            Some(shown)
+        );
+    }
+
+    #[test]
+    fn solid_default_toggle_round_trips_authored_color() {
+        let defaults = custom_color_defaults();
+        let authored = Some(EditorLineColorConfig::Solid(Rgb::new(0xaa, 0xbb, 0xcc)));
+        let mut memory =
+            ColorControlMemory::from_editor_config(&EditorColorConfig::default(), &defaults);
+
+        let line = memory.toggle_line_default(authored, LineColorDefaultField::Solid, true);
+        assert_eq!(line, None);
+        assert_eq!(
+            memory.toggle_line_default(line, LineColorDefaultField::Solid, false),
+            authored
+        );
+    }
+
+    #[test]
+    fn solid_default_toggle_off_without_memory_uses_default_color() {
+        let defaults = custom_color_defaults();
+        let mut memory =
+            ColorControlMemory::from_editor_config(&EditorColorConfig::default(), &defaults);
+
+        assert_eq!(
+            memory.toggle_line_default(None, LineColorDefaultField::Solid, false),
+            Some(EditorLineColorConfig::Solid(defaults.line.solid))
+        );
+    }
+
+    #[test]
+    fn gradient_default_toggles_round_trip_only_their_field() {
+        let defaults = custom_color_defaults();
+        let authored = Some(EditorLineColorConfig::Gradient {
+            start: Some(Rgb::new(0x01, 0x02, 0x03)),
+            end: Some(Rgb::new(0x04, 0x05, 0x06)),
+            topological_depth: Some(true),
+        });
+
+        for (field, expected_default) in [
+            (
+                LineColorDefaultField::GradientStart,
+                EditorLineColorConfig::Gradient {
+                    start: None,
+                    end: Some(Rgb::new(0x04, 0x05, 0x06)),
+                    topological_depth: Some(true),
+                },
+            ),
+            (
+                LineColorDefaultField::GradientEnd,
+                EditorLineColorConfig::Gradient {
+                    start: Some(Rgb::new(0x01, 0x02, 0x03)),
+                    end: None,
+                    topological_depth: Some(true),
+                },
+            ),
+        ] {
+            let mut memory =
+                ColorControlMemory::from_editor_config(&EditorColorConfig::default(), &defaults);
+            let line = memory.toggle_line_default(authored, field, true);
+            assert_eq!(line, Some(expected_default), "{field:?} to default");
+            assert_eq!(
+                memory.toggle_line_default(line, field, false),
+                authored,
+                "{field:?} back from default"
+            );
+        }
+    }
+
+    #[test]
+    fn hue_cycle_default_toggle_round_trips_authored_initial() {
+        let defaults = custom_color_defaults();
+        let authored = Some(EditorLineColorConfig::HueCycle {
+            initial: Some(Rgb::new(0x21, 0x43, 0x65)),
+        });
+        let mut memory =
+            ColorControlMemory::from_editor_config(&EditorColorConfig::default(), &defaults);
+
+        let line =
+            memory.toggle_line_default(authored, LineColorDefaultField::HueCycleInitial, true);
+        assert_eq!(
+            line,
+            Some(EditorLineColorConfig::HueCycle { initial: None })
+        );
+        assert_eq!(
+            memory.toggle_line_default(line, LineColorDefaultField::HueCycleInitial, false),
+            authored
+        );
     }
 }
