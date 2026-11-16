@@ -17,9 +17,6 @@ Install pinned tools:
 mise install
 ```
 
-`trunk` may fail to launch when `NO_COLOR=1` is present in the environment. Use
-`NO_COLOR=true` or `NO_COLOR=false` as a workaround.
-
 ## Build And Run
 
 Run the native Iced app:
