@@ -118,23 +118,48 @@ Changing a line-color mode restores remembered control values for that mode
 during the session. This memory is transient and does not change the TOML until
 the user commits the corresponding control.
 
-**Platform variant:** The primary Leptos app has a structured grammar editor.
-Its uncommitted grammar draft is separate from the raw TOML draft, and each
-may be pending independently of the other. Applying structured grammar
-discards a pending raw TOML draft the same way other direct controls do, then
-replaces the axiom and complete rule table; reverting the grammar draft
-restores them from the applied document. A successful raw TOML apply
-discards a pending grammar draft the same way, resetting the grammar editor
-to the newly-applied document; a failed raw TOML apply leaves the pending
-grammar draft untouched, same as it leaves the raw draft and previous applied
-document untouched. The raw TOML panel displays a persistent warning while a
-grammar draft is pending, noting that a successful apply discards it.
-Reverting the raw TOML draft leaves a pending grammar draft intact, since
-reverting does not change the applied document the grammar draft is based
-on. The grammar editor warns about unreachable rules and prevents
-selection of 2D while 3D-only symbols remain.
+**Platform variant:** The primary Leptos app has a structured grammar editor,
+whose draft also includes the 2D/3D selection. It has no Apply or Revert
+controls. A text edit in the editor is committed to the draft once it settles:
+shortly after the user stops typing, or when the field loses focus. Changing
+the dimension or adding or removing a rule row changes the draft immediately.
+Every draft change that leaves the draft valid is applied at once. Committing
+on loss of focus means a settled edit is applied before another control acts
+on the document, rather than being discarded by it or applied on top of it.
+The dimension and grammar are applied together, so a grammar change and the
+dimension change it depends on never fail because one was applied before the
+other. Applied text is normalized: whitespace is removed from the axiom and
+rules. See [Source-preserving edits](configuration.md#source-preserving-edits)
+for how the rules table's existing keys, order, and comments are kept.
 
-**Non-normative:** Discarding a pending grammar draft this way has no undo,
+The grammar draft is separate from the raw TOML draft. A grammar draft is
+held, rather than applied, while it cannot be applied because a rule row has a
+right-hand side but no symbol, two rows share a symbol, a rule symbol is not a
+letter, 3D-only symbols are present while 2D is selected, a symbol is outside
+the accepted alphabet, or brackets are unbalanced. These use the same checks
+applying performs, and are reported once the edit settles rather than while
+the user is still typing. Selecting 2D is always allowed; while 3D-only
+symbols remain, the switch is held like any other invalid draft, with the same
+explanation whether 2D was selected after the symbols were entered or the
+symbols were entered while 2D was selected. A 3D-symbol problem is reported
+alongside any other problem rather than hidden by it. While a draft is held,
+the last applied document remains in effect and the editor shows why; that
+explanation persists until the draft is corrected or replaced, regardless of
+other direct-control changes. Rows whose symbol and right-hand side are both
+blank are ignored rather than reported.
+
+Applying structured grammar discards a pending raw TOML draft the same way
+other direct controls do, then writes the dimensions, axiom and rules. A
+successful raw TOML apply discards a held grammar draft the same way,
+resetting the grammar editor to the newly-applied document; a failed raw TOML
+apply leaves the held grammar draft untouched, same as it leaves the raw draft
+and previous applied document untouched. The raw TOML panel displays a
+persistent warning while a grammar draft is held, noting that a successful
+apply discards it. Reverting the raw TOML draft leaves a held grammar draft
+intact, since reverting does not change the applied document the grammar
+draft is based on. The grammar editor warns about unreachable rules.
+
+**Non-normative:** Discarding a held grammar draft this way has no undo,
 same as the discards described earlier under "Applied documents and
 drafts" — the persistent warning is the only safeguard until a general undo
 capability exists.

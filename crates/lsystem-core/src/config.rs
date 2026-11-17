@@ -5,13 +5,22 @@ use thiserror::Error;
 use crate::alphabet::validate_bracket_balance;
 use crate::grammar;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum ConfigError {
     #[error("rule key {key:?} must be a single letter")]
     InvalidRuleKey { key: String },
 
     #[error("invalid symbol {ch:?} at position {position} in `{field}`")]
     InvalidSymbol {
+        ch: char,
+        field: String,
+        position: usize,
+    },
+
+    #[error(
+        "symbol {ch:?} at position {position} in `{field}` is only valid when dimensions = \"3D\""
+    )]
+    ThreeDOnlySymbol {
         ch: char,
         field: String,
         position: usize,

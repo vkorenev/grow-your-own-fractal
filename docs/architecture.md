@@ -181,7 +181,9 @@ Authored grammar normalization and turtle behavior are defined in the
   turtle/color values with the same domain checks as authored configs.
 - `editor_config.rs` parses strict TOML, validates symbols and value domains,
   preserves optional authored fields, and resolves defaults at runtime
-  boundaries.
+  boundaries. Grammar validation goes through `ValidGrammar::new`, the only
+  way to build the normalized dimensions/axiom/rules value that
+  `CleanMut::set_grammar` accepts.
 - `config_workspace.rs` tracks preset/custom entries identified by opaque
   `ConfigEntryId`s, dirty drafts, last-applied documents, copy/apply/revert/reset
   operations, and derived display labels for entries with duplicate authored
@@ -191,6 +193,10 @@ Authored grammar normalization and turtle behavior are defined in the
   reuses ids. Each UI owns only the removal confirmation and the editor and
   renderer resync.
 - `presets.rs` embeds and sorts the `presets/` directory.
+- `grammar_draft.rs` validates a structured grammar-editor draft (dimensions,
+  axiom and rule rows): row-structure checks, then `ValidGrammar::new`, so the
+  editor and TOML parsing share one validation path. It reports typed
+  `GrammarDraftError`s that each frontend turns into its own text.
 - `color.rs` centralizes line-color mode selection and per-mode picker memory.
 - `animation.rs` contains hue-rotation state and phase advancement.
 

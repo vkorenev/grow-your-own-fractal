@@ -3,10 +3,12 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use lsystem_core::{Dimensions, Rgb};
+use lsystem_core::Rgb;
 
 use crate::config_defaults::ParseConfigError;
-use crate::editor_config::{ConfigDocument, ConfigSource, EditorConfig, EditorLineColorConfig};
+use crate::editor_config::{
+    ConfigDocument, ConfigSource, EditorConfig, EditorLineColorConfig, ValidGrammar,
+};
 
 #[derive(Debug, Error)]
 pub enum ConfigWorkspaceError {
@@ -457,18 +459,12 @@ impl CleanMut<'_> {
             .update_last_applied_source(|source| source.set_initial_heading(initial_heading))
     }
 
-    pub fn set_dimensions(&mut self, dimensions: Dimensions) -> Result<(), ParseConfigError> {
+    /// Replaces dimensions, axiom and rules in one step, so a grammar change
+    /// and the dimension change it depends on (e.g. adding `&` while
+    /// switching to 3D) never fail because one was applied before the other.
+    pub fn set_grammar(&mut self, grammar: &ValidGrammar) -> Result<(), ParseConfigError> {
         self.0
-            .update_last_applied_source(|source| source.set_dimensions(dimensions))
-    }
-
-    pub fn set_grammar(
-        &mut self,
-        axiom: &str,
-        rules: &[(char, String)],
-    ) -> Result<(), ParseConfigError> {
-        self.0
-            .update_last_applied_source(|source| source.set_grammar(axiom, rules))
+            .update_last_applied_source(|source| source.set_grammar(grammar))
     }
 
     pub fn set_background(&mut self, background: Option<Rgb>) -> Result<(), ParseConfigError> {
@@ -497,7 +493,7 @@ impl DirtyMut<'_> {
 mod tests {
     use super::*;
 
-    use lsystem_core::{ConfigError, LineColorConfig};
+    use lsystem_core::{ConfigError, Dimensions, LineColorConfig};
 
     use crate::config_defaults::ConfigDefaults;
 
@@ -1323,49 +1319,37 @@ solid = "#00e680"
     }
 
     #[test]
-    fn clean_entry_set_dimensions_updates_toml_and_editor_config() {
+    fn clean_entry_set_grammar_updates_dimensions_axiom_and_rules() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        assert_eq!(
-            workspace.selected().editor_config().generation.dimensions,
-            Dimensions::TwoD
-        );
-        clean_mut(&mut workspace)
-            .set_dimensions(Dimensions::ThreeD)
-            .unwrap();
-        assert_eq!(
-            workspace.selected().editor_config().generation.dimensions,
-            Dimensions::ThreeD
-        );
-        assert!(
-            workspace
-                .selected()
-                .draft_text()
-                .contains("dimensions = \"3D\"")
-        );
-    }
-
-    #[test]
-    fn clean_entry_set_grammar_updates_axiom_and_rules() {
-        let first = config_text("First", "F", 60.0);
-        let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        let rules = vec![('F', "FF".to_string()), ('X', "F+X".to_string())];
-        clean_mut(&mut workspace).set_grammar("XF", &rules).unwrap();
+        let grammar =
+            ValidGrammar::new(Dimensions::TwoD, "X F", [('F', "FF"), ('X', "F + X")]).unwrap();
+        clean_mut(&mut workspace).set_grammar(&grammar).unwrap();
         let generation = &workspace.selected().editor_config().generation;
         assert_eq!(generation.axiom, "XF");
         assert_eq!(generation.rules[&'F'], "FF");
         assert_eq!(generation.rules[&'X'], "F+X");
+        assert!(grammar.matches(generation));
     }
 
     #[test]
-    fn clean_entry_set_grammar_rejects_invalid_axiom() {
+    fn clean_entry_set_grammar_applies_interdependent_dimension_change() {
         let first = config_text("First", "F", 60.0);
         let mut workspace = ConfigWorkspace::from_presets(vec![("First", first)]).unwrap();
-        // '@' is not a valid symbol
-        let result = clean_mut(&mut workspace).set_grammar("F@", &[]);
-        assert!(result.is_err());
-        // Entry left unchanged
-        assert_eq!(workspace.selected().editor_config().generation.axiom, "F");
+        let grammar = ValidGrammar::new(Dimensions::ThreeD, "F&F", [('F', "F^F")]).unwrap();
+        clean_mut(&mut workspace).set_grammar(&grammar).unwrap();
+        let entry = workspace.selected();
+        assert_eq!(
+            entry.editor_config().generation.dimensions,
+            Dimensions::ThreeD
+        );
+        assert!(entry.draft_text().contains("dimensions = \"3D\""));
+
+        let grammar = ValidGrammar::new(Dimensions::TwoD, "F", [('F', "FF")]).unwrap();
+        clean_mut(&mut workspace).set_grammar(&grammar).unwrap();
+        let generation = &workspace.selected().editor_config().generation;
+        assert_eq!(generation.dimensions, Dimensions::TwoD);
+        assert_eq!(generation.axiom, "F");
     }
 
     #[test]

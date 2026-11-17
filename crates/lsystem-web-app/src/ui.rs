@@ -56,6 +56,71 @@ pub fn DirtyDraftWarning(
     }
 }
 
+/// Text input that commits its text through `on_commit` only once an edit
+/// settles: after `delay` without further input, or when the input loses
+/// focus. Until then it shows the uncommitted text, like [`Spinner`]'s draft.
+///
+/// Committing on blur means a pending edit is committed before any other
+/// control's click handler runs, since focus leaves first. If `value`
+/// changes from outside while an edit is pending (e.g. the document it
+/// edits was replaced), the pending edit is dropped and its timer cancelled,
+/// so stale text is never committed into the new value.
+#[component]
+pub fn DebouncedTextInput(
+    #[prop(into)] value: Signal<String>,
+    #[prop(into)] on_commit: Callback<String>,
+    #[prop(optional)] class: &'static str,
+    #[prop(optional)] list: Option<&'static str>,
+    #[prop(optional)] maxlength: Option<u32>,
+    #[prop(default = std::time::Duration::from_millis(300))] delay: std::time::Duration,
+) -> impl IntoView {
+    let pending = RwSignal::new(None::<String>);
+    let timer = StoredValue::new(None::<TimeoutHandle>);
+    let cancel_timer = move || {
+        if let Some(handle) = timer.try_update_value(Option::take).flatten() {
+            handle.clear();
+        }
+    };
+    let commit = move || {
+        cancel_timer();
+        if let Some(text) = pending.try_update(Option::take).flatten() {
+            on_commit.run(text);
+        }
+    };
+
+    Effect::watch(
+        move || value.track(),
+        move |_, _, _: Option<()>| {
+            cancel_timer();
+            if pending.with_untracked(Option::is_some) {
+                pending.set(None);
+            }
+        },
+        false,
+    );
+    on_cleanup(cancel_timer);
+
+    view! {
+        <input
+            type="text"
+            class=class
+            list=list
+            maxlength=maxlength
+            prop:value=move || pending.get().unwrap_or_else(|| value.get())
+            on:input:target=move |ev| {
+                pending.set(Some(ev.target().value()));
+                cancel_timer();
+                match set_timeout_with_handle(commit, delay) {
+                    Ok(handle) => timer.set_value(Some(handle)),
+                    // Without a timer the edit still commits on blur.
+                    Err(err) => log::error!("debounce timer unavailable: {err:?}"),
+                }
+            }
+            on:blur=move |_| commit()
+        />
+    }
+}
+
 /// Numeric value type usable in a [`Spinner`].
 pub trait SpinnerValue: Copy + PartialOrd + Send + Sync + 'static {
     fn parse(text: &str) -> Option<Self>;

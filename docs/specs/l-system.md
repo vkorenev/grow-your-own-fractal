@@ -51,8 +51,9 @@ The following symbols are valid only in 3D:
 | `/` | Roll right by `angle`. |
 | `\` | Roll left by `angle`. |
 
-A 2D axiom or rule containing `&`, `^`, `/`, or `\` is invalid. Any character
-outside the dimension’s alphabet is invalid.
+A 2D axiom or rule containing `&`, `^`, `/`, or `\` is invalid, and such a
+symbol is reported as valid only in 3D rather than as an unknown symbol. Any
+other character outside the dimension’s alphabet is invalid.
 
 Rule keys are single letters. Reserved turtle punctuation cannot be a
 rule key, so rewriting cannot remove or introduce imbalance by replacing a

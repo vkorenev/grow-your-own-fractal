@@ -1,4 +1,4 @@
-use crate::panels::grammar::GrammarRow;
+use crate::panels::grammar::GrammarDraft;
 use crate::presets::max_iterations_for_editor_config;
 use crate::renderer::{CanvasRenderer, RebuildRenderOutcome, RenderStatus};
 use glam::{DVec2, Vec2};
@@ -10,7 +10,7 @@ use lsystem_app_model::{
     EntryViewMut, HueRotation, HueRotationDirection, ParseConfigError,
     advance_hue_rotation_phase_degrees, line_color_for_controls, load_presets,
 };
-use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig, contains_3d_symbols};
+use lsystem_core::{Config, Dimensions, GenerationConfig, LineColorConfig};
 use lsystem_renderer::scene_upload::SceneUploadError;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -49,23 +49,6 @@ impl ViewportError {
     }
 }
 
-/// Grammar-editor draft state. The draft signals live in `App` (not in the
-/// grammar panel) because entry switches, a successful raw TOML apply, and a
-/// bundled-preset reset all need to resync them from one place, while a raw
-/// TOML *revert* must leave them untouched — see
-/// `crate::app::ConfigContext::clear_toml_revert_state`.
-#[derive(Clone, Copy)]
-pub(crate) struct GrammarDraft {
-    pub(crate) axiom: RwSignal<String>,
-    pub(crate) rows: RwSignal<Vec<GrammarRow>>,
-    pub(crate) row_counter: StoredValue<u32>,
-    pub(crate) is_dirty: Memo<bool>,
-    pub(crate) has_3d_symbols: Memo<bool>,
-    pub(crate) symbols: Memo<Vec<char>>,
-    /// Resets the draft to the currently applied grammar.
-    pub(crate) sync: Callback<()>,
-}
-
 /// Workspace/config state shared between `App` and the control panels,
 /// provided via context.
 #[derive(Clone, Copy)]
@@ -88,7 +71,6 @@ pub(crate) struct ConfigContext {
     pub(crate) iterations: Memo<u16>,
     pub(crate) max_iterations: Memo<u16>,
     pub(crate) angle: Memo<f32>,
-    pub(crate) dimensions: Memo<Dimensions>,
     pub(crate) is_3d: Memo<bool>,
     pub(crate) is_dirty: Memo<bool>,
     pub(crate) grammar: GrammarDraft,
@@ -102,7 +84,7 @@ pub(crate) struct ConfigContext {
     /// Clears every panel error except `grammar_error`, and refreshes color
     /// memory, without touching the grammar draft. Used only after
     /// reverting the raw TOML draft: reverting doesn't change the applied
-    /// document, so a pending grammar draft (and any error describing it)
+    /// document, so a held grammar draft (and any error describing it)
     /// is still valid — see the "Platform variant" grammar behavior in
     /// docs/specs/application-workspace.md. `select_current_config` above is
     /// for the cases that *do* change the applied document (entry switches,
@@ -213,21 +195,7 @@ pub(crate) fn App() -> impl IntoView {
     let is_3d = Memo::new(move |_| matches!(dimensions.get(), Dimensions::ThreeD));
     let is_dirty = Memo::new(move |_| config_workspace.with(|ws| ws.selected().is_dirty()));
 
-    let grammar_axiom = RwSignal::new(editor_generation_config.get_untracked().axiom.clone());
-    let grammar_row_counter = StoredValue::new(0u32);
-    let grammar_rows = RwSignal::new(crate::panels::grammar::rows_from_rules(
-        &editor_generation_config.get_untracked().rules,
-        grammar_row_counter,
-    ));
-
-    let sync_grammar_editor = move || {
-        let generation = editor_generation_config.get_untracked();
-        grammar_axiom.set(generation.axiom);
-        grammar_rows.set(crate::panels::grammar::rows_from_rules(
-            &generation.rules,
-            grammar_row_counter,
-        ));
-    };
+    let grammar = GrammarDraft::new(editor_generation_config, config_workspace, grammar_error);
 
     let canvas_ref = NodeRef::<Canvas>::new();
     let renderer_ready = RwSignal::new(false);
@@ -487,16 +455,13 @@ pub(crate) fn App() -> impl IntoView {
         workspace_error.set(None);
         colors_error.set(None);
         refresh_color_memory();
-        sync_grammar_editor();
+        grammar.sync();
     };
 
     // Narrower than `select_current_config`: reverting the raw TOML draft
     // doesn't change the applied document, so `grammar_error` and the
     // grammar draft itself (owned by `App`, not touched here) must
-    // survive. `refresh_color_memory` is kept here unchanged from today's
-    // behavior: Revert already calls it whenever the entry is dirty and
-    // the grammar draft is clean, so this task doesn't change its
-    // reachability, only extends it to also cover a pending grammar draft.
+    // survive. `refresh_color_memory` still runs, as on any revert.
     // Note for a future PR: `ColorControlMemory::from_editor_config`
     // rebuilds memory for only the currently-authored line-color mode, so
     // calling it here can drop a remembered override for a different mode —
@@ -517,7 +482,7 @@ pub(crate) fn App() -> impl IntoView {
     // grammar drafts on unrelated parameter edits. Reverting the raw TOML
     // draft is a same-id mutation too, but doesn't change the applied
     // document — it calls the narrower clear_toml_revert_state() instead,
-    // which leaves a pending grammar draft untouched.
+    // which leaves a held grammar draft untouched.
     Effect::watch(
         move || selected_id.get(),
         move |_, _, _: Option<()>| select_current_config(),
@@ -540,39 +505,6 @@ pub(crate) fn App() -> impl IntoView {
         },
         false,
     );
-
-    let grammar_has_3d_symbols = Memo::new(move |_| {
-        grammar_axiom.with(|a| contains_3d_symbols(a))
-            || grammar_rows.with(|rows| {
-                rows.iter()
-                    .any(|row| row.rhs.with(|rhs| contains_3d_symbols(rhs)))
-            })
-    });
-
-    let applied_grammar_rows =
-        Memo::new(move |_| editor_generation_config.with(|g| rules_to_editor_rows(&g.rules)));
-    let grammar_is_dirty = Memo::new(move |_| {
-        editor_generation_config.with(|g| grammar_axiom.with(|a| a != &g.axiom))
-            || applied_grammar_rows.with(|applied| {
-                grammar_rows.with(|rows| {
-                    rows.len() != applied.len()
-                        || rows.iter().zip(applied).any(|(row, (sym, rhs))| {
-                            row.symbol.with(|s| s != sym) || row.rhs.with(|r| r != rhs)
-                        })
-                })
-            })
-    });
-    let grammar_symbols = Memo::new(move |_| {
-        let mut set = std::collections::BTreeSet::new();
-        grammar_axiom.with(|a| set.extend(a.chars().filter(|c| c.is_alphabetic())));
-        grammar_rows.with(|rows| {
-            for row in rows {
-                row.symbol
-                    .with(|s| set.extend(s.chars().filter(|c| c.is_alphabetic())));
-            }
-        });
-        set.into_iter().collect::<Vec<char>>()
-    });
 
     let apply_hue_rotation = move |dir: Option<HueRotationDirection>| match dir {
         None => reset_hue_rotation(),
@@ -616,18 +548,9 @@ pub(crate) fn App() -> impl IntoView {
         iterations,
         max_iterations,
         angle,
-        dimensions,
         is_3d,
         is_dirty,
-        grammar: GrammarDraft {
-            axiom: grammar_axiom,
-            rows: grammar_rows,
-            row_counter: grammar_row_counter,
-            is_dirty: grammar_is_dirty,
-            has_3d_symbols: grammar_has_3d_symbols,
-            symbols: grammar_symbols,
-            sync: Callback::new(move |()| sync_grammar_editor()),
-        },
+        grammar,
         grammar_error,
         toml_error,
         workspace_error,
@@ -842,13 +765,6 @@ pub(crate) fn App() -> impl IntoView {
             </section>
         </main>
     }
-}
-
-fn rules_to_editor_rows(rules: &std::collections::BTreeMap<char, String>) -> Vec<(String, String)> {
-    rules
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.clone()))
-        .collect()
 }
 
 /// Applies `update` to the selected entry, returning whether it succeeded and
