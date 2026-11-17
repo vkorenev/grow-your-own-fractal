@@ -847,6 +847,7 @@ impl FractalApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lsystem_app_model::ValidGrammar;
 
     #[test]
     fn color_control_memory_uses_defaults_and_restores_edits() {
@@ -1334,10 +1335,18 @@ mod tests {
         // for bracketless grammars. Callers that allocate geometry decide independently via
         // `config.colors.line.needs_topological_depth() && config.generation.has_stack_directives()`.
         let (mut app, _) = FractalApp::new();
+        let dimensions = app
+            .config_workspace
+            .selected()
+            .editor_config()
+            .generation
+            .dimensions;
         let EntryViewMut::Clean(mut clean) = app.config_workspace.selected_mut().view_mut() else {
             panic!("initial config entry should be clean");
         };
-        clean.set_grammar("F", &[]).unwrap();
+        clean
+            .set_grammar(&ValidGrammar::new(dimensions, "F", []).unwrap())
+            .unwrap();
 
         let start = Rgb::new(0x33, 0x4d, 0x66);
         let end = Rgb::new(0x80, 0x99, 0xb3);

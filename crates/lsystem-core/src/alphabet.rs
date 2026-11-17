@@ -15,8 +15,15 @@ pub fn validate_symbols(
         if TERMINALS_UNIVERSAL.contains(ch) {
             continue;
         }
-        if dimensions == Dimensions::ThreeD && TERMINALS_3D.contains(ch) {
-            continue;
+        if TERMINALS_3D.contains(ch) {
+            if dimensions == Dimensions::ThreeD {
+                continue;
+            }
+            return Err(ConfigError::ThreeDOnlySymbol {
+                ch,
+                field: field.to_string(),
+                position,
+            });
         }
         return Err(ConfigError::InvalidSymbol {
             ch,
@@ -68,7 +75,28 @@ pub fn contains_3d_symbols(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::contains_3d_symbols;
+    use super::{contains_3d_symbols, validate_symbols};
+    use crate::config::{ConfigError, Dimensions};
+
+    #[test]
+    fn reports_3d_symbols_in_2d_as_3d_only() {
+        assert_eq!(
+            validate_symbols("F+F&F", "axiom", Dimensions::TwoD),
+            Err(ConfigError::ThreeDOnlySymbol {
+                ch: '&',
+                field: "axiom".to_string(),
+                position: 3,
+            })
+        );
+        assert_eq!(
+            validate_symbols("F+F&F", "axiom", Dimensions::ThreeD),
+            Ok(())
+        );
+        assert!(matches!(
+            validate_symbols("F!", "axiom", Dimensions::TwoD),
+            Err(ConfigError::InvalidSymbol { ch: '!', .. })
+        ));
+    }
 
     #[test]
     fn recognizes_all_3d_symbols() {

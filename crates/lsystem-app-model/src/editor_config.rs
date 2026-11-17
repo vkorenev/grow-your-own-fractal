@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer};
-use toml_edit::{DocumentMut, Item, Table, Value, value};
+use toml_edit::{DocumentMut, Item, Table, Value};
 
 use lsystem_core::{
     ColorConfig, Config, ConfigError, Dimensions, GenerationConfig, LineColorConfig, Rgb,
@@ -47,6 +47,105 @@ pub struct EditorGenerationConfig {
     pub step: Option<f32>,
     pub initial_heading: Option<f32>,
     pub rules: BTreeMap<char, String>,
+}
+
+/// Removes whitespace from an axiom or rule right-hand side, which has no
+/// expansion or turtle effect (see docs/specs/l-system.md).
+fn strip_grammar_whitespace(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+const AXIOM_FIELD: &str = "axiom";
+
+/// Field name used in validation errors for the rule rewriting `symbol`.
+fn rule_field(symbol: char) -> String {
+    format!("l-system.rules.{symbol}")
+}
+
+/// Parses a TOML rule key, which must be exactly one letter.
+fn parse_rule_key(key: &str) -> Result<char, ConfigError> {
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if c.is_alphabetic() => Ok(c),
+        _ => Err(ConfigError::InvalidRuleKey {
+            key: key.to_string(),
+        }),
+    }
+}
+
+/// Normalizes an axiom or rule right-hand side and validates its symbols and
+/// bracket balance.
+fn normalize_grammar_text(
+    text: &str,
+    field: &str,
+    dimensions: Dimensions,
+) -> Result<String, ConfigError> {
+    let text = strip_grammar_whitespace(text);
+    validate_symbols(&text, field, dimensions)?;
+    validate_bracket_balance(&text, field)?;
+    Ok(text)
+}
+
+/// A validated, normalized grammar: dimensions, axiom and rules with
+/// whitespace removed and every symbol valid for the dimensions. The only
+/// way to build one is [`ValidGrammar::new`], which config parsing and the
+/// grammar editor both use, so the two always agree on what is applicable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidGrammar {
+    dimensions: Dimensions,
+    axiom: String,
+    rules: BTreeMap<char, String>,
+}
+
+impl ValidGrammar {
+    /// Validates and normalizes a grammar. Rule symbols must be letters; if
+    /// a symbol repeats, its last rule wins (callers reject duplicates
+    /// first where they can occur).
+    pub fn new<'a>(
+        dimensions: Dimensions,
+        axiom: &str,
+        rules: impl IntoIterator<Item = (char, &'a str)>,
+    ) -> Result<Self, ConfigError> {
+        let axiom = normalize_grammar_text(axiom, AXIOM_FIELD, dimensions)?;
+        let rules = rules
+            .into_iter()
+            .map(|(symbol, rhs)| {
+                if !symbol.is_alphabetic() {
+                    return Err(ConfigError::InvalidRuleKey {
+                        key: symbol.to_string(),
+                    });
+                }
+                Ok((
+                    symbol,
+                    normalize_grammar_text(rhs, &rule_field(symbol), dimensions)?,
+                ))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            dimensions,
+            axiom,
+            rules,
+        })
+    }
+
+    pub fn dimensions(&self) -> Dimensions {
+        self.dimensions
+    }
+
+    pub fn axiom(&self) -> &str {
+        &self.axiom
+    }
+
+    pub fn rules(&self) -> &BTreeMap<char, String> {
+        &self.rules
+    }
+
+    /// Whether `applied` already has exactly this grammar.
+    pub fn matches(&self, applied: &EditorGenerationConfig) -> bool {
+        self.dimensions == applied.dimensions
+            && self.axiom == applied.axiom
+            && self.rules == applied.rules
+    }
 }
 
 impl EditorGenerationConfig {
@@ -247,32 +346,17 @@ impl TryFrom<RawConfig> for EditorConfig {
             .map(|heading| validate_initial_heading(heading as f32))
             .transpose()?;
 
-        let axiom: String = raw
+        let rules = raw
             .l_system
-            .axiom
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        validate_symbols(&axiom, "axiom", dimensions)?;
-        validate_bracket_balance(&axiom, "axiom")?;
-
-        let mut rules = BTreeMap::new();
-        for (key, rhs_raw) in raw.l_system.rules {
-            let mut key_chars = key.chars();
-            let rule_key = key_chars
-                .next()
-                .filter(|c| c.is_alphabetic())
-                .ok_or_else(|| ConfigError::InvalidRuleKey { key: key.clone() })?;
-            if key_chars.next().is_some() {
-                return Err(ConfigError::InvalidRuleKey { key });
-            }
-
-            let field = format!("l-system.rules.{rule_key}");
-            let rhs: String = rhs_raw.chars().filter(|c| !c.is_whitespace()).collect();
-            validate_symbols(&rhs, &field, dimensions)?;
-            validate_bracket_balance(&rhs, &field)?;
-            rules.insert(rule_key, rhs);
-        }
+            .rules
+            .iter()
+            .map(|(key, rhs)| Ok((parse_rule_key(key)?, rhs.as_str())))
+            .collect::<Result<Vec<_>, ConfigError>>()?;
+        let ValidGrammar {
+            dimensions,
+            axiom,
+            rules,
+        } = ValidGrammar::new(dimensions, &raw.l_system.axiom, rules)?;
 
         Ok(Self {
             name: raw.metadata.name,
@@ -387,26 +471,45 @@ impl ConfigSource {
         );
     }
 
-    pub fn set_dimensions(&mut self, dimensions: Dimensions) {
+    /// Writes the grammar's dimensions, axiom and rules. The existing rules
+    /// table is edited in place: each remaining rule gets its right-hand side
+    /// rewritten with its key and comments kept, removed rules are deleted and
+    /// new rules are appended.
+    pub fn set_grammar(&mut self, grammar: &ValidGrammar) {
+        let l_system = &mut self.document["l-system"];
+
         set_value_preserving_decor(
-            &mut self.document["l-system"]["dimensions"],
-            Value::from(match dimensions {
+            &mut l_system["dimensions"],
+            Value::from(match grammar.dimensions {
                 Dimensions::TwoD => "2D",
                 Dimensions::ThreeD => "3D",
             }),
         );
-    }
+        set_value_preserving_decor(&mut l_system["axiom"], Value::from(grammar.axiom.as_str()));
 
-    pub fn set_grammar(&mut self, axiom: &str, rules: &[(char, String)]) {
-        set_value_preserving_decor(&mut self.document["l-system"]["axiom"], Value::from(axiom));
-        // The rules table is replaced wholesale rather than patched in place.
-        // This intentionally discards per-rule TOML comments and whitespace —
-        // the grammar editor constructs a new set of rules, not incremental edits.
-        let mut rules_table = Table::new();
-        for (symbol, rhs) in rules {
-            rules_table[&symbol.to_string()] = value(rhs.as_str());
+        let rules_item = &mut l_system["rules"];
+        if !rules_item.is_table_like() {
+            *rules_item = Item::Table(Table::new());
         }
-        self.document["l-system"]["rules"] = Item::Table(rules_table);
+        let rules = rules_item
+            .as_table_like_mut()
+            .expect("rules was just made table-like");
+        let removed: Vec<String> = rules
+            .iter()
+            .map(|(key, _)| key)
+            .filter(|key| {
+                parse_rule_key(key).map_or(true, |symbol| !grammar.rules.contains_key(&symbol))
+            })
+            .map(str::to_owned)
+            .collect();
+        for key in removed {
+            rules.remove(&key);
+        }
+        for (symbol, rhs) in &grammar.rules {
+            let key = symbol.to_string();
+            let item = rules.entry(&key).or_insert(Item::None);
+            set_value_preserving_decor(item, Value::from(rhs.as_str()));
+        }
     }
 
     pub fn set_background(&mut self, background: Option<Rgb>) {
@@ -911,6 +1014,107 @@ solid = "#00e680"
         let doc = ConfigDocument::try_from(source).unwrap();
         let config = resolve_doc(&doc);
         assert_eq!(config.name, "New");
+    }
+
+    const GRAMMAR_SOURCE: &str = r#"[metadata]
+name = "Test"
+
+[l-system]
+dimensions = "2d" # dims
+axiom = "F + X" # axiom
+iterations = 1
+angle = 90.0
+
+[l-system.rules]
+# F comment
+F = "F + F - F"  # F trailing
+# X comment
+X = "X F"  # X trailing
+"#;
+
+    fn set_grammar_on<'a>(
+        source: &str,
+        dimensions: Dimensions,
+        axiom: &str,
+        rules: impl IntoIterator<Item = (char, &'a str)>,
+    ) -> String {
+        let mut source = source.parse::<ConfigSource>().unwrap();
+        source.set_grammar(&ValidGrammar::new(dimensions, axiom, rules).unwrap());
+        source.to_toml_string()
+    }
+
+    #[test]
+    fn set_grammar_rewrites_values_keeping_keys_and_comments() {
+        let text = set_grammar_on(
+            GRAMMAR_SOURCE,
+            Dimensions::ThreeD,
+            "F+X",
+            [('F', "F+F-F"), ('X', "XFF")],
+        );
+        assert_eq!(
+            text,
+            r#"[metadata]
+name = "Test"
+
+[l-system]
+dimensions = "3D" # dims
+axiom = "F+X" # axiom
+iterations = 1
+angle = 90.0
+
+[l-system.rules]
+# F comment
+F = "F+F-F"  # F trailing
+# X comment
+X = "XFF"  # X trailing
+"#
+        );
+    }
+
+    #[test]
+    fn set_grammar_removes_and_appends_rules_keeping_the_rest() {
+        let text = set_grammar_on(
+            GRAMMAR_SOURCE,
+            Dimensions::TwoD,
+            "F+Y",
+            [('F', "F+F-F"), ('Y', "YF")],
+        );
+        assert_eq!(
+            text,
+            r#"[metadata]
+name = "Test"
+
+[l-system]
+dimensions = "2D" # dims
+axiom = "F+Y" # axiom
+iterations = 1
+angle = 90.0
+
+[l-system.rules]
+# F comment
+F = "F+F-F"  # F trailing
+Y = "YF"
+"#
+        );
+    }
+
+    #[test]
+    fn set_grammar_updates_inline_rules_table_in_place() {
+        let source = r#"[metadata]
+name = "Test"
+
+[l-system]
+dimensions = "2D"
+axiom = "F"
+iterations = 1
+angle = 90.0
+rules = { F = "F F", G = "G" }
+"#;
+        let text = set_grammar_on(source, Dimensions::TwoD, "F", [('F', "FF"), ('H', "H")]);
+        assert_eq!(
+            text,
+            source.replace(r#"{ F = "F F", G = "G" }"#, r#"{ F = "FF", H = "H" }"#)
+        );
     }
 
     #[test]
@@ -1802,9 +2006,42 @@ solid = "#00e680"
 
         // Round-trips through `set_grammar`, which must quote the non-ASCII key.
         let mut source = toml.parse::<ConfigSource>().unwrap();
-        source.set_grammar("ä", &[('ä', "Fä".to_string())]);
+        source.set_grammar(&ValidGrammar::new(Dimensions::TwoD, "ä", [('ä', "Fä")]).unwrap());
         let doc = ConfigDocument::try_from(source).unwrap();
         assert_eq!(resolve_doc(&doc).generation.rules()[&'ä'], "Fä");
+    }
+
+    #[test]
+    fn valid_grammar_rejects_invalid_text_and_rule_symbols() {
+        assert!(matches!(
+            ValidGrammar::new(Dimensions::TwoD, "F@", []),
+            Err(ConfigError::InvalidSymbol { ch: '@', .. })
+        ));
+        assert!(matches!(
+            ValidGrammar::new(Dimensions::TwoD, "F", [('F', "F[")]),
+            Err(ConfigError::UnmatchedOpen { .. })
+        ));
+        assert!(matches!(
+            ValidGrammar::new(Dimensions::TwoD, "F", [('+', "F")]),
+            Err(ConfigError::InvalidRuleKey { .. })
+        ));
+    }
+
+    #[test]
+    fn valid_grammar_matches_only_identical_applied_grammar() {
+        let doc = test_toml(Dimensions::TwoD, "F X", 1, "90.0", "1.0", "0.0", "")
+            .parse::<ConfigDocument>()
+            .unwrap();
+        let applied = &doc.editor_config().generation;
+        let same = ValidGrammar::new(Dimensions::TwoD, "FX", []).unwrap();
+        assert!(same.matches(applied));
+        for different in [
+            ValidGrammar::new(Dimensions::ThreeD, "FX", []),
+            ValidGrammar::new(Dimensions::TwoD, "F", []),
+            ValidGrammar::new(Dimensions::TwoD, "FX", [('F', "FF")]),
+        ] {
+            assert!(!different.unwrap().matches(applied));
+        }
     }
 
     #[test]
@@ -1857,7 +2094,7 @@ solid = "#00e680"
         assert!(
             matches!(
                 err,
-                ParseConfigError::Validation(ConfigError::InvalidSymbol { ch: '&', .. })
+                ParseConfigError::Validation(ConfigError::ThreeDOnlySymbol { ch: '&', .. })
             ),
             "unexpected error: {err}"
         );

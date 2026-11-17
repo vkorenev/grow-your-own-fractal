@@ -44,7 +44,12 @@ pub(crate) fn PresetPanel() -> impl IntoView {
             })
         },
         move |current, previous, _: Option<()>| {
-            if previous != Some(current) {
+            // Only notify on an actual change: `set` always notifies, and
+            // `rename_mode` gates the whole actions block below, so an
+            // unconditional `set(false)` would rebuild it (and dispose its
+            // owner) on every TOML keystroke, direct-control change, and
+            // grammar auto-apply.
+            if previous != Some(current) && rename_mode.get_untracked() {
                 rename_mode.set(false);
             }
         },
@@ -53,7 +58,12 @@ pub(crate) fn PresetPanel() -> impl IntoView {
 
     Effect::watch(
         move || selected_id.get(),
-        move |_, _, _: Option<()>| pending_removal.set(None),
+        move |_, _, _: Option<()>| {
+            // Guarded for the same reason as `rename_mode` above.
+            if pending_removal.with_untracked(Option::is_some) {
+                pending_removal.set(None);
+            }
+        },
         false,
     );
 

@@ -3,6 +3,7 @@ pub(crate) mod color;
 pub(crate) mod config_defaults;
 pub(crate) mod config_workspace;
 pub(crate) mod editor_config;
+pub(crate) mod grammar_draft;
 pub(crate) mod presets;
 pub(crate) mod util;
 
@@ -25,7 +26,8 @@ pub use config_workspace::{
 };
 pub use editor_config::{
     ConfigDocument, ConfigSource, EditorColorConfig, EditorConfig, EditorGenerationConfig,
-    EditorLineColorConfig,
+    EditorLineColorConfig, ValidGrammar,
 };
+pub use grammar_draft::{GrammarDraftError, validate_grammar_draft};
 pub use presets::load_presets;
 pub use util::sanitize_filename;

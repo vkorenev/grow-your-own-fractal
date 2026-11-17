@@ -14,7 +14,7 @@ pub(crate) fn ConfigTomlPanel() -> impl IntoView {
         clear_toml_revert_state,
         ..
     } = expect_context();
-    let grammar_is_dirty = grammar.is_dirty;
+    let grammar_held = grammar.held;
 
     let apply_current = move || {
         if !is_dirty.get_untracked() {
@@ -40,7 +40,7 @@ pub(crate) fn ConfigTomlPanel() -> impl IntoView {
         };
         if reverted {
             // Not `select_current_config`: reverting doesn't change the
-            // applied document, so a pending grammar draft (and any error
+            // applied document, so a held grammar draft (and any error
             // describing it) must survive. See `clear_toml_revert_state`'s
             // doc comment on `ConfigContext`.
             clear_toml_revert_state.run(());
@@ -51,8 +51,8 @@ pub(crate) fn ConfigTomlPanel() -> impl IntoView {
         <crate::ui::Disclosure title="Edit Config" open=false
             badge=is_dirty>
             <crate::ui::DirtyDraftWarning
-                is_dirty=grammar_is_dirty
-                message="Applying will discard your unapplied grammar changes."
+                is_dirty=grammar_held
+                message="Applying will discard your grammar changes that couldn't be applied."
             />
             <textarea
                 id="config"

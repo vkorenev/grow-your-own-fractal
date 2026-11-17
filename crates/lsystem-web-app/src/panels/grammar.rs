@@ -1,32 +1,196 @@
-use crate::app::{ConfigContext, GrammarDraft, update_clean_config};
+use crate::app::{ConfigContext, update_clean_config};
+use crate::ui::DebouncedTextInput;
 use leptos::prelude::*;
+use lsystem_app_model::{
+    EditorGenerationConfig, GrammarDraftError, ValidGrammar, validate_grammar_draft,
+};
 use lsystem_core::Dimensions;
 
-#[derive(Clone, Copy)]
+/// One rule row of the grammar editor. The text signals are reference-counted
+/// rather than arena-allocated: rows are created from whichever reactive owner
+/// is current when the draft is resynced or a rule is added (often an event
+/// handler inside a re-rendering view), and an arena signal would be disposed
+/// together with that owner while the row is still displayed. An `Arc` signal
+/// lives exactly as long as the row is referenced.
+#[derive(Clone)]
 pub(crate) struct GrammarRow {
-    pub(crate) id: u32,
-    pub(crate) symbol: RwSignal<String>,
-    pub(crate) rhs: RwSignal<String>,
+    id: u32,
+    symbol: ArcRwSignal<String>,
+    rhs: ArcRwSignal<String>,
 }
 
-pub(crate) fn next_grammar_row_id(counter: StoredValue<u32>) -> u32 {
+/// The grammar editor's draft: the dimensions, axiom and rule rows being
+/// edited, and their validation against the same checks applying performs.
+/// Owned by `App` (provided via `ConfigContext`) because entry switches, a
+/// successful raw TOML apply and a bundled-preset reset resync it from
+/// there, and the raw TOML panel reads `held`.
+///
+/// The text inputs only commit settled edits (see `DebouncedTextInput`), so
+/// every change to these signals is applied right away when valid. The
+/// draft applies itself (see `new`), so this holds whether or not the grammar
+/// panel is mounted.
+#[derive(Clone, Copy)]
+pub(crate) struct GrammarDraft {
+    dimensions: RwSignal<Dimensions>,
+    axiom: RwSignal<String>,
+    rows: RwSignal<Vec<GrammarRow>>,
+    row_counter: StoredValue<u32>,
+    applied: Memo<EditorGenerationConfig>,
+    /// The normalized grammar the draft would apply, or why it can't be.
+    /// The single source for errors, `held`, and auto-apply.
+    validated: Memo<Result<ValidGrammar, Vec<GrammarDraftError>>>,
+    /// Whether the draft is invalid and so held back from being applied.
+    /// Valid edits are applied as soon as they're committed, so this is the
+    /// only case in which a raw TOML apply would discard grammar changes.
+    pub(crate) held: Memo<bool>,
+    /// Letters used in the axiom or as rule symbols, for the symbol picker.
+    /// A memo so the picker only re-renders when the set of letters changes.
+    symbols: Memo<Vec<char>>,
+}
+
+impl GrammarDraft {
+    /// Creates a draft of the applied grammar that auto-applies every
+    /// committed change that alters what would be applied. Resyncs (entry
+    /// switch, TOML apply, reset) also change `validated`, but to the applied
+    /// grammar, so `apply` no-ops. Unexpected apply failures go to `error`.
+    pub(crate) fn new(
+        applied: Memo<EditorGenerationConfig>,
+        config_workspace: RwSignal<lsystem_app_model::ConfigWorkspace>,
+        error: RwSignal<Option<String>>,
+    ) -> Self {
+        let row_counter = StoredValue::new(0u32);
+        let (dimensions, axiom, rows) = applied.with_untracked(|generation| {
+            (
+                generation.dimensions,
+                generation.axiom.clone(),
+                rows_from_rules(&generation.rules, row_counter),
+            )
+        });
+        let dimensions = RwSignal::new(dimensions);
+        let axiom = RwSignal::new(axiom);
+        let rows = RwSignal::new(rows);
+        let validated = Memo::new(move |_| {
+            let rows = rows.with(|rows| {
+                rows.iter()
+                    .map(|row| (row.symbol.get(), row.rhs.get()))
+                    .collect::<Vec<_>>()
+            });
+            axiom.with(|axiom| validate_grammar_draft(dimensions.get(), axiom, &rows))
+        });
+        let held = Memo::new(move |_| validated.with(Result::is_err));
+        let symbols = Memo::new(move |_| {
+            let mut set = std::collections::BTreeSet::new();
+            axiom.with(|a| set.extend(a.chars().filter(|c| c.is_alphabetic())));
+            rows.with(|rows| {
+                for row in rows {
+                    row.symbol
+                        .with(|s| set.extend(s.chars().filter(|c| c.is_alphabetic())));
+                }
+            });
+            set.into_iter().collect()
+        });
+        let draft = Self {
+            dimensions,
+            axiom,
+            rows,
+            row_counter,
+            applied,
+            validated,
+            held,
+            symbols,
+        };
+        Effect::watch(
+            move || validated.track(),
+            move |_, _, _: Option<()>| draft.apply(config_workspace, error),
+            false,
+        );
+        draft
+    }
+
+    /// Resets the draft to the currently applied grammar.
+    pub(crate) fn sync(&self) {
+        let generation = self.applied.get_untracked();
+        self.dimensions.set(generation.dimensions);
+        self.axiom.set(generation.axiom);
+        self.rows
+            .set(rows_from_rules(&generation.rules, self.row_counter));
+    }
+
+    fn add_row(&self) {
+        let row = new_row(self.row_counter, String::new(), String::new());
+        self.rows.update(|rows| rows.push(row));
+    }
+
+    fn remove_row(&self, id: u32) {
+        self.rows.update(|rows| rows.retain(|row| row.id != id));
+    }
+
+    /// Applies the draft if it is valid and differs from the applied
+    /// grammar. A failure here is unexpected, since `validated` runs the same
+    /// checks applying does, so it goes to the grammar panel's `error`.
+    fn apply(
+        &self,
+        config_workspace: RwSignal<lsystem_app_model::ConfigWorkspace>,
+        error: RwSignal<Option<String>>,
+    ) {
+        let grammar = self.validated.with_untracked(|validated| {
+            validated
+                .as_ref()
+                .ok()
+                .filter(|grammar| {
+                    !self
+                        .applied
+                        .with_untracked(|applied| grammar.matches(applied))
+                })
+                .cloned()
+        });
+        if let Some(grammar) = grammar {
+            update_clean_config(
+                config_workspace,
+                error,
+                "grammar auto-apply",
+                move |clean| clean.set_grammar(&grammar),
+            );
+        }
+    }
+}
+
+fn new_row(counter: StoredValue<u32>, symbol: String, rhs: String) -> GrammarRow {
     let id = counter.get_value();
     counter.set_value(id + 1);
-    id
+    GrammarRow {
+        id,
+        symbol: ArcRwSignal::new(symbol),
+        rhs: ArcRwSignal::new(rhs),
+    }
 }
 
-pub(crate) fn rows_from_rules(
+fn rows_from_rules(
     rules: &std::collections::BTreeMap<char, String>,
     counter: StoredValue<u32>,
 ) -> Vec<GrammarRow> {
     rules
         .iter()
-        .map(|(k, v)| GrammarRow {
-            id: next_grammar_row_id(counter),
-            symbol: RwSignal::new(k.to_string()),
-            rhs: RwSignal::new(v.clone()),
-        })
+        .map(|(symbol, rhs)| new_row(counter, symbol.to_string(), rhs.clone()))
         .collect()
+}
+
+/// User-facing text for a draft problem. The 3D-symbol message is the same
+/// whether the user switched to 2D or typed a 3D symbol while in 2D.
+fn grammar_draft_error_message(error: &GrammarDraftError) -> String {
+    match error {
+        GrammarDraftError::MissingRuleSymbol => {
+            "Each rule must have a symbol. Remove or complete rows without one.".to_string()
+        }
+        GrammarDraftError::DuplicateRuleSymbol(c) => {
+            format!("Duplicate rule symbol '{c}'. Each symbol may appear only once.")
+        }
+        GrammarDraftError::ThreeDSymbolsIn2D => {
+            "3D-only symbols (& ^ / \\) can't be used in 2D. Remove them or switch to 3D."
+                .to_string()
+        }
+        GrammarDraftError::Invalid(error) => error.to_string(),
+    }
 }
 
 #[component]
@@ -35,104 +199,38 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
         config_workspace,
         grammar_error,
         generation_config,
-        dimensions,
-        is_3d,
         is_dirty,
         unused_rule_symbols,
         iterations,
         max_iterations,
         angle,
-        grammar:
-            GrammarDraft {
-                axiom: grammar_axiom,
-                rows: grammar_rows,
-                row_counter: grammar_row_counter,
-                is_dirty: grammar_is_dirty,
-                has_3d_symbols: grammar_has_3d_symbols,
-                symbols: grammar_symbols,
-                sync: sync_grammar_editor,
-            },
+        grammar,
         ..
     } = expect_context();
 
-    let do_apply_grammar = move || {
-        let axiom = grammar_axiom.get_untracked();
-        let rows = grammar_rows.get_untracked();
-        let mut seen = std::collections::HashSet::new();
-        let mut rules: Vec<(char, String)> = Vec::with_capacity(rows.len());
-        for row in rows {
-            let k = row.symbol.get_untracked();
-            let v = row.rhs.get_untracked();
-            let Some(c) = k.chars().next() else {
-                grammar_error.set(Some(
-                    "Each rule must have a symbol. Remove or complete empty rows before applying."
-                        .to_string(),
-                ));
-                return;
-            };
-            if !seen.insert(c) {
-                grammar_error.set(Some(format!(
-                    "Duplicate rule symbol '{c}'. Each symbol may appear only once."
-                )));
-                return;
-            }
-            rules.push((c, v));
-        }
-        if update_clean_config(
-            config_workspace,
-            grammar_error,
-            "grammar apply",
-            move |clean| clean.set_grammar(&axiom, &rules),
-        ) {
-            sync_grammar_editor.run(());
-        }
-    };
-
-    // Grammar Apply is enabled only when grammar has changes and no 3D-only
-    // symbols are present in 2D mode.
-    let grammar_can_apply =
-        move || grammar_is_dirty.get() && (is_3d.get() || !grammar_has_3d_symbols.get());
-
-    let try_apply_grammar = move || {
-        // The Apply button is disabled when grammar has 3D symbols in 2D mode;
-        // this guard is a defensive fallback.
-        if grammar_has_3d_symbols.get_untracked() && !is_3d.get_untracked() {
-            return;
-        }
-        do_apply_grammar();
-    };
-
-    let try_set_dimensions = move |next: Dimensions| {
-        // Defensive: "2D" button is disabled when grammar_has_3d_symbols; guard against bypass.
-        if next == Dimensions::TwoD && grammar_has_3d_symbols.get() {
-            return;
-        }
-        update_clean_config(
-            config_workspace,
-            grammar_error,
-            "set dimensions",
-            move |clean| clean.set_dimensions(next),
-        );
+    let draft_errors = move || {
+        grammar.validated.with(|validated| {
+            validated
+                .as_ref()
+                .err()
+                .map(|errors| errors.iter().map(grammar_draft_error_message).collect())
+                .unwrap_or_else(Vec::new)
+        })
     };
 
     view! {
-        <crate::ui::Disclosure title="L-System" badge=grammar_is_dirty>
+        <crate::ui::Disclosure title="L-System" badge=grammar.held>
             <crate::ui::DirtyDraftWarning is_dirty=is_dirty />
             <div style="display:flex;flex-direction:column;gap:5px">
                 <span class="section-label">"Dimensions"</span>
+                // Part of the grammar draft: a switch to 2D while 3D-only
+                // symbols remain is held, and explained, like any other
+                // invalid draft.
                 <crate::ui::SegmentedToggle
                     options=vec![(Dimensions::TwoD, "2D"), (Dimensions::ThreeD, "3D")]
-                    selected=dimensions
-                    on_change=move |key| try_set_dimensions(key)
-                    disabled_keys=Signal::derive(move || {
-                        if grammar_has_3d_symbols.get() { vec![Dimensions::TwoD] } else { vec![] }
-                    })
+                    selected=grammar.dimensions
+                    on_change=move |key| grammar.dimensions.set(key)
                 />
-                <Show when=move || grammar_has_3d_symbols.get()>
-                    <span class="inline-status warning">
-                        "Grammar contains 3D-only symbols (& ^ / \\) — 2D mode is unavailable"
-                    </span>
-                </Show>
             </div>
 
             <hr class="section-divider" />
@@ -145,46 +243,46 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
                             <span class="grammar-axiom-label">"axiom"</span>
                         </td>
                         <td>
-                            <input
-                                type="text"
+                            <DebouncedTextInput
                                 class="grammar-rhs"
-                                prop:value=move || grammar_axiom.get()
-                                on:input:target=move |ev| grammar_axiom.set(ev.target().value())
+                                value=grammar.axiom
+                                on_commit=move |text| grammar.axiom.set(text)
                             />
                         </td>
                         <td class="g-delete"></td>
                     </tr>
                     <For
-                        each=move || grammar_rows.get()
+                        each=move || grammar.rows.get()
                         key=|row| row.id
                         children=move |row: GrammarRow| {
+                            // Copyable handles for the view closures, owned by
+                            // this row's view and disposed with it.
+                            let id = row.id;
+                            let symbol = RwSignal::from(row.symbol);
+                            let rhs = RwSignal::from(row.rhs);
                             view! {
                                 <tr>
                                     <td class="g-symbol">
-                                        <input
-                                            type="text"
+                                        <DebouncedTextInput
                                             class="grammar-combo"
                                             list="grammar-symbols"
-                                            maxlength="1"
-                                            prop:value=move || row.symbol.get()
-                                            on:input:target=move |ev| row.symbol.set(ev.target().value())
+                                            maxlength=1
+                                            value=symbol
+                                            on_commit=move |text| symbol.set(text)
                                         />
                                     </td>
                                     <td>
-                                        <input
-                                            type="text"
+                                        <DebouncedTextInput
                                             class="grammar-rhs"
-                                            prop:value=move || row.rhs.get()
-                                            on:input:target=move |ev| row.rhs.set(ev.target().value())
+                                            value=rhs
+                                            on_commit=move |text| rhs.set(text)
                                         />
                                     </td>
                                     <td class="g-delete">
                                         <button
                                             type="button"
                                             class="grammar-delete-btn"
-                                            on:click=move |_| {
-                                                grammar_rows.update(|rows| rows.retain(|r| r.id != row.id));
-                                            }
+                                            on:click=move |_| grammar.remove_row(id)
                                         >"×"</button>
                                     </td>
                                 </tr>
@@ -195,7 +293,8 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
             </table>
             <datalist id="grammar-symbols">
                 {move || {
-                    grammar_symbols
+                    grammar
+                        .symbols
                         .get()
                         .into_iter()
                         .map(|c| {
@@ -207,35 +306,11 @@ pub(crate) fn GrammarPanel() -> impl IntoView {
             </datalist>
 
             <div class="btn-row">
-                <button
-                    type="button"
-                    on:click=move |_| {
-                        grammar_rows.update(|rows| {
-                            rows.push(GrammarRow {
-                                id: next_grammar_row_id(grammar_row_counter),
-                                symbol: RwSignal::new(String::new()),
-                                rhs: RwSignal::new(String::new()),
-                            });
-                        });
-                    }
-                >"Add rule"</button>
-                <div title=move || {
-                    if grammar_has_3d_symbols.get() && !is_3d.get() {
-                        "Contains 3D-only symbols — switch to 3D mode in Dimensions first"
-                    } else { "" }
-                }>
-                    <button
-                        type="button"
-                        disabled=move || !grammar_can_apply()
-                        on:click=move |_| try_apply_grammar()
-                    >"Apply"</button>
-                </div>
-                <button
-                    type="button"
-                    disabled=move || !grammar_is_dirty.get()
-                    on:click=move |_| sync_grammar_editor.run(())
-                >"Revert"</button>
+                <button type="button" on:click=move |_| grammar.add_row()>"Add rule"</button>
             </div>
+            {move || draft_errors().into_iter().map(|msg| view! {
+                <span class="inline-status error">{msg}</span>
+            }).collect_view()}
             {move || grammar_error.get().map(|msg| view! {
                 <span class="inline-status error">{msg}</span>
             })}

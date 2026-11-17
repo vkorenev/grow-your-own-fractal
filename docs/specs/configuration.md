@@ -104,10 +104,13 @@ Editing raw TOML preserves the draft text exactly until an operation rewrites a
 specific value.
 
 Direct controls update the corresponding applied TOML value and preserve
-unrelated tables, comments, and formatting. Replacing the structured grammar
-replaces the complete `l-system.rules` table, so comments and formatting inside
-that table are not preserved. Switching line-color mode removes keys belonging
-to the inactive mode.
+unrelated tables, comments, and formatting. Applying the structured grammar
+rewrites `l-system.dimensions`, `l-system.axiom`, and the right-hand side of
+every remaining rule in canonical form (`"2D"`/`"3D"`, whitespace removed),
+keeping their comments. The existing `l-system.rules` table is edited in place:
+remaining rules keep their keys and comments, a removed rule is deleted
+together with its comments, and a new rule is appended. Switching line-color
+mode removes keys belonging to the inactive mode.
 
 Removing an optional override removes its authored key and makes resolution
 use the embedded default. Removing `colors.line` selects the default solid
